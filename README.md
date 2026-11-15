@@ -377,8 +377,9 @@ ingest_url("https://example.com/article", ctx)     # SSRF-guarded fetch
 ingest_text("some pasted text", title="My Notes", ctx=ctx)
 ```
 
-`ingest_url` is https-only, refuses any non-globally-routable address and follows no redirects (disclosed gap: a DNS-rebinding
-race between validation and fetch). Production uploads (`POST /ingest/upload`) go to object storage, then the ingest-worker pool.
+`ingest_url` is https-only, refuses any non-globally-routable address, follows no redirects and connects to the address it checked (so a name that
+answers differently the second time cannot reach an internal address), reading at most the size limit. The headless crawler is the open part: it resolves
+names and follows redirects itself, so its containment is its network (`deploy/README.md`, "The crawler's network"). Production uploads (`POST /ingest/upload`) go to object storage, then the ingest-worker pool.
 A file name identifies a document within a tenant: uploading it again writes the new chunks, then removes the earlier upload's (only after the new ones are stored, so a failed
 re-upload leaves the old version serving), and `DELETE /ingest/documents` removes a document and its stored files. Two people in one tenant who upload different files
 under one name replace each other. An answer the semantic cache already holds may quote the old text for up to `SEMANTIC_CACHE_TTL_SECONDS` (an hour); it is not invalidated
