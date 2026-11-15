@@ -849,7 +849,7 @@ scripts/       jobs/ (scheduled one-shots), checks/ (smokes, probes, eval), tool
 services/      what runs as its own process, each with its own Dockerfile: authlimit/ (the edge auth and rate-limit service: the only Go in the repo) and ml-service/ (rerank, prompt guard, embeddings, label sets)
 Dockerfile     the app image (at the root: the build context)
 evals/ scripts/model_eval/   the model-evaluation harness and its frozen datasets, candidates, baselines
-specs/ .specify/          Spec Kit specs 001–019 and the constitution
+specs/ .specify/          Spec Kit specs 001–022 and the constitution
 deploy/                   compose/ (dev, prod, observability, load test), caddy/, litellm/ (configs, patches/), images/ (sandbox builds), terraform/ (DigitalOcean droplets), env/; deploy/README.md is the runbook
 observability/            Prometheus (+ alerts.yml), Alertmanager, Loki, Promtail, otel-collector, Grafana
 postgres-init/            numbered SQL schema (fresh volumes only)
@@ -870,18 +870,17 @@ make/                     host.mk, admin.mk, evals.mk, security.mk, test.mk: tar
 
 **❌ Not built** (the reasoning is in [GRAPH_PATTERNS.md](GRAPH_PATTERNS.md#extending-further)):
 
-- **Crash-restart and autoscaling for workers.** They shut down gracefully and compose can `--scale` them, but nothing restarts a crashed one or scales on queue depth.
+- **Restarting a HUNG worker, and autoscaling.** Compose restarts a worker that exits (`restart: unless-stopped`), and one that hangs goes `unhealthy` with `AgentWorkerLoopStalled` firing, but Compose does not restart an unhealthy container (an orchestrator or an autoheal sidecar does: [deploy/README.md](deploy/README.md)). Nothing scales workers on queue depth; the depth and the wait are measured and alerted (`AgentQueueBacklog`, `AgentQueueWaitHigh`).
 - **Per-action authorization within a tenant.** Every principal in a tenant has the same write capability.
-- **Several domains in one process.** Each domain is its own process; only the API routes per request.
 - **A vision model that also does tool calling.** Small local vision models do one or the other; the `vision` alias is a slot, not a verified default. Moderation screens text only, and only the HTTP API accepts images.
 - **A fallback node** for the primary LLM path.
 - **Credit billing beyond the gate.** A checkout route in the API, PayPal and a comparison with a provider's own balance; the package's own list is [ROADMAP.md](packages/billing/docs/ROADMAP.md).
 
 **⚠️ Known gaps** from reviewing the as-built system against the constitution (the full list is in GRAPH_PATTERNS.md). None
-lets a write run without a human decision, but the first means that behind the shipped proxy alone, the human deciding can be
+lets a write run without a human decision, but the first means that run WITHOUT the front door, the human deciding can be
 anyone who sets the right headers.
 
-- **The shipped proxy doesn't authenticate**, and neither sets nor strips the identity headers.
+- **The development `app` profile on its own trusts the identity headers** (`AUTH_MODE=headers`, published on :8000 with nothing in front; it warns at start). Behind the front door (the production stack, `make authlimit-up-app`) the API trusts only the identity the door signs, which `authlimit` verifies from the token, and the client's `X-Tenant-Id` and `X-Principal-Id` are ignored (pattern 98).
 - **Approvals aren't attributed.** The gate is enforced but not auditable.
 - **The ops domain is global** (no control over which tenants may use it) and **the dedup lookup is not tenant-scoped**.
 - **A residual duplicate window for team-channel notifications** (support escalation, sales handoff, ops post).
@@ -919,7 +918,7 @@ anyone who sets the right headers.
 | [COST_GOVERNANCE.md](COST_GOVERNANCE.md) · [ENGINEERING_PATTERNS.md](ENGINEERING_PATTERNS.md) | The spend meter and caps · repository-level lessons |
 | [WORKER_CONCURRENCY.md](WORKER_CONCURRENCY.md) | Sizing the worker pools |
 | [BILLING_INTEGRATION.md](BILLING_INTEGRATION.md) · [`packages/billing/`](packages/billing/README.md) | The app's side of the billing seam · the package: patterns, runbook, roadmap, specs |
-| [`specs/`](specs/) · [Constitution](.specify/memory/constitution.md) | Spec Kit specs 001–018 · the non-negotiable rules (tenant isolation, mandatory approval and exactly-once side effects are principles I, II and IV) |
+| [`specs/`](specs/) · [Constitution](.specify/memory/constitution.md) | Spec Kit specs 001–022 · the non-negotiable rules (tenant isolation, mandatory approval and exactly-once side effects are principles I, II and IV) |
 | [deploy/README.md](deploy/README.md) · [evals/README.md](evals/README.md) | Deploy runbook: scaling, backups, rollback, teardown · judging a model swap |
 | [CLAUDE.md](CLAUDE.md) | Working rules for contributors and coding agents |
 | [PRODUCTION_REVIEW.md](PRODUCTION_REVIEW.md) | The 2026-11-13 review of the whole system, written as work orders (R01 to R35): what to fix, where, how to test it, and what was left alone on purpose |

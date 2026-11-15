@@ -805,9 +805,9 @@ Two kinds of duplicate: a **replay** sees the same `tool_call_id` twice; a **re-
 - **A fallback node** for the primary LLM path.
 - **A vision model that also does tool calling** (44). Small local vision models do one or the other; the `vision` alias is a slot, not a verified default.
 - **Image-aware moderation, and Telegram/CLI image input.**
-- **Crash-restart and autoscaling for workers.** `--scale` works and workers handle `SIGTERM`, but nothing restarts a crashed one or scales on queue depth.
+- **Restarting a HUNG worker, and autoscaling.** `restart: unless-stopped` restarts a worker that EXITS, so "nothing restarts a crashed one" was never true. What is true: a worker whose loop is stuck stays "up" to Compose, and since R22 goes `unhealthy` (a file a probe reads) and `AgentWorkerLoopStalled` fires, but Compose does not restart an unhealthy container (an orchestrator or an autoheal sidecar does; `deploy/README.md`); and nothing scales workers on queue depth, though R17 measures and alerts on the depth and the wait.
 - ~~A Telegram webhook.~~ Built (93); not exercised against the real Telegram.
-- **Real authentication.** 17's `SecurityCtx`/`Policy` is the isolation structure; header extraction isn't authentication.
+- ~~Real authentication.~~ Built (84 to 86, 98; specs/018): the front door (`authlimit`) verifies the token offline and signs the identity the API trusts (`AUTH_MODE=identity`, the default); 17's `SecurityCtx`/`Policy` is still the isolation structure behind it. What a development `app` profile run alone does, trusting the headers, is a stated mode, not the production path.
 - **Per-action authorization within a tenant.** Every principal has the write capability the gate allows at all; a `Policy` reading `ctx["claims"]` would live here.
 - ~~A multi-domain runtime.~~ Built (96): one worker serves several domains. The API routes per request via `X-Domain` (49).
 
