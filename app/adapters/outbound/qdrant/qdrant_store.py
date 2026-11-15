@@ -57,8 +57,11 @@ from qdrant_client.models import (
     Fusion,
     FusionQuery,
     HasIdCondition,
+    KeywordIndexParams,
+    KeywordIndexType,
     MatchValue,
     Modifier,
+    PayloadSchemaType,
     PointStruct,
     Prefetch,
     ScoredPoint,
@@ -263,11 +266,28 @@ def _collection_config() -> dict[str, Any]:
 
 
 async def create_physical(physical: str, dim: int) -> None:
-    """(Re)create one PHYSICAL collection with a named dense vector (cosine) and a named sparse vector (BM25). Destructive for a
-    collection of that exact name, which is by construction one of the same embedding identity."""
+    """(Re)create one PHYSICAL collection with a named dense vector (cosine) and a named sparse vector (BM25), and the payload indexes
+    every search filters by (`ensure_payload_indexes`). Destructive for a collection of that exact name, which is by construction one of the
+    same embedding identity."""
     config = _collection_config()
     config["vectors_config"] = {DENSE_VECTOR_NAME: VectorParams(size=dim, distance=Distance.COSINE)}
     await get_client().recreate_collection(collection_name=physical, **config)
+    await ensure_payload_indexes(physical)
+
+
+async def ensure_payload_indexes(physical: str) -> None:
+    """The payload indexes the filters of `scope_filter` and `_build_filter` use: `tenant` (marked `is_tenant`, Qdrant's own guidance for many tenants in
+    one collection, which also groups each tenant's data on disk), `kind`, `owner`, `topic` and `source` (a document delete and a re-upload filter by it,
+    PRODUCTION_REVIEW.md R18) as keywords, and `created_at` as a datetime (the retention range). Without them Qdrant evaluates a filter by reading payloads
+    and its filtered vector search degrades as the collection grows (R09).
+
+    Idempotent: creating an index that exists is not an error, and creating one on a live collection is an online operation, so this is also what
+    `scripts/tools/qdrant_indexes.py` runs once against a collection made before it existed."""
+    client = get_client()
+    await client.create_payload_index(physical, "tenant", field_schema=KeywordIndexParams(type=KeywordIndexType.KEYWORD, is_tenant=True))
+    for field in ("kind", "owner", "topic", "source"):
+        await client.create_payload_index(physical, field, field_schema=PayloadSchemaType.KEYWORD)
+    await client.create_payload_index(physical, "created_at", field_schema=PayloadSchemaType.DATETIME)
 
 
 async def repoint_live(collection: str, physical: str) -> None:
