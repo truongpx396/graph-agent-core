@@ -157,7 +157,7 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R30 | A second model call for follow-ups holds back `done` | P1 | S | read from code | | open |
 | R31 | Old tool results are re-sent to the model on every later call | P1 | S | read from code | | open |
 | R32 | Output checks built for small models also run on strong ones | P2 | M | read from code | R17 | open |
-| R33 | The answer cache can answer a follow-up from another conversation | P1 | S | read from code | | open |
+| R33 | The answer cache can answer a follow-up from another conversation | P1 | S | read from code | | done |
 | R34 | Every change to the history stores the whole history again | P2 | M | reproduced | R19 | open |
 | R35 | Code structure: node names in the runtime, repeated entry points, patch-shaped modules | P2 | S to L | read from code; reproduced (custom events) | | open |
 
