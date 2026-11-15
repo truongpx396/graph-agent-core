@@ -187,6 +187,7 @@ CALLER_ROUTES = [
     ("GET", "/chat/sessions/t1/messages", None),
     ("GET", "/chat/sessions/t1/pending_approval", None),
     ("POST", "/chat/stream/queued", {"message": "hi", "thread_id": "t1"}),
+    ("GET", "/chat/stream/req1", None),
     ("POST", "/chat/resume", {"thread_id": "t1", "approved": True}),
     ("POST", "/chat/cancel", {"thread_id": "t1"}),
     ("POST", "/ingest/upload", None),
@@ -228,5 +229,5 @@ def test_a_route_added_without_get_ctx_fails_here_until_someone_decides_it_needs
             (uses_get_ctx if "x-internal-identity" in names else without).add((method.upper(), path))
 
     assert without == NO_CALLER_NEEDED, f"routes with no caller that are not listed: {sorted(without - NO_CALLER_NEEDED)}; listed but now using get_ctx: {sorted(NO_CALLER_NEEDED - without)}"
-    covered = {(m, p.replace("t1", "{thread_id}")) for m, p, _ in CALLER_ROUTES}
+    covered = {(m, p.replace("t1", "{thread_id}").replace("req1", "{request_id}")) for m, p, _ in CALLER_ROUTES}
     assert covered == uses_get_ctx, f"the routes tested above and the routes that need a caller differ: {sorted(covered ^ uses_get_ctx)}"

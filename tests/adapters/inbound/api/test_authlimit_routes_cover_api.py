@@ -39,6 +39,7 @@ EXPECTED_CLASS = {
     ("GET", "/chat/sessions/{thread_id}/messages"): "read",
     ("GET", "/chat/sessions/{thread_id}/pending_approval"): "read",
     ("GET", "/usage"): "read",
+    ("GET", "/chat/stream/{request_id}"): "read",  # re-reading a turn that was already charged when it started
     ("GET", "/ingest/stream/{job_id}"): "read",
 }
 

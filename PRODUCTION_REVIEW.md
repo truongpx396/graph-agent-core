@@ -137,7 +137,7 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R10 | One HTTP client per ML-service call; the same question embedded up to four times a turn | P1 | M | read from code | | done |
 | R11 | Checkpoints are kept forever; no way to delete a conversation | P1 | M | read from code | | done (retention sweep, off by default; the owner's delete route; no button in the web page) |
 | R12 | An approval approves whatever is pending, not what was shown; decisions are not recorded | P1 | L | read from code | | open |
-| R13 | A dropped connection loses the rest of the answer; no keepalive | P1 | M | read from code | | open |
+| R13 | A dropped connection loses the rest of the answer; no keepalive | P1 | M | read from code | | done (the server side; the web page and CLI do not reconnect yet) |
 | R14 | No size limit on a message, a conversation id or attached images | P1 | S | read from code | | done |
 | R15 | Production Redis: one instance for queue and cache, no persistence policy, floating image tags | P1 | M | read from code | R04 | open |
 | R16 | The production gateway stores every prompt and answer | P1 | S | read from code | | done |

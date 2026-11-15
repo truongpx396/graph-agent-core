@@ -25,6 +25,11 @@ assert {
   res.status: eq 200
 }
 
+script:post-response {
+  const id = res.getHeader("x-request-id");
+  if (id) bru.setVar("requestId", id);
+}
+
 tests {
   test("streams server-sent events that end with done", function () {
     expect(res.getHeader("content-type")).to.include("text/event-stream");
@@ -36,4 +41,6 @@ docs {
   Starts a turn on a worker (`make agent-worker`) and relays its events: `token`, `tool_start`,
   `tool_end`, `citations`, `followups`, `approval_required`, `error`, `done`. Reuse `thread_id` to
   continue the conversation. The same message within 10 s streams the first attempt instead.
+
+  Every frame carries an `id:` and the response an `X-Request-Id` (saved here as `requestId`): `Read a turn again` uses them to pick up a dropped stream.
 }

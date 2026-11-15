@@ -78,6 +78,22 @@ class TestATurn:
 
         assert [e["type"] for e in events] == ["token", "done"]
 
+    async def test_the_id_lines_and_keepalive_comments_a_stream_now_carries_are_skipped(self):
+        """PRODUCTION_REVIEW.md R13: the API's chat frames carry `id: <position>` before `data:`, and a silent stream gets `: keepalive` comments. This client reads
+        only `data:` lines, so neither changes what it sees."""
+        body = (
+            b": keepalive\n\n"
+             b"id: 1731672000123-0\ndata: " + json.dumps({"type": "token", "content": "a"}).encode() + b"\n\n"
+            + b": keepalive\n\n"
+            + b"id: 1731672000124-0\ndata: " + json.dumps({"type": "done"}).encode() + b"\n\n"
+        )
+        door, http = make_door(lambda request: httpx.Response(200, content=body, headers={"X-Request-Id": "abc"}))
+
+        events = await collect(door.stream_turn("hi", "t1"))
+        await http.aclose()
+
+        assert [e["type"] for e in events] == ["token", "done"]
+
     async def test_unattended_approval_and_replay_key_are_sent_only_when_asked_for(self):
         bodies = []
 

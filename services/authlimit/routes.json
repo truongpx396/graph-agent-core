@@ -29,6 +29,7 @@
     { "method": "GET", "pattern": "/chat/sessions/{thread_id}/messages", "class": "read" },
     { "method": "GET", "pattern": "/chat/sessions/{thread_id}/pending_approval", "class": "read" },
     { "method": "GET", "pattern": "/usage", "class": "read" },
+    { "method": "GET", "pattern": "/chat/stream/{request_id}", "class": "read" },
     { "method": "GET", "pattern": "/ingest/stream/{job_id}", "class": "read" },
     { "method": "GET", "pattern": "/openapi.json", "class": "read" },
     { "method": "GET", "pattern": "/docs", "class": "read" },

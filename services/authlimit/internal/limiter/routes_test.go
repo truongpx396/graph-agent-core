@@ -41,6 +41,7 @@ func TestEveryRouteTheAPIServesIsInTheDefaultTable(t *testing.T) {
 		{"GET", "/chat/sessions/abc-123/messages", Read},
 		{"GET", "/chat/sessions/abc-123/pending_approval", Read},
 		{"GET", "/usage", Read},
+		{"GET", "/chat/stream/req-7", Read}, // re-reading a turn is verified and not charged: the turn was
 		{"GET", "/ingest/stream/job-9", Read},
 		{"GET", "/openapi.json", Read}, // FastAPI's own pages: verified, and never charged to a person's turn bucket
 		{"GET", "/docs", Read},

@@ -319,7 +319,8 @@ suspecting the app.
 |---|---|
 | `GET /` | Built-in web UI (no build step, no CDN) |
 | `GET /health` · `GET /health/ready` | Liveness · readiness (503 names whichever of Qdrant, Postgres ×2, Redis, ml-service is down) |
-| `POST /chat/stream/queued` | Start a turn; SSE stream. Needs a running `agent-worker` |
+| `POST /chat/stream/queued` | Start a turn; SSE stream. Needs a running `agent-worker`. Each frame has an `id:`, the response an `X-Request-Id`, and a silent stream gets `: keepalive` comments |
+| `GET /chat/stream/{request_id}` | Read a turn again after a dropped connection: send the last frame's `id:` as `Last-Event-ID` and only later events come. The caller's own conversations only; the events are kept five minutes after the last one |
 | `POST /chat/resume` · `POST /chat/cancel` | Approve/reject a paused tool call · stop a run |
 | `GET /chat/sessions` · `…/{id}/messages` · `…/{id}/pending_approval` | Conversation history and any pending approval |
 | `DELETE /chat/sessions/{id}` | Delete one of the caller's own conversations (its saved state and its list entry). 404 for anyone else's or an unknown one; 409 `thread_busy` while a turn runs on it |

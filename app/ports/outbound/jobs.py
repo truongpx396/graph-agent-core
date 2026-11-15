@@ -43,6 +43,13 @@ def requests_stream_key(domain: str = "ecorp") -> str:
     return f"agent:requests:{domain}"
 
 
+def request_thread_key(request_id: str) -> str:
+    """Which conversation a request id belongs to, kept for the life of its results stream (the publisher sets it, every event the worker publishes refreshes
+    it). It is what lets `GET /chat/stream/{request_id}` check that the caller owns the conversation before it reads another person's events: the results
+    stream itself carries no owner (PRODUCTION_REVIEW.md R13)."""
+    return f"agent:request_thread:{request_id}"
+
+
 def cancel_flag_key(thread_id: str) -> str:
     return f"agent:cancel:{thread_id}"
 
@@ -101,6 +108,19 @@ class TurnQueue(Protocol):
     def read_results(self, request_id: str, *, first_event_deadline_seconds: float | None = None) -> AsyncIterator[dict[str, Any]]:
         """Yields each event of `request_id`'s turn, in order, until a terminal one. `first_event_deadline_seconds` bounds only the wait for the FIRST
         event: if nobody ever publishes, it yields one `error` event and ends instead of hanging."""
+        ...
+
+    def read_results_from(
+        self, request_id: str, *, after: str = "0", first_event_deadline_seconds: float | None = None
+    ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+        """`read_results` with each event's position: yields `(entry_id, event)` for the events published AFTER `after` (an entry id a client last saw; the
+        default is the start), until a terminal one. Reading from a position is what lets a client whose connection dropped pick the turn up where it stopped.
+        `first_event_deadline_seconds` applies only when reading from the start: a client resuming from a position has already seen the job run, so a quiet
+        stretch is a long tool, not "nobody picked it up"."""
+        ...
+
+    async def thread_of_request(self, request_id: str) -> str | None:
+        """The conversation `request_id` belongs to, or None when the id is unknown or its results have expired (the same lifetime as the stream)."""
         ...
 
     async def ping(self) -> None:

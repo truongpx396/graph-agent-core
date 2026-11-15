@@ -467,6 +467,10 @@ class Settings(BillingSettings):
     # Generous relative to a cold model's first-token latency, the same
     # margin agent_worker_reclaim_idle_seconds reasons from.
     chat_first_response_deadline_seconds: int = 30
+    # How long a chat event stream may be silent before the API sends an SSE comment (`: keepalive`). A tool runs up to 15 s (a subagent 45 s) and a job can wait up to
+    # the deadline above for a worker, and in that time the response carried no bytes at all, which some proxies and load balancers treat as a dead connection
+    # (PRODUCTION_REVIEW.md R13). It must be shorter than the shortest idle timeout in front of the API.
+    sse_keepalive_seconds: int = Field(default=15, ge=1)
 
     # Same idea as chat_first_response_deadline_seconds above, against
     # app/adapters/outbound/redis/ingest_queue.py's own results stream — but ingest jobs
@@ -883,6 +887,7 @@ MINIO_BUCKET = settings.minio_bucket
 MINIO_SECURE = settings.minio_secure
 CHAT_SUBMIT_DEDUP_TTL_SECONDS = settings.chat_submit_dedup_ttl_seconds
 CHAT_FIRST_RESPONSE_DEADLINE_SECONDS = settings.chat_first_response_deadline_seconds
+SSE_KEEPALIVE_SECONDS = settings.sse_keepalive_seconds
 INGEST_FIRST_RESPONSE_DEADLINE_SECONDS = settings.ingest_first_response_deadline_seconds
 AGENT_WORKER_MAX_CONCURRENCY = settings.agent_worker_max_concurrency
 CHECKPOINTER_POOL_MAX_SIZE = settings.checkpointer_pool_max_size

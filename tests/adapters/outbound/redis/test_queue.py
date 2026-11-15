@@ -8,6 +8,7 @@ Every test that drives async queue calls is `async def` (pytest-asyncio's
 `asyncio_mode = "auto"`, pyproject.toml) and awaits directly, instead of
 each wrapping its own call in `asyncio.run(...)`.
 """
+import asyncio
 import json
 import time
 
@@ -20,7 +21,7 @@ from app.adapters.outbound.redis import queue
 from app.core import metrics
 from app.platform import redis_client
 from app.ports.outbound import jobs
-from tests.conftest import metric_value
+from tests.conftest import TEST_CTX, metric_value
 
 
 def _assert_stamped_just_now(stamp):
@@ -895,3 +896,122 @@ class TestIsThreadBusy:
 
         assert await queue.RedisTurnQueue().is_thread_busy("t1") is True
         assert await queue.RedisTurnQueue().is_thread_busy("t2") is False
+
+
+class _SuspendingXRead(FakeRedis):
+    """A real `XREAD ... BLOCK` waits; the base fake answers at once, so a reader on an empty stream would spin without ever yielding to the loop, and a
+    timeout around it could never fire. This one gives the loop a turn when there is nothing to return."""
+
+    async def xread(self, streams, block=None, count=None):
+        result = await super().xread(streams, block=block, count=count)
+        if not result:
+            await asyncio.sleep(0.005)
+        return result
+
+
+class TestReadResultsFromAPosition:
+    """PRODUCTION_REVIEW.md R13: each event comes with its stream entry id, and a reader can start after a position it last saw."""
+
+    async def _turn(self, client, request_id="r1", words=("a", "b", "c")):
+        for word in words:
+            await streams.publish_result(client, request_id, {"type": "token", "content": word})
+        await streams.publish_result(client, request_id, {"type": "done"})
+
+    async def test_every_event_comes_with_the_entry_id_it_was_stored_under(self):
+        client = FakeRedis()
+        await self._turn(client)
+
+        pairs = [pair async for pair in queue.read_results_from(client, "r1")]
+
+        assert [event["type"] for _, event in pairs] == ["token", "token", "token", "done"]
+        assert [entry_id for entry_id, _ in pairs] == [entry_id for entry_id, _ in client.streams[jobs.results_stream_key("r1")]]
+
+    async def test_reading_after_an_id_returns_only_the_later_events(self):
+        client = FakeRedis()
+        await self._turn(client)
+        pairs = [pair async for pair in queue.read_results_from(client, "r1")]
+        second_id = pairs[1][0]
+
+        later = [pair async for pair in queue.read_results_from(client, "r1", after=second_id)]
+
+        assert [event.get("content") for _, event in later if event["type"] == "token"] == ["c"]
+        assert later[-1][1] == {"type": "done"}
+        assert all(entry_id != second_id for entry_id, _ in later), "the event the client already has is not sent again"
+
+    async def test_reading_after_the_last_event_of_a_finished_turn_returns_nothing_more_to_wait_for_than_its_end(self):
+        client = _SuspendingXRead()
+        await self._turn(client)
+        last_id = [pair async for pair in queue.read_results_from(client, "r1")][-1][0]
+
+        # Nothing is after the terminal event, so a reader starting there waits for what never comes: the caller bounds it, as every read of a live stream is.
+        generator = queue.read_results_from(client, "r1", after=last_id, block_ms=1)
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(anext(generator), timeout=0.2)
+
+    async def test_read_results_is_still_the_events_alone(self):
+        client = FakeRedis()
+        await self._turn(client, words=("a",))
+
+        assert [event async for event in queue.read_results(client, "r1")] == [{"type": "token", "content": "a"}, {"type": "done"}]
+
+    async def test_the_first_event_deadline_applies_from_the_start(self):
+        client = FakeRedis()
+
+        pairs = [pair async for pair in queue.read_results_from(client, "r1", first_event_deadline_seconds=0.0)]
+
+        assert [event["code"] for _, event in pairs] == ["worker_unreachable"]
+
+    async def test_it_does_not_apply_when_the_reader_resumes_from_a_position_because_a_quiet_stretch_is_a_tool_not_a_missing_worker(self):
+        client = _SuspendingXRead()
+        await streams.publish_result(client, "r1", {"type": "token", "content": "a"})
+        first_id = client.streams[jobs.results_stream_key("r1")][0][0]
+        generator = queue.read_results_from(client, "r1", after=first_id, block_ms=1, first_event_deadline_seconds=0.0)
+
+        with pytest.raises(TimeoutError):  # waits for the next event instead of reporting the job lost
+            await asyncio.wait_for(anext(generator), timeout=0.2)
+
+
+class TestWhoOwnsARequestId:
+    """The results stream carries no owner. The publisher stores the conversation each request id belongs to, for the stream's lifetime, so a re-read can be
+    authorized (PRODUCTION_REVIEW.md R13)."""
+
+    @pytest.mark.parametrize("publish", ["turn", "resume", "cancel"])
+    async def test_every_kind_of_job_records_the_conversation_before_it_is_published(self, publish):
+        client = FakeRedis()
+        calls = {
+            "turn": lambda: queue.publish_request(client, request_id="r1", text="hi", thread_id="t-9", ctx=TEST_CTX),
+            "resume": lambda: queue.publish_resume_request(client, request_id="r1", thread_id="t-9", approved=True, ctx=TEST_CTX),
+            "cancel": lambda: queue.publish_cancel_request(client, request_id="r1", thread_id="t-9", ctx=TEST_CTX),
+        }
+
+        await calls[publish]()
+
+        assert client.kv[jobs.request_thread_key("r1")] == "t-9"
+        assert client.expiries[jobs.request_thread_key("r1")] == jobs.RESULTS_STREAM_TTL_SECONDS
+
+    async def test_the_owner_is_readable_and_an_unknown_id_has_none(self):
+        client = FakeRedis()
+        await queue.publish_request(client, request_id="r1", text="hi", thread_id="t-9", ctx=TEST_CTX)
+
+        assert await queue.thread_of_request(client, "r1") == "t-9"
+        assert await queue.thread_of_request(client, "never") is None
+
+    async def test_every_event_a_worker_publishes_refreshes_the_owners_lifetime_with_the_streams(self):
+        client = FakeRedis()
+        await queue.publish_request(client, request_id="r1", text="hi", thread_id="t-9", ctx=TEST_CTX)
+        client.expiries.clear()
+
+        await streams.publish_result(client, "r1", {"type": "token", "content": "a"})
+
+        assert client.expiries[jobs.results_stream_key("r1")] == jobs.RESULTS_STREAM_TTL_SECONDS
+        assert client.expiries[jobs.request_thread_key("r1")] == jobs.RESULTS_STREAM_TTL_SECONDS, "the owner must outlive a turn as long as its events do"
+
+    async def test_the_adapter_class_reads_the_position_and_the_owner_through_the_client(self, monkeypatch):
+        client = FakeRedis()
+        await queue.publish_request(client, request_id="r1", text="hi", thread_id="t-9", ctx=TEST_CTX)
+        await streams.publish_result(client, "r1", {"type": "done"})
+        monkeypatch.setattr(queue, "get_client", lambda: client)
+
+        assert await queue.RedisTurnQueue().thread_of_request("r1") == "t-9"
+        pairs = [pair async for pair in queue.RedisTurnQueue().read_results_from("r1")]
+        assert [event["type"] for _, event in pairs] == ["done"]
