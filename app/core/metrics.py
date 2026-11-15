@@ -517,6 +517,13 @@ agent_answer_sample_finding_total = Counter(
     ["finding"],
 )  # finding: ungrounded_marker | uncited | misattributed
 
+agent_db_pool_connection_lost_total = Counter(
+    "agent_db_pool_connection_lost_total",
+    "A database connection a caller was using turned out to be dead (PgBouncer or Postgres restarted): the pool then replaces all its dead connections at once "
+    "(app/platform/self_healing_pool.py, PRODUCTION_REVIEW.md R25). A burst is a restart; a steady rate is a database that keeps dropping connections",
+    ["pool"],
+)  # pool: appdata | checkpointer
+
 agent_moderation_total = Counter(
     "agent_moderation_total",
     "Input moderation screens by outcome (app/core/moderation.py)",

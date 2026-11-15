@@ -540,6 +540,11 @@ Tried on real containers with the shipped image: after those steps a stream entr
 
 **Not done:** a password (`requirepass`) for either Redis. Neither publishes a port in production, so it is defence in depth, and it is optional in the work order; it would mean `REDIS_URL=redis://:<password>@redis:6379` in every service that reads it, `AUTHLIMIT_REDIS_URL` and the exporter included.
 
+## After a database restart
+
+Both database pools (`appdata` and `checkpointer`) are `SelfHealingPool`s (PRODUCTION_REVIEW.md R25). When PgBouncer or Postgres restarts, every pooled connection is dead; the plain pool finds out one at a time and fails one request per dead connection (up to the pool's size). Now the first connection that turns out to be broken makes the pool test and replace all its idle connections in one pass: **expect about two failed requests after a restart, not a pool's worth**, and none that hang.
+`agent_db_pool_connection_lost_total{pool}` counts them: a burst is a restart, a steady rate is a database that keeps dropping connections. There is no alert on it. (`psycopg_pool`'s own `check=` was tried and rejected: with every connection dead the first request waits out the 30 s pool timeout; ENGINEERING_PATTERNS.md 102.)
+
 ## Learning from production answers
 
 Two advisory signals, both from real traffic (PRODUCTION_REVIEW.md R28; the offline tier, `make eval` and promptfoo, stays the gate).

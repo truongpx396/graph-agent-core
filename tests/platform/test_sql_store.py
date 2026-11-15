@@ -176,7 +176,7 @@ class TestConnectionPool:
             async def close(self):
                 pass
 
-        monkeypatch.setattr(sql_store, "AsyncConnectionPool", _FakePool)
+        monkeypatch.setattr(sql_store, "SelfHealingPool", _FakePool)
 
         async def _get_value():
             async with sql_store.get_connection() as conn:
@@ -204,7 +204,7 @@ class TestConnectionPool:
             async def close(self):
                 pass
 
-        monkeypatch.setattr(sql_store, "AsyncConnectionPool", _FakePool)
+        monkeypatch.setattr(sql_store, "SelfHealingPool", _FakePool)
 
         async def _touch():
             async with sql_store.get_connection():
@@ -245,7 +245,7 @@ class TestConnectionPool:
             async def close(self):
                 pass
 
-        monkeypatch.setattr(sql_store, "AsyncConnectionPool", _FakePool)
+        monkeypatch.setattr(sql_store, "SelfHealingPool", _FakePool)
 
         async def _get_value():
             async with sql_store.get_connection() as conn:
