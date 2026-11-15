@@ -677,15 +677,8 @@ async def astream_events_turn(
         metrics.agent_requests_total.labels(outcome="rejected").inc()
         yield {"type": "error", "content": refusal.message, **refusal.to_dict()}
         return
-    # Reserves this turn's worst-case cost against the tenant's in-flight
-    # total for the rest of this generator's life (released in `finally`
-    # below, unconditionally) — see app/agent/runtime/core.py::reserve_turn_budget's own
-    # docstring for the race this closes: without it, a sibling turn for
-    # the same tenant starting moments later would see nearly the same
-    # `spent` this turn's own check just read: the usage events land as each
-    # call returns, but not the calls this turn has yet to make.
-    budget_hold = await runtime_module.reserve_turn_budget(ctx)
-    try:
+    # The hold (`_BudgetHold`) is released on every exit of this generator.
+    async with _BudgetHold(ctx):
         graph = await runtime_module.init_graph_async()
         pending = await paused_approval_async(graph, {"configurable": {"thread_id": thread_id}})
         if pending is not None:
@@ -725,27 +718,12 @@ async def astream_events_turn(
                 "content": "A previous pending approval on this conversation could not be resumed after an app update; starting a new request.",
             }
         await runtime_module.upsert_session(ctx, thread_id, text)
-        with _turn_trace("chat-turn-stream", thread_id, text) as (trace, callbacks):
-            cfg: RunnableConfig = {
-                "configurable": {"thread_id": thread_id, "ctx": ctx},
-                "callbacks": callbacks,
-                "recursion_limit": runtime_module.RECURSION_LIMIT,
-            }
-            graph_input = {
-                "messages": [HumanMessage(content=_build_human_content(text, images))],
-                "require_approval": require_approval,
-            }
-            # `aclosing`, here and at the two other call sites: a bare `async for` over a generator does
-            # not close it when the OUTER generator is closed, so the inner one would be finalised
-            # later, by the event loop's own hook (or never, at loop teardown), and its `GeneratorExit`
-            # handling (the trace) would run late. This closes it in the same `aclose()`.
-            async with aclosing(
-                _run_graph_stream(graph, graph_input, cfg, trace, cancel_check=cancel_check)
-            ) as events:
-                async for event in events:
-                    yield event
-    finally:
-        _release_turn_budget_in_background(ctx, budget_hold)
+        def build_input() -> dict[str, Any]:  # called inside the trace: a failure here (a bad image) must still finish it as an error
+            return {"messages": [HumanMessage(content=_build_human_content(text, images))], "require_approval": require_approval}
+
+        async with aclosing(_run_turn("chat-turn-stream", graph, thread_id, ctx, build_input, text, cancel_check)) as events:
+            async for event in events:
+                yield event
 
 
 def _release_turn_budget_in_background(ctx: SecurityCtx | None, budget_hold: str | None) -> None:
@@ -766,6 +744,56 @@ def _release_turn_budget_in_background(ctx: SecurityCtx | None, budget_hold: str
     """
     release_task = asyncio.create_task(runtime_module.release_turn_budget(ctx, budget_hold))
     release_task.add_done_callback(_log_if_release_task_failed)
+
+
+class _BudgetHold:
+    """`async with _BudgetHold(ctx):` reserves this turn's worst-case cost against the tenant's in-flight total for the rest of the block and releases it
+    on EVERY exit (`_release_turn_budget_in_background`). One place for what the three entry points each did by hand: without the hold a sibling turn for the
+    same tenant starting moments later would read nearly the same `spent` this one's own check just read, since the usage events land as each call returns
+    but not the calls this turn has yet to make (`runtime/core.py::reserve_turn_budget`). A plain class and not `contextlib.asynccontextmanager`, so a close
+    mid-turn (`GeneratorExit`) is handled by nothing but `__aexit__`."""
+
+    def __init__(self, ctx: SecurityCtx) -> None:
+        self._ctx = ctx
+        self._hold: str | None = None
+
+    async def __aenter__(self) -> "_BudgetHold":
+        self._hold = await runtime_module.reserve_turn_budget(self._ctx)
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        _release_turn_budget_in_background(self._ctx, self._hold)
+        return False
+
+
+async def _run_turn(
+    name: str,
+    graph: CompiledStateGraph,
+    thread_id: str,
+    ctx: SecurityCtx,
+    build_input: Callable[[], dict[str, Any] | Command[Any] | None],
+    trace_input: str,
+    cancel_check: CancelCheck | None,
+) -> AsyncGenerator[dict[str, Any], None]:
+    """What every entry point does once its own checks have passed: open the turn's trace, build the run's config and stream the graph.
+
+    `build_input` is called INSIDE the trace, as the entry points always did: a failure while building a turn's input (an image that cannot be assembled)
+    must still finish the trace as an error and not leave it open with an input and nothing else.
+
+    `astream_events_turn`, `astream_events_resume` and `astream_events_continue_turn` each built the same config and held the same `aclosing`; this is that, once.
+    `aclosing` on EVERY inner generator is not optional, and it is two layers now: here around `_run_graph_stream`, and in each entry point around this generator.
+    A bare `async for` does not close what it iterates when the OUTER generator is closed, so its own cleanup (the trace, the abandoned-turn metrics) would run
+    late, from the event loop's finalizer hook (`.claude/rules/runtime-reliability.md`). `name` is the trace's, and
+    `trace_input` is what it is opened with (the person's text, `resume(...)`, `continue(...)`; PRODUCTION_REVIEW.md R35, part B)."""
+    with _turn_trace(name, thread_id, trace_input) as (trace, callbacks):
+        cfg: RunnableConfig = {
+            "configurable": {"thread_id": thread_id, "ctx": ctx},
+            "callbacks": callbacks,
+            "recursion_limit": runtime_module.RECURSION_LIMIT,
+        }
+        async with aclosing(_run_graph_stream(graph, build_input(), cfg, trace, cancel_check=cancel_check)) as events:
+            async for event in events:
+                yield event
 
 
 def _log_if_release_task_failed(task: asyncio.Task[Any]) -> None:
@@ -919,8 +947,7 @@ async def astream_events_resume(
         metrics.agent_requests_total.labels(outcome="rejected").inc()
         yield {"type": "error", "content": refusal.message, **refusal.to_dict()}
         return
-    budget_hold = await runtime_module.reserve_turn_budget(ctx)
-    try:
+    async with _BudgetHold(ctx):
         graph = await runtime_module.init_graph_async()
         error = await resumability_error_async(graph, {"configurable": {"thread_id": thread_id}})
         if error:
@@ -929,21 +956,11 @@ async def astream_events_resume(
             yield {"type": "done"}
             return
 
-        with _turn_trace(
-            "chat-turn-stream-resume", thread_id, f"resume(approved={approved})"
-        ) as (trace, callbacks):
-            cfg: RunnableConfig = {
-                "configurable": {"thread_id": thread_id, "ctx": ctx},
-                "callbacks": callbacks,
-                "recursion_limit": runtime_module.RECURSION_LIMIT,
-            }
-            async with aclosing(
-                _run_graph_stream(graph, Command(resume=approved), cfg, trace, cancel_check=cancel_check)
-            ) as events:
-                async for event in events:
-                    yield event
-    finally:
-        _release_turn_budget_in_background(ctx, budget_hold)
+        async with aclosing(
+            _run_turn("chat-turn-stream-resume", graph, thread_id, ctx, lambda: Command(resume=approved), f"resume(approved={approved})", cancel_check)
+        ) as events:
+            async for event in events:
+                yield event
 
 
 async def astream_events_continue_turn(thread_id: str, ctx: SecurityCtx, cancel_check: CancelCheck | None = None) -> AsyncGenerator[dict[str, Any], None]:
@@ -976,43 +993,28 @@ async def astream_events_continue_turn(thread_id: str, ctx: SecurityCtx, cancel_
     hold, since the crashed worker's was lost with it and this turn's remaining spend would otherwise be
     invisible to its siblings' checks.
     """
-    budget_hold = await runtime_module.reserve_turn_budget(ctx)
-    try:
-        async for event in _continue_turn_events(thread_id, ctx, cancel_check):
-            yield event
-    finally:
-        _release_turn_budget_in_background(ctx, budget_hold)
+    async with _BudgetHold(ctx):
+        graph = await runtime_module.init_graph_async()
+        state = await graph.aget_state({"configurable": {"thread_id": thread_id}})
+        if state.next and any(task.interrupts for task in state.tasks):
+            # The crashed attempt reached human_approval's interrupt() but
+            # died before its own ack (`process_request` acks a job the
+            # instant its generator finishes — reaching a real pause counts —
+            # so a "turn" job only ever gets reclaimed if the crash happened
+            # strictly before that point; this is the sliver where it happened
+            # strictly after). Feeding a bare `None` into an interrupted task
+            # supplies no resume value — that path belongs to
+            # `astream_events_resume`'s `Command(resume=...)`, not this one.
+            envelope = ErrorEnvelope(
+                code=ErrorCode.PENDING_APPROVAL,
+                message="This turn paused for approval right before a worker crash — resume or cancel it instead of retrying.",
+            )
+            yield {"type": "error", "content": envelope.message, **envelope.to_dict()}
+            return
 
-
-async def _continue_turn_events(thread_id: str, ctx: SecurityCtx, cancel_check: CancelCheck | None) -> AsyncGenerator[dict[str, Any], None]:
-    """The body of `astream_events_continue_turn`, split out so the hold above
-    wraps every exit path of it with one try/finally."""
-    graph = await runtime_module.init_graph_async()
-    cfg_probe: RunnableConfig = {"configurable": {"thread_id": thread_id}}
-    state = await graph.aget_state(cfg_probe)
-    if state.next and any(task.interrupts for task in state.tasks):
-        # The crashed attempt reached human_approval's interrupt() but
-        # died before its own ack (`process_request` acks a job the
-        # instant its generator finishes — reaching a real pause counts —
-        # so a "turn" job only ever gets reclaimed if the crash happened
-        # strictly before that point; this is the sliver where it happened
-        # strictly after). Feeding a bare `None` into an interrupted task
-        # supplies no resume value — that path belongs to
-        # `astream_events_resume`'s `Command(resume=...)`, not this one.
-        envelope = ErrorEnvelope(
-            code=ErrorCode.PENDING_APPROVAL,
-            message="This turn paused for approval right before a worker crash — resume or cancel it instead of retrying.",
-        )
-        yield {"type": "error", "content": envelope.message, **envelope.to_dict()}
-        return
-
-    with _turn_trace("chat-turn-stream-continue", thread_id, "continue(crash-recovery)") as (trace, callbacks):
-        cfg: RunnableConfig = {
-            "configurable": {"thread_id": thread_id, "ctx": ctx},
-            "callbacks": callbacks,
-            "recursion_limit": runtime_module.RECURSION_LIMIT,
-        }
-        async with aclosing(_run_graph_stream(graph, None, cfg, trace, cancel_check=cancel_check)) as events:
+        async with aclosing(
+            _run_turn("chat-turn-stream-continue", graph, thread_id, ctx, lambda: None, "continue(crash-recovery)", cancel_check)
+        ) as events:
             async for event in events:
                 yield event
 

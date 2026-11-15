@@ -1167,3 +1167,93 @@ async def test_a_resume_into_a_build_with_another_state_schema_is_refused_with_a
     events = [e async for e in stream_module.astream_events_resume("t-old", approved=True, ctx=TEST_CTX)]
 
     assert events[0]["code"] == "checkpoint_incompatible"
+
+
+# --- Closing the stream early reaches the trace from EVERY entry point (PRODUCTION_REVIEW.md R35, part B) ----------------
+#
+# The three entry points share `_run_turn`, an extra generator between each of them and `_run_graph_stream`. A bare `async for` over it would not close it
+# when the outer generator is closed, and the trace's cleanup would run late: the first draft of that extraction did exactly that, and the tests above (which
+# only close `astream_events_turn`) caught it. These close the other two.
+
+
+class _PausedGraph(_ScriptedEventsGraph):
+    """Paused at an approval gate, or mid-flight, whichever the entry point under test needs to see."""
+
+    def __init__(self, events, *, paused):
+        super().__init__(events)
+        self._paused = paused
+
+    async def aget_state(self, cfg):
+        from app.agent.graph.state import STATE_SCHEMA_VERSION
+
+        values = {"messages": [AIMessage(content="so far")], "iterations": 1, "state_schema_version": STATE_SCHEMA_VERSION}
+        tasks = (SimpleNamespace(interrupts=("approve?",)),) if self._paused else ()
+        return SimpleNamespace(next=("human_approval",) if self._paused else ("agent",), tasks=tasks, values=values)
+
+
+def _many_tokens():
+    return [
+        {"event": "on_chat_model_stream", "name": "ChatOpenAI", "metadata": {"langgraph_node": "agent"}, "data": {"chunk": AIMessageChunk(content=f"word{i} ")}}
+        for i in range(40)
+    ]
+
+
+@pytest.mark.parametrize("entry", ["resume", "continue"])
+async def test_closing_a_resumed_or_continued_stream_early_still_finishes_the_trace_and_counts_it_abandoned(monkeypatch, entry):
+    fake_trace = _FakeTrace()
+    monkeypatch.setattr(stream_module, "_open_trace", lambda *a, **k: (fake_trace, []))
+
+    async def init_graph():
+        return _PausedGraph(_many_tokens(), paused=entry == "resume")
+
+    monkeypatch.setattr(agent_module, "init_graph_async", init_graph)
+    abandoned = metric_value(metrics.agent_requests_total, outcome="abandoned")
+    stream = (
+        stream_module.astream_events_resume("t-close", approved=True, ctx=TEST_CTX)
+        if entry == "resume"
+        else stream_module.astream_events_continue_turn("t-close", TEST_CTX)
+    )
+
+    async for event in stream:
+        if event["type"] == "token":
+            break
+    await stream.aclose()
+
+    assert len(fake_trace.updates) == 1, "the trace was left open: its cleanup ran late, or never"
+    assert fake_trace.updates[0]["level"] == "WARNING"
+    assert "[abandoned: stream closed before the turn finished]" in fake_trace.updates[0]["output"]
+    assert metric_value(metrics.agent_requests_total, outcome="abandoned") == abandoned + 1
+
+
+@pytest.mark.parametrize("entry", ["turn", "resume", "continue"])
+async def test_the_budget_hold_is_released_when_the_stream_is_closed_early_from_every_entry_point(monkeypatch, entry):
+    """`_BudgetHold.__aexit__` runs on a close, not only on a normal end."""
+    monkeypatch.setattr(stream_module, "_open_trace", lambda *a, **k: (_FakeTrace(), []))
+    held, released = [], []
+
+    async def reserve(ctx):
+        held.append(ctx)
+        return "hold-1"
+
+    async def release(ctx, hold):
+        released.append(hold)
+
+    async def init_graph():
+        return _PausedGraph(_many_tokens(), paused=entry == "resume")
+
+    monkeypatch.setattr(agent_module, "init_graph_async", init_graph)
+    monkeypatch.setattr(agent_module, "reserve_turn_budget", reserve)
+    monkeypatch.setattr(agent_module, "release_turn_budget", release)
+    stream = {
+        "turn": lambda: stream_module.astream_events_turn("hi", "t-hold", TEST_CTX),
+        "resume": lambda: stream_module.astream_events_resume("t-hold", approved=True, ctx=TEST_CTX),
+        "continue": lambda: stream_module.astream_events_continue_turn("t-hold", TEST_CTX),
+    }[entry]()
+
+    async for event in stream:
+        if event["type"] == "token":
+            break
+    await stream.aclose()
+    await asyncio.sleep(0)  # the release is detached (fire-and-forget): let it run
+
+    assert held == [TEST_CTX] and released == ["hold-1"]
