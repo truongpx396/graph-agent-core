@@ -2,19 +2,32 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
+
+from app.core.config import (
+    CHAT_IMAGE_MAX_CHARS,
+    CHAT_MAX_IMAGES,
+    CHAT_MESSAGE_MAX_CHARS,
+)
+
+# A conversation id becomes part of several Redis keys and a checkpoint's primary key. No character pattern: a Telegram conversation id embeds a principal
+# (`telegram:<principal>:<chat>`), so only the length is bounded (PRODUCTION_REVIEW.md R14).
+THREAD_ID_MAX_LENGTH = 200
 
 
 class ChatRequest(BaseModel):
-    message: str = Field(..., min_length=1, description="The user's message to the agent.")
+    message: str = Field(..., min_length=1, max_length=CHAT_MESSAGE_MAX_CHARS, description="The user's message to the agent.")
     thread_id: str = Field(
         default_factory=lambda: str(uuid.uuid4()),
+        min_length=1,
+        max_length=THREAD_ID_MAX_LENGTH,
         description="Conversation id; reuse it across calls to keep memory.",
     )
-    images: list[str] = Field(
+    images: list[Annotated[str, StringConstraints(max_length=CHAT_IMAGE_MAX_CHARS)]] = Field(
         default_factory=list,
+        max_length=CHAT_MAX_IMAGES,
         description=(
             "Optional image URLs or data URIs to attach to this turn "
             "(GRAPH_PATTERNS.md pattern 44) — passed straight through to "
@@ -49,7 +62,7 @@ class ChatRequest(BaseModel):
 
 
 class ResumeRequest(BaseModel):
-    thread_id: str = Field(..., description="The paused conversation's thread id.")
+    thread_id: str = Field(..., min_length=1, max_length=THREAD_ID_MAX_LENGTH, description="The paused conversation's thread id.")
     approved: bool = Field(
         ..., description="Approve (true) or reject (false) the pending tool call(s)."
     )
@@ -58,6 +71,8 @@ class ResumeRequest(BaseModel):
 class CancelRequest(BaseModel):
     thread_id: str = Field(
         ...,
+        min_length=1,
+        max_length=THREAD_ID_MAX_LENGTH,
         description=(
             "The conversation's thread id to cancel — whether it's actively "
             "streaming right now or paused at human_approval; POST /chat/cancel "

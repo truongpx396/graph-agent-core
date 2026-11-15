@@ -659,6 +659,15 @@ class Settings(BillingSettings):
     # just changes how many files one submission may batch.
     max_upload_files_per_request: int = 5
 
+    # What one chat request may carry (`ChatRequest`, app/adapters/inbound/api/schemas.py). A body is parsed whole, copied into a Redis stream entry
+    # and then into the checkpoint, so one large request cost memory in four places; the front door's own ceiling (deploy/caddy/gateway.caddy) is the
+    # outer bound and these are the reason a person is told which field was too large. A message of 32,000 characters is about 8,000 tokens, well
+    # past a question; an image is a data URI, so 7,000,000 characters is about 5 MB of picture. The page attaches one image, so the default of 4 is
+    # above it (PRODUCTION_REVIEW.md R14).
+    chat_message_max_chars: int = Field(default=32000, ge=1)
+    chat_max_images: int = Field(default=4, ge=0)
+    chat_image_max_chars: int = Field(default=7_000_000, ge=1)
+
     # OpenSandbox MCP bridge (app/adapters/outbound/mcp/sandbox_tools.py, pattern 50) —
     # `--domain` passed to the `opensandbox-mcp` stdio bridge process
     # (mcp/client.py::load_remote_tools spawns it), i.e. the host:port
@@ -861,6 +870,9 @@ REDIS_MAX_CONNECTIONS = settings.redis_max_connections
 CORS_ALLOWED_ORIGINS = settings.cors_allowed_origins
 MAX_UPLOAD_SIZE_MB = settings.max_upload_size_mb
 MAX_UPLOAD_FILES_PER_REQUEST = settings.max_upload_files_per_request
+CHAT_MESSAGE_MAX_CHARS = settings.chat_message_max_chars
+CHAT_MAX_IMAGES = settings.chat_max_images
+CHAT_IMAGE_MAX_CHARS = settings.chat_image_max_chars
 OPENSANDBOX_MCP_DOMAIN = settings.opensandbox_mcp_domain
 OPENSANDBOX_API_KEY = settings.opensandbox_api_key
 MCP_TOOL_OUTPUT_MAX_CHARS = settings.mcp_tool_output_max_chars

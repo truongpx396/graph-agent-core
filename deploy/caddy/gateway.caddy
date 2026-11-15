@@ -120,6 +120,18 @@
 # how `make authlimit-smoke` sees exactly what a real API would have been given) or the API itself (`make authlimit-up-app`, with the API in
 # identity mode so it trusts only the identity this door adds) in development, and the API's replicas in production.
 (api_site) {
+	# Body ceilings, the outer bound (the API's own field limits, ChatRequest, say which field was too large). A request body was parsed whole, copied into
+	# a Redis stream entry and then into the checkpoint, with no limit at the door. `/ingest/upload` takes up to 5 files of 25 MB each, so the site as a
+	# whole stops at 140 MB; a chat request is text and a few images, so `/chat/*` stops at 32 MB. Both apply to a chat request and the smaller one
+	# answers first. PRODUCTION_REVIEW.md R14.
+	request_body {
+		max_size 140MB
+	}
+	@chat_body path /chat/*
+	request_body @chat_body {
+		max_size 32MB
+	}
+
 	# Not checked: the page and its assets, health, the discovery documents.
 	#
 	# Only PLAIN URLs are public here. A request Caddy declares public goes straight to the upstream and authlimit never sees it, so
