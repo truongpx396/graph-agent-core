@@ -214,6 +214,7 @@ One shape, `{code, message, details}`, from a single `ErrorCode` enum (`app/core
 - `internal_error_envelope(exc)` returns a fixed message plus `error_class`, never `str(exc)`; the text goes to the trace.
 - **Bug:** both catch-alls (`runtime/stream.py::_run_graph_stream`, `agent_worker.py::process_request`) sent `str(exc)` to the caller, leaking internal hosts, SQL fragments or DSNs; the worker's had no `code` either. Three tests asserted the leak. They now assert a hostname-shaped sentinel never appears.
 - **Gap:** the ingest worker's `process_job` has the same catch-all but mixes uploader-facing messages with unexpected failures, so it needs a per-exception decision; `CrawlFailedError`/`IngestRefusedError` also embed a raw `{exc}`. Read from code, not reproduced.
+- **Bug: two error events carried no `code`** (*read from code*): the queue's "no agent worker answered in time" (chat and ingest) and a refused resume (`checkpoint_lost`, `checkpoint_incompatible`) sent only `content`, so a client could not switch on the reason. Both are in the envelope now (`ErrorCode.WORKER_UNREACHABLE` is new); the schema keeps the fields optional so an older client still validates (PRODUCTION_REVIEW.md R24).
 
 ### 31. DB connection pool
 One lazy `psycopg_pool.ConnectionPool` singleton (`min_size=1`, `max_size=10`) behind `get_connection()` in `app/platform/sql_store.py`, so call sites didn't change. `close_pool()` runs in the API lifespan shutdown; without it, background pool threads outlived the process (a reproduced bug).
@@ -810,6 +811,5 @@ From reviewing the as-built system against the constitution; each notes how it w
 - **Tenant isolation is only partly proven against real backends** (*read from tests*). Documents and the cache's tenant axis hit real Qdrant/Redis; memories, relational stores, sessions and the cache's principal axis rely on hermetic tests.
 - **`reclaim_stale_entries` is mostly tested against a fake** (*read from tests*), hand-written and not paginated like real `XAUTOCLAIM`; one integration test (`test_queue_real_redis.py`) now shows a real `XAUTOCLAIM` still finds an unacknowledged job after the age trim, but not its pagination or a multi-consumer claim.
 - **The answer cache key ignores conversation context** (*read from code, not reproduced*). The key is the last human message, so a follow-up like "be more detailed" can hit an answer cached for a different conversation of the same caller. Bounded by tenant+principal scope and the TTL: wrong context, not a leak.
-- **A refused resume emits an error with no `code`** (*read from code*). `astream_events_resume` yields `{"type": "error", "content": "checkpoint_lost: …"}` outside the envelope, so a client can't switch on it (30).
 
 **The key insight:** LangGraph lets you make every step of the pipeline explicit and controllable. That is what separates it from "just LLM + tools."

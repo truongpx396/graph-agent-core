@@ -98,8 +98,9 @@ class DoneEvent(BaseModel):
 
 
 class ErrorEvent(BaseModel):
-    """Terminal. `code`, `message` and `details` are the canonical error envelope (app/core/errors.py): switch on `code`. They are absent on
-    one event, the queue's "no agent worker answered in time", which carries only `content`."""
+    """Terminal. `code`, `message` and `details` are the canonical error envelope (app/core/errors.py): switch on `code`. Every error the API and the
+    workers send carries it (a queued job nobody took is `worker_unreachable`, a resume with nothing to resume is `checkpoint_lost` or
+    `checkpoint_incompatible`); the fields stay optional in the schema so a client written before that still validates."""
 
     type: Literal["error"]
     content: str = Field(description="A message for a person; also what a client without the envelope shows.")

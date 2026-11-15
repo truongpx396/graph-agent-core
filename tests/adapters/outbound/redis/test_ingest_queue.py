@@ -98,6 +98,14 @@ class TestPublishResultAndReadResults:
 
         assert events == [{"type": "done", "chunks": 3}]
 
+    async def test_an_upload_nobody_took_ends_with_a_worker_unreachable_error(self):
+        client = FakeRedis()
+
+        events = [event async for event in ingest_queue.read_results(client, "j-nobody", first_event_deadline_seconds=0.001)]
+
+        assert [(e["type"], e["code"]) for e in events] == [("error", "worker_unreachable")]
+        assert "ingest-worker" in events[0]["content"]
+
     async def test_read_results_stops_at_an_error_event_too(self):
         client = FakeRedis()
 

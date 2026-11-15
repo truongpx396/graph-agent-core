@@ -1132,3 +1132,38 @@ async def test_a_subagents_or_another_nodes_model_calls_never_count_as_the_answe
     types, _ = await _types_and_text(events)
 
     assert "retry" not in types
+
+
+# --- Both refusals that used to carry no `code` now do (PRODUCTION_REVIEW.md R24) -------------------------------------
+
+
+async def test_a_resume_with_nothing_paused_is_refused_with_a_checkpoint_lost_code(monkeypatch):
+    """It sent `{"type": "error", "content": "checkpoint_lost: ..."}` outside the envelope, so a client could not switch on the reason."""
+    graph = _ScriptedEventsGraph([])  # its state has no pending node: nothing paused
+
+    async def init_graph():
+        return graph
+
+    monkeypatch.setattr(agent_module, "init_graph_async", init_graph)
+
+    events = [e async for e in stream_module.astream_events_resume("t-nothing", approved=True, ctx=TEST_CTX)]
+
+    assert [e["type"] for e in events] == ["error", "done"]
+    assert events[0]["code"] == "checkpoint_lost"
+    assert events[0]["message"] == events[0]["content"].strip() and "no paused run" in events[0]["message"]
+
+
+async def test_a_resume_into_a_build_with_another_state_schema_is_refused_with_a_checkpoint_incompatible_code(monkeypatch):
+    class _Paused(_ScriptedEventsGraph):
+        async def aget_state(self, cfg):
+            task = SimpleNamespace(interrupts=("approval",))
+            return SimpleNamespace(next=("human_approval",), tasks=(task,), values={"state_schema_version": -1})
+
+    async def init_graph():
+        return _Paused([])
+
+    monkeypatch.setattr(agent_module, "init_graph_async", init_graph)
+
+    events = [e async for e in stream_module.astream_events_resume("t-old", approved=True, ctx=TEST_CTX)]
+
+    assert events[0]["code"] == "checkpoint_incompatible"

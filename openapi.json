@@ -1545,7 +1545,7 @@
           "content"
         ],
         "title": "ErrorEvent",
-        "description": "Terminal. `code`, `message` and `details` are the canonical error envelope (app/core/errors.py): switch on `code`. They are absent on\none event, the queue's \"no agent worker answered in time\", which carries only `content`."
+        "description": "Terminal. `code`, `message` and `details` are the canonical error envelope (app/core/errors.py): switch on `code`. Every error the API and the\nworkers send carries it (a queued job nobody took is `worker_unreachable`, a resume with nothing to resume is `checkpoint_lost` or\n`checkpoint_incompatible`); the fields stay optional in the schema so a client written before that still validates."
       },
       "FollowupsEvent": {
         "properties": {

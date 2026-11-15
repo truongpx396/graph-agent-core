@@ -274,6 +274,12 @@ def _turn_trace(name: str, session_id: str, input_text: str) -> Iterator[tuple[_
         raise
 
 
+def _checkpoint_refusal_code(error: str) -> ErrorCode:
+    """The code for what `resumability_error_async` refused with: its text starts with the reason (`checkpoint_lost: ...`,
+    `checkpoint_incompatible: ...`), which `hitl.py` also counts as `agent_checkpoint_issue_total{reason}`."""
+    return ErrorCode.CHECKPOINT_INCOMPATIBLE if error.startswith("checkpoint_incompatible") else ErrorCode.CHECKPOINT_LOST
+
+
 async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, Any] | Command[Any] | None, cfg: RunnableConfig, trace: _TurnTrace, cancel_check: CancelCheck | None = None) -> AsyncGenerator[dict[str, Any], None]:
     """Shared core of astream_events_turn/astream_events_resume: drives one `graph.astream_events()` call,
     translates events into typed shapes, and yields exactly one terminal event.
@@ -899,7 +905,8 @@ async def astream_events_resume(
         graph = await runtime_module.init_graph_async()
         error = await resumability_error_async(graph, {"configurable": {"thread_id": thread_id}})
         if error:
-            yield {"type": "error", "content": error}
+            envelope = ErrorEnvelope(code=_checkpoint_refusal_code(error), message=error)
+            yield {"type": "error", "content": envelope.message, **envelope.to_dict()}
             yield {"type": "done"}
             return
 

@@ -22,6 +22,7 @@ from typing import Any, cast
 import redis.asyncio as redis
 
 from app.core import metrics
+from app.core.errors import ErrorCode, ErrorEnvelope
 from app.core.security import SecurityCtx
 from app.platform.redis_client import UNAVAILABLE_ERRORS, StreamReadResponse, get_client
 from app.ports.outbound.jobs import (
@@ -255,14 +256,15 @@ async def read_results(
             # stream of these, one per request — can be alerted on
             # (WorkerUnreachable, observability/prometheus/alerts.yml).
             metrics.agent_worker_unreachable_total.labels(queue="agent").inc()
-            yield {
-                "type": "error",
-                "content": (
+            envelope = ErrorEnvelope(
+                code=ErrorCode.WORKER_UNREACHABLE,
+                message=(
                     f"No response for {request_id!r} after "
                     f"{first_event_deadline_seconds:.0f}s — is an agent-worker "
                     "running for this domain?"
                 ),
-            }
+            )
+            yield {"type": "error", "content": envelope.message, **envelope.to_dict()}
             return
         response = await read_events(client, key, last_id, block_ms)
         if not response:
