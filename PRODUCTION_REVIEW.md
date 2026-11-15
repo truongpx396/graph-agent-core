@@ -151,7 +151,7 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R24 | Two error events carry no `code` | P2 | S | read from code | | done |
 | R25 | A pool hands out a connection that died while idle | P2 | S | read from code | | open |
 | R26 | Backups are a paragraph, not a job; no restore drill | P2 | M | read from code | | open |
-| R27 | A transcript is read whole | P2 | S | read from code | | open |
+| R27 | A transcript is read whole | P2 | S | read from code | | done |
 | R28 | Nothing learns from production answers | P2 | M | from the field | R17 | open |
 | R29 | Retrieval runs on every turn, after the router instead of beside it | P1 | M | read from code; reproduced (parallel join) | R17 | open |
 | R30 | A second model call for follow-ups holds back `done` | P1 | S | read from code | | open |

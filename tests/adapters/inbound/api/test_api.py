@@ -952,9 +952,9 @@ class TestChatSessionMessages:
 
         monkeypatch.setattr(sessions, "session_belongs_to", fake_session_belongs_to)
 
-        async def fake_get_session_messages(thread_id):
-            assert thread_id == "t1"
-            return [{"role": "user", "text": "hi"}, {"role": "assistant", "text": "hello"}]
+        async def fake_get_session_messages(thread_id, *, limit=None, before=None):
+            assert thread_id == "t1" and (limit, before) == (None, None)
+            return [{"index": 0, "role": "user", "text": "hi"}, {"index": 1, "role": "assistant", "text": "hello"}]
 
         monkeypatch.setattr(chat_router, "get_session_messages", fake_get_session_messages)
 

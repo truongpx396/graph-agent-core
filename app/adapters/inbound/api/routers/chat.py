@@ -13,9 +13,9 @@ import hashlib
 import json
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.adapters.inbound.api.deps import get_ctx, get_domain
@@ -273,9 +273,13 @@ async def chat_sessions(
 
 @router.get("/chat/sessions/{thread_id}/messages", response_model=list[SessionMessage], tags=["sessions"])
 async def chat_session_messages(
-    thread_id: str, ctx: SecurityCtx = Depends(get_ctx), domain: str = Depends(get_domain)
+    thread_id: str,
+    limit: Annotated[int | None, Query(ge=1, le=500, description="Return only the last this many messages (of those before `before`). Omit for the whole transcript.")] = None,
+    before: Annotated[int | None, Query(ge=0, description="Return only messages whose `index` is smaller than this: the cursor for the page before the one just read.")] = None,
+    ctx: SecurityCtx = Depends(get_ctx),
+    domain: str = Depends(get_domain),
 ) -> list[SessionMessage]:
-    """One session's transcript, for the switcher to replay. `session_belongs_to`
+    """One session's transcript, for the switcher to replay (a page of it with `limit` and `before`). `session_belongs_to`
     is checked FIRST and is the entire authorization boundary — the shared
     Postgres checkpointer `get_session_messages` reads has no tenant/
     principal/domain of its own to scope by, so skipping this would let any
@@ -283,7 +287,7 @@ async def chat_session_messages(
     match too, extending the same check to a third axis."""
     if not await sessions.session_belongs_to(ctx, thread_id, domain):
         raise HTTPException(status_code=404, detail="session not found")
-    return await get_session_messages(thread_id)  # type: ignore[return-value]  # same response_model coercion note as chat_sessions above
+    return await get_session_messages(thread_id, limit=limit, before=before)  # type: ignore[return-value]  # same response_model coercion note as chat_sessions above
 
 
 @router.get("/chat/sessions/{thread_id}/pending_approval", response_model=PendingApproval | None, tags=["sessions"])

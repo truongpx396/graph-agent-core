@@ -3,7 +3,7 @@
   "info": {
     "title": "Graph Agent Core API",
     "description": "A multi-tenant, multi-domain LangGraph RAG agent. A client starts a turn, reads its events as they stream, answers an approval the\nagent asks for, and lists its own past sessions. One graph serves every domain; `X-Domain` picks which (default `ecorp`).\n\n**Who is calling.** Behind the front door (the authlimit service) a client sends `Authorization: Bearer <access token>`; the door\nverifies it and gives the API a signed identity, so the tenant and person are never taken from a header or a body. Only a deployment run\nwith `AUTH_MODE=headers` (a developer's machine, the tests) reads `X-Tenant-Id` and `X-Principal-Id` as sent. Everything a caller reads or\nchanges is scoped to its tenant and person.\n\n**Errors.** A refusal the application makes is the canonical envelope `{\"code\", \"message\", \"details\"}`; switch on `code`, not on the\ntext. A turn's own failures arrive as an `error` event on its stream, in the same shape.\n\n**Streams.** `POST /chat/stream/queued` and `GET /ingest/stream/{job_id}` answer with server-sent events, which OpenAPI describes only\nas a `text/event-stream` body; the event vocabulary is in the first route's description.\n",
-    "version": "2.0.0"
+    "version": "2.1.0"
   },
   "servers": [
     {
@@ -699,7 +699,7 @@
           "sessions"
         ],
         "summary": "Chat Session Messages",
-        "description": "One session's transcript, for the switcher to replay. `session_belongs_to`\nis checked FIRST and is the entire authorization boundary — the shared\nPostgres checkpointer `get_session_messages` reads has no tenant/\nprincipal/domain of its own to scope by, so skipping this would let any\ncaller read any thread_id's transcript by guessing ids. `domain` must\nmatch too, extending the same check to a third axis.",
+        "description": "One session's transcript, for the switcher to replay (a page of it with `limit` and `before`). `session_belongs_to`\nis checked FIRST and is the entire authorization boundary — the shared\nPostgres checkpointer `get_session_messages` reads has no tenant/\nprincipal/domain of its own to scope by, so skipping this would let any\ncaller read any thread_id's transcript by guessing ids. `domain` must\nmatch too, extending the same check to a third axis.",
         "operationId": "chat_session_messages_chat_sessions__thread_id__messages_get",
         "parameters": [
           {
@@ -710,6 +710,45 @@
               "type": "string",
               "title": "Thread Id"
             }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 500,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Return only the last this many messages (of those before `before`). Omit for the whole transcript.",
+              "title": "Limit"
+            },
+            "description": "Return only the last this many messages (of those before `before`). Omit for the whole transcript."
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Return only messages whose `index` is smaller than this: the cursor for the page before the one just read.",
+              "title": "Before"
+            },
+            "description": "Return only messages whose `index` is smaller than this: the cursor for the page before the one just read."
           },
           {
             "name": "x-tenant-id",
@@ -1803,6 +1842,12 @@
       },
       "SessionMessage": {
         "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Index",
+            "description": "The message's position in the whole transcript, counted from 0: pass the smallest `index` of a page as `before` to read the page that precedes it."
+          },
           "role": {
             "type": "string",
             "title": "Role",
@@ -1816,6 +1861,7 @@
         },
         "type": "object",
         "required": [
+          "index",
           "role",
           "text"
         ],

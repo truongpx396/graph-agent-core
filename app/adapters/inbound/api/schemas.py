@@ -89,6 +89,12 @@ class SessionSummary(BaseModel):
 
 
 class SessionMessage(BaseModel):
+    index: int = Field(
+        ...,
+        ge=0,
+        description="The message's position in the whole transcript, counted from 0: pass the smallest `index` of a page as `before` to read the page "
+        "that precedes it.",
+    )
     role: str = Field(
         ...,
         description='"user" or "assistant", or "system" for a compact_history '
