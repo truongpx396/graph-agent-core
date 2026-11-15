@@ -160,3 +160,16 @@ class TestClaimFreeSlots:
 
         assert await streams.claim_free_slots(semaphore, stop, limit=2, wait_seconds=1) == 0
         assert not semaphore.locked()
+
+
+    async def test_a_wait_for_a_slot_ticks_so_a_worker_with_every_slot_busy_still_shows_it_is_alive(self):
+        semaphore = asyncio.Semaphore(1)
+        await semaphore.acquire()
+        ticks = []
+        claim = asyncio.create_task(streams.claim_free_slots(semaphore, asyncio.Event(), limit=1, wait_seconds=0.01, on_wait=lambda: ticks.append(1)))
+
+        await asyncio.sleep(0.08)
+        semaphore.release()
+
+        assert await asyncio.wait_for(claim, 1) == 1
+        assert len(ticks) >= 3

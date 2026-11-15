@@ -146,7 +146,7 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R19 | The dependency ladder: Langfuse 2, LangChain 0.3, LangGraph 0.2 | P1 | L | from the field | R17 | open |
 | R20 | Web fetches: rebinding window, whole body read before the size check, crawler egress | P1 | M | read from code | | open |
 | R21 | Five statements that are no longer true | P1 | S | read from code | | open |
-| R22 | A hung worker is never restarted | P2 | S | read from code | | open |
+| R22 | A hung worker is never restarted | P2 | S | read from code | | done |
 | R23 | The answer cache ignores the domain; its expiry is set in a second call | P2 | S | read from code | | open |
 | R24 | Two error events carry no `code` | P2 | S | read from code | | done |
 | R25 | A pool hands out a connection that died while idle | P2 | S | read from code | | open |

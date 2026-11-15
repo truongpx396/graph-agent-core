@@ -340,6 +340,14 @@ snapshot. The observability droplet is never backed up — it holds metrics/
 logs with their own bounded retention (Loki 7d, Prometheus 15d), not data
 worth restoring.
 
+**A hung worker**: the agent and ingest workers bind no port, so each touches a heartbeat file from its read loop and its reclaim loop
+(`app/platform/worker_heartbeat.py`) and the compose health check fails when one is more than two minutes old (a stuck event loop, a
+deadlock). `dc ps` then shows the worker `unhealthy` and the alert `AgentWorkerLoopStalled` fires when no replica of that queue has
+looped for three minutes. **Docker Compose does not restart an unhealthy container**, and neither does `restart: unless-stopped` (it
+restarts one that *exits*). What does: an orchestrator that acts on health, or a sidecar such as `willfarrell/autoheal` (it needs the
+Docker socket, which is a trade-off this repo has not made for you), or `dc restart agent-worker` by hand when the alert fires. A worker
+that is merely busy is not stale: it beats while it waits for a free slot.
+
 **Prompts in the gateway's spend log**: off in production (`store_prompts_in_spend_logs: false` in
 `deploy/litellm/litellm-config.prod.yaml`), so the gateway's database holds metadata (model, tokens, cost, end user) and not what a person
 asked or what was answered. To see request and response bodies for a period (debugging a guardrail, say), set it to `true` **and** add

@@ -507,6 +507,16 @@ agent_thread_lock_lost_total = Counter(
     "fork the lock exists to prevent (pattern 99). Always zero in a healthy deployment.",
 )
 
+agent_worker_last_loop_timestamp_seconds = Gauge(
+    "agent_worker_last_loop_timestamp_seconds",
+    "Unix time at which a queue worker's loop last passed (`queue`: agent | ingest; `loop`: read | reclaim), re-set on every pass. The same fact as "
+    "the heartbeat file the container's health check reads (app/platform/worker_heartbeat.py). A worker whose event loop is stuck stays 'up' and "
+    "stops updating this; alert AgentWorkerLoopStalled, which asks whether ANY replica of the queue has passed lately (WorkerUnreachable asks "
+    "whether anyone took a job at all).",
+    unit="s",
+    labelnames=["queue", "loop"],
+)  # queue: agent | ingest; loop: read | reclaim
+
 agent_worker_queue_read_failed_total = Counter(
     "agent_worker_queue_read_failed_total",
     "A blocking read of a Redis stream failed with a connection, timeout or socket error and was retried "

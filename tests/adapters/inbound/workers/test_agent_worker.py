@@ -1762,6 +1762,59 @@ class TestAWorkerReadsOnlyWhatItCanStart:
         await asyncio.wait_for(worker, 10)
 
 
+class TestTheWorkerProvesItIsAlive:
+    """A worker whose event loop was stuck stayed 'up' with nothing to restart it: its loops leave a heartbeat the container's health check reads
+    (app/platform/worker_heartbeat.py, PRODUCTION_REVIEW.md R22)."""
+
+    async def test_the_read_loop_beats_on_every_pass(self, monkeypatch):
+        beats = []
+        monkeypatch.setattr(agent_worker, "beat", lambda queue, loop: beats.append((queue, loop)))
+        client = _BlockingFakeRedis()
+        harness = _RunHarness(monkeypatch, client)
+
+        await harness.run_until(lambda: len(client.reads) >= 4)
+
+        assert beats.count(("agent", "read")) >= 4
+
+    async def test_a_worker_with_every_slot_busy_still_beats_because_it_is_waiting_not_hung(self, monkeypatch):
+        monkeypatch.setattr(agent_worker, "_MAX_CONCURRENCY", 1)
+        monkeypatch.setattr(agent_worker, "_BLOCK_MS", 20)
+        beats = []
+        monkeypatch.setattr(agent_worker, "beat", lambda queue, loop: beats.append((queue, loop)))
+        release = asyncio.Event()
+
+        async def turn(text, thread_id, ctx, **kwargs):
+            await release.wait()
+            yield {"type": "done"}
+
+        client = _BlockingFakeRedis()
+        await client.xadd(REQUESTS_STREAM, _entry(request_id="r1", thread_id="t1")[1])
+        harness = _RunHarness(monkeypatch, client, turn)
+        worker = asyncio.create_task(agent_worker.run())
+        await harness.until(lambda: len(client.reads) >= 1)
+        saturated_from = len(beats)
+
+        await asyncio.sleep(0.15)  # several block periods with the only slot busy
+
+        assert len(beats) - saturated_from >= 3
+        release.set()
+        os.kill(os.getpid(), signal.SIGTERM)
+        await asyncio.wait_for(worker, 10)
+
+    async def test_the_reclaim_loop_beats_each_time_it_wakes(self, monkeypatch):
+        beats = []
+        monkeypatch.setattr(agent_worker, "beat", lambda queue, loop: beats.append((queue, loop)))
+        monkeypatch.setattr(agent_worker, "WORKER_RECLAIM_INTERVAL_SECONDS", 0.01)
+        stop = asyncio.Event()
+        task = asyncio.create_task(agent_worker._reclaim_loop(FakeRedis(), stop, graphs={"ecorp": FakeGraph()}))
+
+        await asyncio.sleep(0.08)
+        stop.set()
+        await asyncio.wait_for(task, 1)
+
+        assert beats.count(("agent", "reclaim")) >= 3
+
+
 class _FlakyReads(_BlockingFakeRedis):
     """The first `failures` reads raise what a dropped connection raises."""
 

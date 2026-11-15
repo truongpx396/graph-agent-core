@@ -9,6 +9,7 @@ import contextlib
 import json
 import logging
 import time
+from collections.abc import Callable
 from typing import Any, cast
 
 import redis.asyncio as redis
@@ -265,17 +266,22 @@ async def pause_after_failed_read(stop_event: asyncio.Event, delay: float) -> fl
     return min(delay * 2, READ_BACKOFF_MAX_SECONDS)
 
 
-async def claim_free_slots(semaphore: asyncio.Semaphore, stop_event: asyncio.Event, *, limit: int, wait_seconds: float) -> int:
+async def claim_free_slots(
+    semaphore: asyncio.Semaphore, stop_event: asyncio.Event, *, limit: int, wait_seconds: float, on_wait: Callable[[], None] | None = None
+) -> int:
     """Waits for one free concurrency slot, then takes every other free one without waiting, up to `limit`, and returns how many the caller now holds: the
     number of jobs it may start, so the number it may ask the queue for. 0 means the worker was told to stop first, and nothing is held.
 
     A worker used to ask `XREADGROUP` for its whole concurrency and then wait on the semaphore for each entry. A claimed entry's idle clock runs while
     it waits, so under saturation "idle" measured the queue and not a dead worker, and a healthy job was reclaimed and run a second time (pattern 99).
-    The wait wakes every `wait_seconds` to look at the stop flag, as a blocking read does; the caller gives back what a read did not use."""
+    The wait wakes every `wait_seconds` to look at the stop flag, as a blocking read does, and calls `on_wait` each time: a worker whose every slot is
+    busy for minutes is waiting, not hung, and its heartbeat (app/platform/worker_heartbeat.py) must say so. The caller gives back what a read did not use."""
     while not stop_event.is_set():
         try:
             await asyncio.wait_for(semaphore.acquire(), timeout=wait_seconds)
         except TimeoutError:
+            if on_wait is not None:
+                on_wait()
             continue
         held = 1
         while held < limit and not semaphore.locked():
