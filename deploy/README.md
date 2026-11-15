@@ -449,6 +449,41 @@ opposite drifts on adjacent days: that signature is the straddle, not a loss.
 table spend is read from. It takes no arguments; the window is the setting. It prints what it did and says when it stopped at its ceiling (run it again). Nothing schedules it: run it from cron once your retention
 policy is decided. The billing package has its own sweep for its own table (`make billing-usage-sweep`, in the billing [runbook](../packages/billing/docs/RUNBOOK.md)).
 
+## Redis: the queue and the cache
+
+Production runs **two** Redis services from one pinned image (`docker-compose.prod.yml`; PRODUCTION_REVIEW.md R15). They cannot share a policy, because no eviction setting is right for both:
+
+| | `redis` (the queue) | `redis-cache` (the answer cache) |
+|---|---|---|
+| holds | the work queue, the conversation locks, the cancel flags, the dedup claims, the front door's rate buckets **and revocation list**, the Telegram state | the semantic cache |
+| persistence | `--appendonly yes --appendfsync everysec` (a restart loses about a second of accepted jobs; it used to lose whatever the last snapshot missed) | none: no snapshot, no AOF, no volume |
+| when full | `--maxmemory-policy noeviction`: a write is **refused** (a new turn fails to publish and the caller sees an error); nothing is dropped | `allkeys-lru`: it evicts the least recently used, which is what a cache is for |
+| `maxmemory` / `mem_limit` | 192mb / 256m | 128mb / 192m |
+
+**The two sizes are yours to set** (the defaults suit the default droplet, `s-4vcpu-8gb`). Keep `maxmemory` at about 75% of `mem_limit` (the rest is for the AOF rewrite and buffers) and change the two together, in the file. Without a `maxmemory`, Redis grows until the container is killed instead of refusing a write.
+A full queue Redis refuses writes on purpose, and **`RedisQueueMemoryHigh`** fires at 80% (for 10 minutes) so it is seen first. It reads the exporter (`redis-exporter`) the otel agent scrapes; it does not watch the cache, which is meant to sit near its limit.
+Measured on a 2 MB instance with these flags: at the limit the 472nd 2 KB stream entry was refused, 471 were kept, none evicted, and reads still worked.
+
+Both services use the **Redis Stack** image (`redis/redis-stack-server`, pinned by digest), not a plain `redis`. The queue Redis does not need the modules, but the AOF written by a server of this image holds the semantic cache's search and JSON commands, and a plain Redis exits with an error trying to load it (tried). Move both to `redis:8`, which has the query engine built in,
+after `tests/integration/test_queue_real_redis.py` and the semantic-cache integration tests pass against it. Server flags reach the Stack image through `REDIS_ARGS`: it has no entrypoint, so a compose `command:` would replace its start script.
+
+**Migrating an existing deployment: do this BEFORE you pull the new compose file.** Turning AOF on for a volume that holds only a snapshot starts the server **empty**: Redis ignores `dump.rdb` once AOF is on (measured: the key was gone). The queue would start empty and, worse, the front door's **revocation list would be lost**, so a person you revoked could use their token again until it expired. The way to keep the data is to turn AOF on in the running server first, which writes the dataset out as an AOF the new service then loads:
+
+```
+dc exec redis redis-cli config set appendonly yes
+dc exec redis redis-cli info persistence | grep -E 'aof_rewrite_in_progress|aof_last_bgrewrite_status'   # wait for 0 and ok, then continue
+git pull && dc pull && dc up -d      # the new redis service starts from that AOF; redis-cache starts empty; api and workers are recreated to read SEMANTIC_CACHE_REDIS_URL
+dc exec redis redis-cli config get appendonly         # yes
+dc exec authlimit authlimit revoke --list             # the revocation list is still there
+```
+
+Tried on real containers with the shipped image: after those steps a stream entry, a lock, a revocation key, a JSON document and a search index were all still there. The old semantic cache's keys move across inside the queue Redis's data and expire within `SEMANTIC_CACHE_TTL_SECONDS` (an hour); the new cache starts cold, which costs model calls for an hour and nothing else.
+**Not run on a droplet.** The compose file was resolved (`docker compose config`) and each service's flags were applied and read back on real containers, but this exact sequence on the live stack is the first time it meets your volume: do it in a quiet hour.
+
+**Bumping the Redis, Qdrant and exporter images.** All four are pinned by digest in the compose files (the tag is only for the reader). Pull the one you want, read its digest (`docker image inspect <image> --format '{{index .RepoDigests 0}}'`), and put it in the production **and** the development compose file (the tests start the development file's Redis and Qdrant: `tests/containers.py::_shipped_image`). Run `make test-integration` before a production bump.
+
+**Not done:** a password (`requirepass`) for either Redis. Neither publishes a port in production, so it is defence in depth, and it is optional in the work order; it would mean `REDIS_URL=redis://:<password>@redis:6379` in every service that reads it, `AUTHLIMIT_REDIS_URL` and the exporter included.
+
 ## Trimming conversations
 
 **`make checkpoint-sweep`** deletes a conversation (every checkpoint of it, and its row in the session directory) `CHECKPOINT_RETENTION_DAYS` after its last message. **The default is 0, which is off**:

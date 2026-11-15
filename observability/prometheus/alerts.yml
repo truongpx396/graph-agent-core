@@ -716,6 +716,25 @@ groups:
             against its limit (the container is killed, not throttled, past it) and the
             workers' logs.
 
+      - alert: RedisQueueMemoryHigh
+        expr: redis_memory_used_bytes{job="redis"} / (redis_memory_max_bytes{job="redis"} > 0) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The work queue's Redis is above 80% of its maxmemory"
+          description: >-
+            redis_memory_used_bytes is over 80% of redis_memory_max_bytes for the Redis that holds the
+            work queue, the conversation locks, the dedup claims, the front door's rate buckets and
+            revocation list, and the Telegram state. That Redis has `maxmemory-policy noeviction`: at
+            100% it REFUSES writes, so every new turn fails to publish (a 5xx on the chat route) and
+            nothing is silently dropped. Look for a stream that grew: `docker compose exec redis
+            redis-cli --bigkeys`, and `XINFO GROUPS agent:requests:<domain>` for a worker pool that is
+            not keeping up. If it is simply too small for the traffic, raise `--maxmemory` and
+            `mem_limit` together in docker-compose.prod.yml (maxmemory about 75% of the limit). Not
+            evaluated where `maxmemory` is unset (development), where the gauge is 0. The answer
+            cache is a different Redis, deliberately not watched: it evicts by design.
+
       - alert: AgentThreadLockLost
         expr: increase(agent_thread_lock_lost_total[10m]) > 0
         for: 0m

@@ -275,7 +275,7 @@ A turn keeps nothing in process memory, which is why any worker can take any job
 | MinIO or Spaces | uploaded files, as `<tenant>/<job_id>-<filename>` | api | ingest-worker |
 
 - **Two Postgres databases, on purpose.** `checkpointer` is what makes an approval pause survive a restart; `appdata` is everything the application queries. Both are reached through PgBouncer in transaction mode, so no pool uses prepared statements (`tests/core/test_pooler_safe_sql.py`).
-- **One Redis, three jobs**: Streams for the queues, a vector index for the semantic cache, plain keys for locks and flags. The names the producer and the consumer must agree on are plain data in `app/ports/outbound/jobs.py`.
+- **One Redis in development, two in production**: Streams for the queues and plain keys for locks and flags, in one that never evicts and keeps an AOF (`redis`), and the vector index of the semantic cache in another that evicts the least recently used and keeps nothing (`redis-cache`): no one eviction policy is right for both (ENGINEERING_PATTERNS.md 100). `SEMANTIC_CACHE_REDIS_URL` says which; unset, it is `REDIS_URL`. The names the producer and the consumer must agree on are plain data in `app/ports/outbound/jobs.py`.
 - **A Qdrant collection records the embedding model its vectors were made with** (model, size, prefixes, revision) and the app refuses to mix two (pattern 67).
 
 ### 6. Where the non-negotiable rules are enforced

@@ -201,7 +201,7 @@ async def test_a_collection_from_before_identities_existed_is_adopted_then_repla
 # ---- the answer cache -------------------------------------------------------------------------------------------------------
 async def test_the_answer_cache_never_serves_an_answer_made_under_another_embedding(monkeypatch):
     redis_info = ensure_redis()
-    monkeypatch.setattr(semantic_cache, "REDIS_URL", redis_info["redis_url"])
+    monkeypatch.setattr(semantic_cache, "SEMANTIC_CACHE_REDIS_URL", redis_info["redis_url"])
     monkeypatch.setattr(semantic_cache, "_client", None)
     monkeypatch.setattr(semantic_cache, "_ready_indexes", set())
     dims = {"n": 3}

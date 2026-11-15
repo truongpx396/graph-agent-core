@@ -329,6 +329,13 @@ def ensure_pgbouncer() -> dict[str, str]:
     return _acquire("pgbouncer", _start)
 
 
+def _shipped_image(service: str) -> str:
+    """The image `docker-compose.yml` runs for `service`, by digest: a test of a store runs what ships, and a floating `latest` could pass here and not there."""
+    import yaml
+
+    return str(yaml.safe_load((_REPO_ROOT / "deploy" / "compose" / "docker-compose.yml").read_text(encoding="utf-8"))["services"][service]["image"])
+
+
 def ensure_redis() -> dict[str, str]:
     """Real Redis Stack (same image docker-compose.yml's `redis` service
     uses — plain `redis:*` doesn't ship RediSearch, which the semantic cache
@@ -338,7 +345,7 @@ def ensure_redis() -> dict[str, str]:
     def _start() -> dict[str, Any]:
         from testcontainers.redis import RedisContainer
 
-        container = RedisContainer(image="redis/redis-stack-server:latest")
+        container = RedisContainer(image=_shipped_image("redis"))
         container.start()  # blocks on a real PING — see RedisContainer._connect
         host = container.get_container_host_ip()
         port = int(container.get_exposed_port(6379))
@@ -357,7 +364,7 @@ def ensure_qdrant() -> dict[str, str]:
     def _start() -> dict[str, Any]:
         from testcontainers.core.container import DockerContainer
 
-        container = DockerContainer("qdrant/qdrant:latest").with_exposed_ports(6333)
+        container = DockerContainer(_shipped_image("qdrant")).with_exposed_ports(6333)
         container.start()
         host = container.get_container_host_ip()
         port = int(container.get_exposed_port(6333))
