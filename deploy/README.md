@@ -340,6 +340,13 @@ snapshot. The observability droplet is never backed up — it holds metrics/
 logs with their own bounded retention (Loki 7d, Prometheus 15d), not data
 worth restoring.
 
+**Prompts in the gateway's spend log**: off in production (`store_prompts_in_spend_logs: false` in
+`deploy/litellm/litellm-config.prod.yaml`), so the gateway's database holds metadata (model, tokens, cost, end user) and not what a person
+asked or what was answered. To see request and response bodies for a period (debugging a guardrail, say), set it to `true` **and** add
+`maximum_spend_logs_retention_period: "7d"` under `general_settings` beside it, restart the proxy, and turn both back off afterwards. The key
+is the one in litellm 1.94.1's `proxy/_types.py`; check it against the image you have pinned before relying on it. Rows written while it was
+on are not removed by turning it off.
+
 **Rollback**: re-run `deploy.yml` against an earlier commit
 (`workflow_dispatch` isn't wired up for this file today — re-push/revert the
 commit on `main`, or SSH in and `IMAGE_TAG=<older-sha> dc up -d` directly using an older GHCR tag). The
