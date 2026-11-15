@@ -141,6 +141,12 @@ def _turn_outcome(state: dict[str, Any]) -> str:
     return "rejected" if state.get("iterations", 0) == 0 else "success"
 
 
+# How often a turn asks whether it was cancelled: at most this often, not once per event. The check is a Redis GET and a 500-token answer is 500 events, so asking
+# every time was 500 round trips awaited one after another on the model's own stream. A stop takes effect within this long, at an event boundary, as before
+# (PRODUCTION_REVIEW.md R08, step 1).
+_CANCEL_POLL_INTERVAL_SECONDS = 0.25
+
+
 async def _iterate_with_timeout(aiter: AsyncIterator[Any], timeout_seconds: float, cancel_check: CancelCheck | None = None) -> AsyncGenerator[Any, None]:
     """Wrap an async iterator so the whole run aborts once total wall-clock
     time exceeds `timeout_seconds` (enforces REQUEST_TIMEOUT_SECONDS).
@@ -148,7 +154,8 @@ async def _iterate_with_timeout(aiter: AsyncIterator[Any], timeout_seconds: floa
     this loop in a generic `except Exception` for Langfuse error-marking.
 
     `cancel_check` (optional, `Callable[[], Awaitable[bool]]`) is polled
-    once per iteration, before waiting on the next event; if it returns
+    before waiting on an event, at most once per `_CANCEL_POLL_INTERVAL_SECONDS`
+    and always before the first event; if it returns
     True, raises `TurnCancelledError`. Cancellation only takes effect at the
     next event boundary, not mid-flight on an already-running tool/model
     call. Wired by `app/adapters/inbound/workers/agent_worker.py` to a Redis cancel flag
@@ -157,12 +164,17 @@ async def _iterate_with_timeout(aiter: AsyncIterator[Any], timeout_seconds: floa
     """
     aiter = aiter.__aiter__()
     deadline = time.monotonic() + timeout_seconds
+    last_checked: float | None = None  # None until the first check: the first iteration always asks
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError(f"Request exceeded {timeout_seconds}s timeout")
-        if cancel_check is not None and await cancel_check():
-            raise TurnCancelledError()
+        if cancel_check is not None:
+            now = time.monotonic()
+            if last_checked is None or now - last_checked >= _CANCEL_POLL_INTERVAL_SECONDS:
+                last_checked = now
+                if await cancel_check():
+                    raise TurnCancelledError()
         try:
             yield await asyncio.wait_for(aiter.__anext__(), timeout=remaining)
         except StopAsyncIteration:

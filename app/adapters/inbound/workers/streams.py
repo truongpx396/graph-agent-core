@@ -115,8 +115,13 @@ async def publish_result(client: redis.Redis, request_id: str, event: dict[str, 
     tool_end, citations, error, done) to this request's results stream,
     refreshing its TTL so a long-running turn doesn't expire mid-flight."""
     key = results_stream_key(request_id)
-    await client.xadd(key, {"payload": json.dumps(event)})
-    await client.expire(key, RESULTS_STREAM_TTL_SECONDS)
+    # One round trip for the pair, not two awaited one after the other: an answer of 500 tokens was 1,500 sequential round trips with the cancel check, each
+    # holding up the model's stream. A MULTI as well, so a worker that dies between the two can no longer leave a results stream with no expiry
+    # (PRODUCTION_REVIEW.md R08, step 1).
+    async with client.pipeline(transaction=True) as pipe:
+        pipe.xadd(key, {"payload": json.dumps(event)})
+        pipe.expire(key, RESULTS_STREAM_TTL_SECONDS)
+        await pipe.execute()
 
 
 # --- Crash recovery for a requests stream's consumer group (agent_worker.py and ingest_worker.py use these

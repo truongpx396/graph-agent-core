@@ -206,3 +206,16 @@ async def test_a_consumer_that_owns_nothing_is_removed_when_its_worker_stops_and
 
     names = {info["name"] for info in await client.xinfo_consumers(stream, jobs.CONSUMER_GROUP)}
     assert names == {"busy-worker"}
+
+
+async def test_a_published_event_and_its_expiry_land_together_on_a_real_server():
+    """`XADD` and `EXPIRE` are one MULTI now: the stream exists with a lifetime the moment it holds its first event (PRODUCTION_REVIEW.md R08)."""
+    client = queue.get_client()
+    request_id = str(uuid.uuid4())
+
+    await streams.publish_result(client, request_id, {"type": "token", "content": "hi"})
+    await streams.publish_result(client, request_id, {"type": "done"})
+
+    key = jobs.results_stream_key(request_id)
+    assert 0 < await client.ttl(key) <= jobs.RESULTS_STREAM_TTL_SECONDS
+    assert [event async for event in queue.read_results(client, request_id)] == [{"type": "token", "content": "hi"}, {"type": "done"}]
