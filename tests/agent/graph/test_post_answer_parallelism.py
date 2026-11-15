@@ -65,3 +65,73 @@ async def test_the_cache_write_begins_while_the_follow_ups_are_still_being_gener
 
     assert overlapped == [True], "the cache write waited for the follow-ups to finish"
     assert result["followups"] == ["What else?", "And more?"]
+
+
+# --- A domain that does not want follow-ups pays for none (PRODUCTION_REVIEW.md R30) -------------------------------------
+
+
+def _cited_answer_calls(graph_kwargs, monkeypatch=None):
+    calls = []
+
+    def respond(messages):
+        calls.append(str(messages[-1].content)[:30])
+        if str(messages[-1].content).startswith("Based on the answer below"):
+            return AIMessage(content="What else?\nAnd more?")
+        return AIMessage(content="The refund policy text says what it says [1].")
+
+    async def search(query, ctx):
+        return "[1] REFUND POLICY TEXT", [{"marker": "[1]", "text": "REFUND POLICY TEXT"}]
+
+    async def miss(ctx, query):
+        return None
+
+    async def cache_set(ctx, query, answer, citations):
+        return None
+
+    graph = build_graph(GraphDeps(llm=scripted_llm(respond), search_docs=search, cache_get=miss, cache_set=cache_set), **graph_kwargs)
+    return graph, calls
+
+
+async def test_a_domain_without_followups_makes_one_model_call_for_a_cited_answer():
+    from dataclasses import replace
+
+    from tests.ecorp import ECORP_MANIFEST
+
+    graph, calls = _cited_answer_calls({"manifest": replace(ECORP_MANIFEST, suggest_followups=False)})
+
+    result = await graph.ainvoke({"messages": [HumanMessage(content="what is the refund policy")]}, config=cfg())
+
+    assert len(calls) == 1, "the follow-ups call was made anyway"
+    assert not result.get("followups")
+    assert "suggest_followups" not in graph.get_graph().nodes
+    assert ("check_output", "write_semantic_cache") in _edges(graph)
+
+
+async def test_a_domain_that_keeps_followups_still_makes_the_second_call():
+    graph, calls = _cited_answer_calls({})
+
+    result = await graph.ainvoke({"messages": [HumanMessage(content="what is the refund policy")]}, config=cfg())
+
+    assert len(calls) == 2 and result["followups"] == ["What else?", "And more?"]
+
+
+async def test_the_operators_setting_turns_it_off_for_every_domain_at_build_time(monkeypatch):
+    from app.agent.graph import build as graph_build
+
+    monkeypatch.setattr(graph_build, "FOLLOWUPS_ENABLED", False)
+    graph, calls = _cited_answer_calls({})
+
+    await graph.ainvoke({"messages": [HumanMessage(content="what is the refund policy")]}, config=cfg())
+
+    assert len(calls) == 1 and "suggest_followups" not in graph.get_graph().nodes
+
+
+def test_the_shipped_defaults_keep_it_for_ecorp_where_the_page_shows_the_chips_and_drop_it_where_answers_end_in_an_action():
+    from app.domains.ecorp.domain import ECORP_MANIFEST
+    from app.domains.ops.domain import OPS_MANIFEST
+    from app.domains.sales.domain import SALES_MANIFEST
+    from app.domains.support.domain import SUPPORT_MANIFEST
+
+    assert (ECORP_MANIFEST.suggest_followups, OPS_MANIFEST.suggest_followups, SUPPORT_MANIFEST.suggest_followups, SALES_MANIFEST.suggest_followups) == (
+        True, False, False, False,
+    )

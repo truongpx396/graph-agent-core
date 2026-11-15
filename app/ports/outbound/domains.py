@@ -65,6 +65,10 @@ class AgentManifest:
     # offers" — a plugin author doesn't have to enumerate every tool name
     # twice just to expose all of them.
     allowed_tools: tuple[str, ...] = ()
+    # Whether an answer that cites something is followed by a second model call that suggests follow-up questions (`suggest_followups`, pattern 27).
+    # It runs in parallel with the cache write, but `done` waits for both, so it costs a model call and the time of one on every cited answer. A domain
+    # whose answers usually end in an action rather than a reading list leaves it off (PRODUCTION_REVIEW.md R30); the node is then not in its graph at all.
+    suggest_followups: bool = True
 
 
 class DomainCatalog(Protocol):

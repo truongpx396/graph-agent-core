@@ -76,7 +76,12 @@ from app.agent.graph.state import (
 from app.agent.graph.tool_guards import tool_batch_guard
 from app.agent.graph.utils import NodeFn, friendly_tool_error, instrumented, make_llm
 from app.agent.tools import builtin
-from app.core.config import CHAT_MODEL, MAX_COST_USD_PER_TURN, SEMANTIC_CACHE_ENABLED
+from app.core.config import (
+    CHAT_MODEL,
+    FOLLOWUPS_ENABLED,
+    MAX_COST_USD_PER_TURN,
+    SEMANTIC_CACHE_ENABLED,
+)
 from app.core.security import SecurityCtx
 from app.ports.outbound.retrieval import answer_cache
 
@@ -349,7 +354,9 @@ def build_graph(
             ),
         )
         add("context_window_exceeded", context_window_exceeded)
-    if profile.include_followups:
+    # The profile says whether this KIND of graph has the step; the manifest and the setting say whether this domain, in this deployment, wants it.
+    suggests_followups = profile.include_followups and manifest.suggest_followups and FOLLOWUPS_ENABLED
+    if suggests_followups:
         # Same: a tool-bound client asked a plain question just answers it.
         add("suggest_followups", make_suggest_followups_node(llm_client, model_alias=model_alias))
     if profile.include_router:
@@ -366,7 +373,7 @@ def build_graph(
     finish_steps = [
         name
         for name, present in (
-            ("suggest_followups", profile.include_followups),
+            ("suggest_followups", suggests_followups),
             ("write_semantic_cache", profile.include_cache),
         )
         if present
