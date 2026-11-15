@@ -75,9 +75,9 @@ def client(monkeypatch):
 async def test_a_principal_containing_the_or_operator_cannot_widen_the_filter(client):
     ctx = {"tenant": "acme", "principal": "alice|bob", "claims": {}}
 
-    await semantic_cache.get(ctx, "hello")
+    await semantic_cache.get(ctx, "hello", domain="ecorp")
 
-    assert client.queries == [r"(@tenant:{acme} @principal:{alice\|bob})=>[KNN 1 @embedding $vec AS dist]"]
+    assert client.queries == [r"(@tenant:{acme} @principal:{alice\|bob} @domain:{ecorp})=>[KNN 1 @embedding $vec AS dist]"]
 
 
 def _unescaped(query: str) -> list[str]:
@@ -94,15 +94,15 @@ def _unescaped(query: str) -> list[str]:
     return live
 
 
-async def test_a_value_shaped_like_query_syntax_leaves_exactly_the_two_tag_blocks(client):
-    """Exactly the two tag blocks of the query must survive — four live braces —
+async def test_a_value_shaped_like_query_syntax_leaves_exactly_the_three_tag_blocks(client):
+    """Exactly the three tag blocks of the query (tenant, principal, domain) must survive — six live braces —
     and no live `|` or parenthesis other than the filter's own pair."""
     ctx = {"tenant": "a}) | (@tenant:{b", "principal": "p\\", "claims": {}}
 
-    await semantic_cache.get(ctx, "hello")
+    await semantic_cache.get(ctx, "hello", domain="ecorp")
 
     (query,) = client.queries
     live = _unescaped(query.split("=>")[0])
-    assert live.count("{") == 2 and live.count("}") == 2, query
+    assert live.count("{") == 3 and live.count("}") == 3, query
     assert "|" not in live, query
     assert live.count("(") == 1 and live.count(")") == 1, query

@@ -55,19 +55,19 @@ class TestGetQueryIsScopedAndEscaped:
     async def test_the_query_restricts_to_both_tenant_and_principal(self, client):
         ctx = {"tenant": "acme", "principal": "alice", "claims": {}}
 
-        await semantic_cache.get(ctx, "what is the refund policy?")
+        await semantic_cache.get(ctx, "what is the refund policy?", domain="ecorp")
 
-        assert client.queries == ["(@tenant:{acme} @principal:{alice})=>[KNN 1 @embedding $vec AS dist]"]
+        assert client.queries == ["(@tenant:{acme} @principal:{alice} @domain:{ecorp})=>[KNN 1 @embedding $vec AS dist]"]
 
     async def test_syntax_characters_in_either_axis_are_escaped(self, client):
         """`other-co` raised a syntax error before the fix; the principal axis
         was never covered. Both go through `_escape_tag`."""
         ctx = {"tenant": "other-co.eu", "principal": "a@b c", "claims": {}}
 
-        await semantic_cache.get(ctx, "hello")
+        await semantic_cache.get(ctx, "hello", domain="ecorp")
 
         assert client.queries == [
-            r"(@tenant:{other\-co\.eu} @principal:{a\@b\ c})=>[KNN 1 @embedding $vec AS dist]"
+            r"(@tenant:{other\-co\.eu} @principal:{a\@b\ c} @domain:{ecorp})=>[KNN 1 @embedding $vec AS dist]"
         ]
 
     @pytest.mark.parametrize(
@@ -76,5 +76,35 @@ class TestGetQueryIsScopedAndEscaped:
         ids=["no-ctx", "empty-ctx", "no-principal", "no-tenant"],
     )
     async def test_an_incomplete_ctx_is_a_miss_that_never_queries(self, client, ctx):
-        assert await semantic_cache.get(ctx, "hello") is None
+        assert await semantic_cache.get(ctx, "hello", domain="ecorp") is None
         assert client.queries == []
+
+
+class TestTheDomainIsPartOfTheKey:
+    """The cache scoped an entry by tenant and person only, so the same person asking the same question in another domain (another prompt, other
+    tools) was handed the first domain's answer (PRODUCTION_REVIEW.md R23)."""
+
+    async def test_the_lookup_is_restricted_to_the_domain_it_is_asked_in(self, client):
+        ctx = {"tenant": "acme", "principal": "alice", "claims": {}}
+
+        await semantic_cache.get(ctx, "hello", domain="support")
+        await semantic_cache.get(ctx, "hello", domain="ops")
+
+        assert [q.split("=>")[0] for q in client.queries] == [
+            "(@tenant:{acme} @principal:{alice} @domain:{support})",
+            "(@tenant:{acme} @principal:{alice} @domain:{ops})",
+        ]
+
+    async def test_a_domain_cannot_widen_the_filter_either(self, client):
+        ctx = {"tenant": "acme", "principal": "alice", "claims": {}}
+
+        await semantic_cache.get(ctx, "hello", domain="a}|{b")
+
+        assert client.queries[0].startswith(r"(@tenant:{acme} @principal:{alice} @domain:{a\}\|\{b})")
+
+    async def test_the_port_adapter_passes_the_domain_through(self, client):
+        ctx = {"tenant": "acme", "principal": "alice", "claims": {}}
+
+        await semantic_cache.RedisAnswerCache().get(ctx, "hello", domain="sales")
+
+        assert client.queries[0].startswith("(@tenant:{acme} @principal:{alice} @domain:{sales})")

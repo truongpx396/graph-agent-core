@@ -213,12 +213,12 @@ async def test_the_answer_cache_never_serves_an_answer_made_under_another_embedd
     ctx = {"tenant": f"acme-{uuid.uuid4().hex[:6]}", "principal": "alice", "claims": {}}
 
     _use_identity(monkeypatch, TEST_EMBEDDING_IDENTITY)
-    await semantic_cache.set(ctx, "what is the refund policy?", "five business days", [])
-    assert await semantic_cache.get(ctx, "what is the refund policy?") is not None  # control: it hits under its own identity
+    await semantic_cache.set(ctx, "what is the refund policy?", "five business days", [], domain="ecorp")
+    assert await semantic_cache.get(ctx, "what is the refund policy?", domain="ecorp") is not None  # control: it hits under its own identity
 
     dims["n"] = 5  # a different model with a different dimension would make the OLD index unusable if it were shared
     _use_identity(monkeypatch, EmbeddingIdentity("embed", "test/five-dim-model", 5, "", "", ""))
-    assert await semantic_cache.get(ctx, "what is the refund policy?") is None  # a clean miss, not an error and not the old answer
-    await semantic_cache.set(ctx, "what is the refund policy?", "a new answer", [])
-    answer, _ = await semantic_cache.get(ctx, "what is the refund policy?")
+    assert await semantic_cache.get(ctx, "what is the refund policy?", domain="ecorp") is None  # a clean miss, not an error and not the old answer
+    await semantic_cache.set(ctx, "what is the refund policy?", "a new answer", [], domain="ecorp")
+    answer, _ = await semantic_cache.get(ctx, "what is the refund policy?", domain="ecorp")
     assert answer == "a new answer"

@@ -84,12 +84,12 @@ if TYPE_CHECKING:
     from app.ports.outbound.domains import AgentManifest, DomainPlugin
 
 
-async def default_cache_get(ctx: SecurityCtx | None, query: str) -> tuple[str, list[dict[str, Any]]] | None:
-    return await answer_cache.get().get(ctx, query)
+async def default_cache_get(ctx: SecurityCtx | None, query: str, *, domain: str) -> tuple[str, list[dict[str, Any]]] | None:
+    return await answer_cache.get().get(ctx, query, domain=domain)
 
 
-async def default_cache_set(ctx: SecurityCtx | None, query: str, answer: str, citations: list[dict[str, Any]]) -> None:
-    await answer_cache.get().set(ctx, query, answer, citations)
+async def default_cache_set(ctx: SecurityCtx | None, query: str, answer: str, citations: list[dict[str, Any]], *, domain: str) -> None:
+    await answer_cache.get().set(ctx, query, answer, citations, domain=domain)
 
 
 async def default_search(query: str, ctx: SecurityCtx | None) -> tuple[str, list[dict[str, Any]]]:
@@ -323,10 +323,12 @@ def build_graph(
     if profile.include_cache:
         # Read as bare module globals, resolved when build_graph runs: tests/conftest.py's autouse
         # fixtures replace default_cache_get/default_cache_set on THIS module.
-        add("check_semantic_cache", make_check_semantic_cache_node(deps.cache_get or default_cache_get))
+        # The default cache is bound to THIS graph's domain (`manifest.name`) here, in the one place that knows it: `app/agent/runtime/core.py` knows it too,
+        # but imports this module. A test's injected `cache_get`/`cache_set` is used as given.
+        add("check_semantic_cache", make_check_semantic_cache_node(deps.cache_get or functools.partial(default_cache_get, domain=manifest.name)))
         add(
             "write_semantic_cache",
-            make_write_semantic_cache_node(deps.cache_set or default_cache_set, tool_capabilities),
+            make_write_semantic_cache_node(deps.cache_set or functools.partial(default_cache_set, domain=manifest.name), tool_capabilities),
         )
     if profile.include_compaction:
         # Reuses the SAME llm client as `agent` (a summarization call doesn't need tools bound; a

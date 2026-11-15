@@ -50,8 +50,11 @@ logger = logging.getLogger(__name__)
 # Operator note: a deployment from before this keeps its old `idx:semantic_cache` index (prefix `cache:`), which also matches the new
 # keys. That is harmless (it just indexes them too, or fails to for a different dimension) and `FT.DROPINDEX idx:semantic_cache`
 # removes it; it is not dropped automatically because an older process still running during a rolling deploy searches it.
-INDEX_PREFIX = "idx:semantic_cache:"
-KEY_PREFIX = "cache:"
+#
+# The same applies to the schema's own version (`v2`: entries carry the domain they were written for). A new index name is how a schema changes without a
+# flush or a failing `FT.CREATE` against the old one: entries written under `v1` are never read again and expire on their own.
+INDEX_PREFIX = "idx:semantic_cache:v2:"
+KEY_PREFIX = "cache:v2:"
 # COSINE distance (RediSearch) is 1 - cosine_similarity: 0 for identical
 # vectors, up to 2 for opposite ones. A cached entry only counts as a hit
 # within this much distance of the incoming query.
@@ -107,6 +110,7 @@ async def _ensure_index(client: redis.Redis) -> _Namespace:
     schema = [
         TagField("$.tenant", as_name="tenant"),
         TagField("$.principal", as_name="principal"),
+        TagField("$.domain", as_name="domain"),
         TextField("$.query", as_name="query"),
         # Declared (not just stored) so return_fields can project them back
         # on a hit — RediSearch's JSON index only returns schema fields; an
@@ -132,11 +136,12 @@ async def _ensure_index(client: redis.Redis) -> _Namespace:
     return ns
 
 
-async def get(ctx: SecurityCtx | None, query: str) -> tuple[str, list[dict[str, Any]]] | None:
+async def get(ctx: SecurityCtx | None, query: str, *, domain: str) -> tuple[str, list[dict[str, Any]]] | None:
     """Look up a near-identical past query, scoped to ctx's tenant AND
     principal (never just tenant — a cached answer can carry citations to
     that principal's own memories, so this is at least as narrow as
-    `Policy.lower(ctx, "memories")`). Returns `(answer, citations)` on a
+    `Policy.lower(ctx, "memories")`) AND `domain` (another domain has
+    another prompt and other tools). Returns `(answer, citations)` on a
     hit, `None` on a miss OR any failure — a degraded cache is always a
     miss, never an exception the caller has to guard against.
     """
@@ -149,7 +154,8 @@ async def get(ctx: SecurityCtx | None, query: str) -> tuple[str, list[dict[str, 
         q = (
             Query(
                 f"(@tenant:{{{_escape_tag(ctx['tenant'])}}} "
-                f"@principal:{{{_escape_tag(ctx['principal'])}}})"
+                f"@principal:{{{_escape_tag(ctx['principal'])}}} "
+                f"@domain:{{{_escape_tag(domain)}}})"
                 "=>[KNN 1 @embedding $vec AS dist]"
             )
             .sort_by("dist")
@@ -169,7 +175,7 @@ async def get(ctx: SecurityCtx | None, query: str) -> tuple[str, list[dict[str, 
         return None
 
 
-async def set(ctx: SecurityCtx | None, query: str, answer: str, citations: list[dict[str, Any]]) -> None:
+async def set(ctx: SecurityCtx | None, query: str, answer: str, citations: list[dict[str, Any]], *, domain: str) -> None:
     """Best-effort write-through after a turn completes (app/agent/graph/core.py's
     write_semantic_cache node, only on the miss path — see its docstring
     for why a hit never re-writes). Swallows every failure: a cache write
@@ -181,19 +187,23 @@ async def set(ctx: SecurityCtx | None, query: str, answer: str, citations: list[
         ns = await _ensure_index(client)
         vector = await embed_query(query)
         key = f"{ns.prefix}{uuid.uuid4().hex}"
-        await client.json().set(
-            key,
-            "$",
-            {
-                "tenant": ctx["tenant"],
-                "principal": ctx["principal"],
-                "query": query,
-                "answer": answer,
-                "citations": json.dumps(citations),
-                "embedding": cast(list[Any], vector),
-            },
-        )
-        await client.expire(key, SEMANTIC_CACHE_TTL_SECONDS)
+        # One MULTI: a failure between a separate JSON.SET and EXPIRE left an entry that never expired (and, being a cached answer, never stopped being served).
+        async with client.pipeline(transaction=True) as pipe:
+            pipe.json().set(
+                key,
+                "$",
+                {
+                    "tenant": ctx["tenant"],
+                    "principal": ctx["principal"],
+                    "domain": domain,
+                    "query": query,
+                    "answer": answer,
+                    "citations": json.dumps(citations),
+                    "embedding": cast(list[Any], vector),
+                },
+            )
+            pipe.expire(key, SEMANTIC_CACHE_TTL_SECONDS)
+            await pipe.execute()
     except Exception:  # see get()'s matching note
         logger.warning("semantic cache write failed; continuing without caching", exc_info=True)
         metrics.agent_semantic_cache_total.labels(outcome="error").inc()
@@ -202,8 +212,8 @@ async def set(ctx: SecurityCtx | None, query: str, answer: str, citations: list[
 class RedisAnswerCache:
     """The `AnswerCache` adapter (`app/ports/outbound/retrieval.py`): this module's `get` and `set` behind the port, looked up at CALL time."""
 
-    async def get(self, ctx: SecurityCtx | None, query: str) -> tuple[str, list[dict[str, Any]]] | None:
-        return await get(ctx, query)
+    async def get(self, ctx: SecurityCtx | None, query: str, *, domain: str) -> tuple[str, list[dict[str, Any]]] | None:
+        return await get(ctx, query, domain=domain)
 
-    async def set(self, ctx: SecurityCtx | None, query: str, answer: str, citations: list[dict[str, Any]]) -> None:
-        await set(ctx, query, answer, citations)
+    async def set(self, ctx: SecurityCtx | None, query: str, answer: str, citations: list[dict[str, Any]], *, domain: str) -> None:
+        await set(ctx, query, answer, citations, domain=domain)

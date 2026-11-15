@@ -105,12 +105,13 @@ class DocumentWriter(Protocol):
 
 
 class AnswerCache(Protocol):
-    async def get(self, ctx: SecurityCtx | None, query: str) -> tuple[str, list[dict[str, Any]]] | None:
-        """A cached `(answer, citations)` for a semantically close query from the same tenant and person, or None."""
+    async def get(self, ctx: SecurityCtx | None, query: str, *, domain: str) -> tuple[str, list[dict[str, Any]]] | None:
+        """A cached `(answer, citations)` for a semantically close query from the same tenant, person AND domain, or None. The domain is part of the key
+        because another domain has another prompt and other tools: the same person asking the same question there must not be handed this one's answer."""
         ...
 
-    async def set(self, ctx: SecurityCtx | None, query: str, answer: str, citations: list[dict[str, Any]]) -> None:
-        """Remembers a finished answer. Best effort."""
+    async def set(self, ctx: SecurityCtx | None, query: str, answer: str, citations: list[dict[str, Any]], *, domain: str) -> None:
+        """Remembers a finished answer for `domain`. Best effort."""
         ...
 
 
