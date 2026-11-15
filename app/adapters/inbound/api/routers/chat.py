@@ -25,12 +25,13 @@ from app.adapters.inbound.api.schemas import (
     CancelRequest,
     ChatRequest,
     ErrorResponse,
+    FeedbackRequest,
     PendingApproval,
     ResumeRequest,
     SessionMessage,
     SessionSummary,
 )
-from app.agent.runtime import sessions
+from app.agent.runtime import feedback, sessions
 from app.agent.runtime.stream import get_pending_approval, get_session_messages
 from app.core.config import (
     CHAT_FIRST_RESPONSE_DEADLINE_SECONDS,
@@ -330,6 +331,28 @@ async def chat_sessions(
     as Policy.lower's memory scoping (pattern 49 added the domain part), so
     switching domains in the web UI also switches which sessions list."""
     return await sessions.list_sessions(ctx, domain)  # type: ignore[return-value]  # response_model coerces dict -> SessionSummary at the HTTP boundary; a direct Python call (see tests/adapters/inbound/api/test_api.py) intentionally gets the raw dicts back
+
+
+@router.post(
+    "/chat/feedback",
+    status_code=204,
+    response_class=Response,
+    tags=["chat"],
+    responses={404: {"description": "No such session for the caller (another person's session reads the same as an unknown one)."}},
+)
+async def chat_feedback(req: FeedbackRequest, ctx: SecurityCtx = Depends(get_ctx), domain: str = Depends(get_domain)) -> Response:
+    """Rate one answer, thumbs up or down, with an optional comment (PRODUCTION_REVIEW.md R28). Advisory: it is counted and stored for a reviewer, and nothing the agent does
+    depends on it.
+
+    The conversation must be the caller's (`session_belongs_to`, as on every route about a thread); another person's reads as not found. The answer is identified by its
+    `message_index` (the transcript's own numbering) or, failing that, the `request_id` the response carried in `X-Request-Id`. Rating the same answer again replaces the
+    earlier rating and is not counted twice."""
+    recorded = await feedback.record_answer_feedback(
+        ctx, req.thread_id, domain, rating=req.rating, comment=req.comment, request_id=req.request_id, message_index=req.message_index
+    )
+    if not recorded:
+        raise HTTPException(status_code=404, detail="session not found")
+    return Response(status_code=204)
 
 
 @router.delete(

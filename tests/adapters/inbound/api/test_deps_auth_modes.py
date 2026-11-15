@@ -190,6 +190,7 @@ CALLER_ROUTES = [
     ("GET", "/chat/stream/req1", None),
     ("POST", "/chat/resume", {"thread_id": "t1", "approved": True}),
     ("POST", "/chat/cancel", {"thread_id": "t1"}),
+    ("POST", "/chat/feedback", {"thread_id": "t1", "rating": "up", "message_index": 0}),
     ("POST", "/ingest/upload", None),
     ("DELETE", "/ingest/documents", {"filename": "a.pdf"}),
 ]

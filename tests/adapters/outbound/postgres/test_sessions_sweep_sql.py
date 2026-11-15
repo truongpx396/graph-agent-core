@@ -120,3 +120,27 @@ async def test_closing_forgets_the_saver_so_a_later_delete_cannot_use_a_closed_p
 
     with pytest.raises(RuntimeError):
         await adapter.delete_thread("t1")
+
+
+async def test_the_answer_sample_is_a_random_slice_of_one_window_across_tenants_unless_limited(monkeypatch):
+    columns = ("thread_id", "tenant", "principal", "domain", "last_active_at")
+    connection = _Connection(rows=[("t1", "acme", "alice", "ecorp", LAST)], columns=columns)
+    _bind(monkeypatch, connection)
+
+    rows = await pg_sessions.PgSessionStore().sample_active(LAST, BEFORE, 50)
+
+    ((sql, params),) = connection.calls
+    assert "WHERE last_active_at >= %s AND last_active_at < %s ORDER BY random() LIMIT %s" in sql and "tenant" not in sql.split("WHERE")[1]
+    assert params == (LAST, BEFORE, 50)
+    assert rows == [dict(zip(columns, ("t1", "acme", "alice", "ecorp", LAST), strict=True))]
+
+
+async def test_the_answer_sample_can_be_limited_to_named_tenants(monkeypatch):
+    connection = _Connection()
+    _bind(monkeypatch, connection)
+
+    await pg_sessions.PgSessionStore().sample_active(LAST, BEFORE, 50, tenants=("acme", "globex"))
+
+    ((sql, params),) = connection.calls
+    assert "AND tenant = ANY(%s) ORDER BY random() LIMIT %s" in sql
+    assert params == (LAST, BEFORE, ["acme", "globex"], 50)

@@ -173,6 +173,7 @@ APPDATA_TABLES: tuple[tuple[str, str], ...] = (
     ("tenant_budget_holds", "16-tenant-budget-holds.sql"),
     ("budget_policies", "18-budget-policies.sql"),
     ("usage_events", "19-usage-events.sql"),
+    ("chat_feedback", "26-chat-feedback.sql"),
 )
 
 

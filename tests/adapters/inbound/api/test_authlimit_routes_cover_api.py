@@ -33,6 +33,7 @@ EXPECTED_CLASS = {
     ("POST", "/chat/resume"): "turn",
     ("POST", "/ingest/upload"): "upload",
     ("DELETE", "/ingest/documents"): "upload",  # it lists a tenant's stored files: charged like the upload it undoes
+    ("POST", "/chat/feedback"): "upload",  # a small write per rating: charged in the upload bucket, so it cannot be hammered
     ("POST", "/chat/cancel"): "cancel",
     ("GET", "/chat/sessions"): "read",
     ("DELETE", "/chat/sessions/{thread_id}"): "read",  # one indexed lookup and two small deletes, owner-scoped: as cheap as the GETs beside it, and throttling it would break "clear my history"
@@ -118,6 +119,7 @@ def test_only_the_routes_that_start_work_are_limited():
         ("POST", "/chat/resume"),
         ("POST", "/ingest/upload"),
         ("DELETE", "/ingest/documents"),
+        ("POST", "/chat/feedback"),
     }
 
 
