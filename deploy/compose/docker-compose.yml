@@ -45,6 +45,11 @@ x-app-build: &app-build
   context: .
   target: runtime
 
+# The app roles that call the crawler: its own network plus the default one the rest of the stack is on. An anchor so a fourth caller cannot forget one of the two
+# (a role left only on `crawler` would lose Postgres and Redis; one left only on `default` could not reach the crawler).
+x-crawler-network: &crawler-network
+  networks: [default, crawler]
+
 # The authlimit service's own Dockerfile and context, shared by `authlimit` and its smoke-check stand-in `authlimit-echo`.
 x-authlimit-image: &authlimit-image
   image: authlimit:dev
@@ -263,6 +268,11 @@ services:
   crawl4ai:
     image: unclecode/crawl4ai:0.9.3
     shm_size: 1g   # Chromium needs real /dev/shm — crawl4ai's own docker run docs
+    # Its own network (PRODUCTION_REVIEW.md R20): the headless browser follows redirects and loads sub-resources by itself, after the app checked only the first URL,
+    # so a page can send it to `http://qdrant:6333` or `http://litellm:4000`. On `default` it would reach them; here it reaches only what a bridge network reaches
+    # (the internet, and the host through its published port). The app roles that call it join this network too (`x-crawler-network`). deploy/README.md,
+    # "The crawler's network", is the precondition for ever running it in production.
+    networks: [crawler]
     ports:
       - "11235:11235"   # verified official default port (self-hosting.md), NOT 8000
     environment:
@@ -531,7 +541,7 @@ services:
   # The deployable artifact (see the Dockerfile header). Everyday dev runs `make serve`, `make agent-worker` and `make ingest-worker` as host
   # processes instead.
   api:
-    <<: *hardened
+    <<: [*hardened, *crawler-network]
     build: *app-build
     # The one role that takes uploads (up to 5 x 25 MB, app/adapters/inbound/api/routers/ingest.py): the multipart parser spools to /tmp before the handler runs, so
     # /tmp is a disk-backed volume (a tmpfs would fill RAM at the second large upload). Only $HOME is tmpfs.
@@ -567,7 +577,7 @@ services:
 
   # One container serves every domain: each domain's requests stream, on that domain's graph (app/adapters/inbound/workers/agent_worker.py).
   agent-worker:
-    <<: *hardened
+    <<: [*hardened, *crawler-network]
     build: *app-build
     profiles: ["app"]
     restart: unless-stopped
@@ -587,7 +597,7 @@ services:
     # Scale with replicas (pattern 43): docker compose --profile app up -d --scale agent-worker=3. Each pushes its own OTLP metrics, so no scrape change.
 
   ingest-worker:
-    <<: *hardened
+    <<: [*hardened, *crawler-network]
     build: *app-build
     profiles: ["app"]
     restart: unless-stopped
@@ -603,6 +613,12 @@ services:
         condition: service_healthy
       minio:
         condition: service_started
+
+# `default` is spelled out because declaring any network here stops compose creating it implicitly only when it is not named; naming it keeps the stack as it was.
+networks:
+  default: {}
+  # No `internal: true`: the crawler's whole job is the internet. What isolates it is that nothing else is on it (deploy/README.md, "The crawler's network").
+  crawler: {}
 
 volumes:
   qdrant:
