@@ -404,6 +404,26 @@ class TestARedisBlipDoesNotEndTheIngestWorker:
         await asyncio.wait_for(worker, 5)
 
 
+class TestTheIngestWorkerProvesItIsAlive:
+    async def test_both_loops_beat(self, monkeypatch):
+        """The real read loop and the real reclaim loop, against a Redis with nothing in it."""
+        beats = []
+        monkeypatch.setattr(ingest_worker, "beat", lambda queue, loop: beats.append((queue, loop)))
+        monkeypatch.setattr(ingest_worker, "WORKER_RECLAIM_INTERVAL_SECONDS", 0.01)
+        client = _IdleYieldingRedis()
+        monkeypatch.setattr(ingest_worker, "get_client", lambda: client)
+
+        worker = asyncio.create_task(ingest_worker.run())
+        deadline = asyncio.get_running_loop().time() + 5
+        while not (len(client.reads) >= 4 and ("ingest", "reclaim") in beats):
+            assert asyncio.get_running_loop().time() < deadline, "timed out waiting for the worker"
+            await asyncio.sleep(0.005)
+        os.kill(os.getpid(), signal.SIGTERM)
+        await asyncio.wait_for(worker, 10)
+
+        assert beats.count(("ingest", "read")) >= 4 and ("ingest", "reclaim") in beats
+
+
 class TestAnAcknowledgedIngestJobLeavesTheStream:
     """Same as the agent worker's (PRODUCTION_REVIEW.md R04): `XACK` leaves the entry in the stream."""
 

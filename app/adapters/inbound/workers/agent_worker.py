@@ -139,6 +139,7 @@ from app.platform.logging_config import bind_request_id, configure_logging
 from app.platform.profiling import start_profiling
 from app.platform.redis_client import UNAVAILABLE_ERRORS, StreamReadResponse, get_client
 from app.platform.telemetry import configure_telemetry
+from app.platform.worker_heartbeat import beat
 from app.ports.outbound.domains import domain_catalog
 from app.ports.outbound.jobs import (
     CONSUMER_GROUP,
@@ -591,6 +592,7 @@ async def _reclaim_loop(client: redis.Redis, stop_event: asyncio.Event, *, graph
     slow reclaim pass is no reclaim pass ever again for this process."""
     min_idle_ms = AGENT_WORKER_RECLAIM_IDLE_SECONDS * 1000
     while not stop_event.is_set():
+        beat("agent", "reclaim")  # proof of life for the container's health check (app/platform/worker_heartbeat.py)
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=WORKER_RECLAIM_INTERVAL_SECONDS)
             return  # stop_event was set during the wait — shutting down
@@ -652,7 +654,10 @@ async def run() -> None:
 
     read_backoff = READ_BACKOFF_START_SECONDS
     while not stop_event.is_set():
-        free = await claim_free_slots(semaphore, stop_event, limit=_MAX_CONCURRENCY, wait_seconds=_BLOCK_MS / 1000)
+        beat("agent", "read")
+        free = await claim_free_slots(
+            semaphore, stop_event, limit=_MAX_CONCURRENCY, wait_seconds=_BLOCK_MS / 1000, on_wait=lambda: beat("agent", "read")
+        )
         if not free:
             continue  # told to stop while every slot was busy
         try:

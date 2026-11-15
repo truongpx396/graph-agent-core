@@ -16,10 +16,21 @@
 # never compiles onnxruntime's dependency chain. The droplet's .env is made once by hand (copy deploy/env/prod.env.example); CI never touches it.
 name: graph-agent-core
 
-# Workers bind no port, so the image's API HEALTHCHECK (a probe of :8000/health/ready) would report them `unhealthy` forever. Whether a pool is
-# alive is the `WorkerUnreachable` alert's job (observability/prometheus/alerts.yml). A worker added without this inherits the probe.
-x-worker-healthcheck: &worker-healthcheck
+# Workers bind no port, so the image's API HEALTHCHECK (a probe of :8000/health/ready) would report them `unhealthy` forever. A process that has
+# nothing to probe says so here: a service added without one of the two blocks below inherits that probe.
+x-no-healthcheck: &no-healthcheck
   disable: true
+
+# The two queue workers touch a heartbeat file from each loop (app/platform/worker_heartbeat.py) and this fails when one is more than two minutes
+# stale: a worker whose event loop is stuck stays "up" otherwise, and `WorkerUnreachable` only fires when a whole domain has no worker. The probe is
+# the standard library alone (about 20 ms). Compose does not restart an unhealthy container by itself: deploy/README.md says what does. The start
+# period covers the graph build and the checkpointer's first connection.
+x-worker-healthcheck: &worker-healthcheck
+  test: ["CMD", "python", "-m", "app.platform.worker_heartbeat"]
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 90s
 
 x-app-env: &app-env
   OPENAI_API_BASE: http://litellm:4000/v1
@@ -458,7 +469,7 @@ services:
     cpus: "0.1"
     mem_limit: 192m
     command: ["python", "-m", "app.adapters.inbound.channels.telegram.bot"]
-    healthcheck: *worker-healthcheck
+    healthcheck: *no-healthcheck
     environment:
       REDIS_URL: redis://redis:6379
       AUTH_MODE: identity
