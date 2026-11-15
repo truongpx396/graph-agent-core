@@ -76,7 +76,7 @@ from app.agent.graph.state import (
 from app.agent.graph.tool_guards import tool_batch_guard
 from app.agent.graph.utils import NodeFn, friendly_tool_error, instrumented, make_llm
 from app.agent.tools import builtin
-from app.core.config import CHAT_MODEL, MAX_COST_USD_PER_TURN
+from app.core.config import CHAT_MODEL, MAX_COST_USD_PER_TURN, SEMANTIC_CACHE_ENABLED
 from app.core.security import SecurityCtx
 from app.ports.outbound.retrieval import answer_cache
 
@@ -325,10 +325,16 @@ def build_graph(
         # fixtures replace default_cache_get/default_cache_set on THIS module.
         # The default cache is bound to THIS graph's domain (`manifest.name`) here, in the one place that knows it: `app/agent/runtime/core.py` knows it too,
         # but imports this module. A test's injected `cache_get`/`cache_set` is used as given.
-        add("check_semantic_cache", make_check_semantic_cache_node(deps.cache_get or functools.partial(default_cache_get, domain=manifest.name)))
+        # SEMANTIC_CACHE_ENABLED false makes both nodes return at once; they stay in the graph so the topology does not depend on a setting.
+        add(
+            "check_semantic_cache",
+            make_check_semantic_cache_node(deps.cache_get or functools.partial(default_cache_get, domain=manifest.name), enabled=SEMANTIC_CACHE_ENABLED),
+        )
         add(
             "write_semantic_cache",
-            make_write_semantic_cache_node(deps.cache_set or functools.partial(default_cache_set, domain=manifest.name), tool_capabilities),
+            make_write_semantic_cache_node(
+                deps.cache_set or functools.partial(default_cache_set, domain=manifest.name), tool_capabilities, enabled=SEMANTIC_CACHE_ENABLED
+            ),
         )
     if profile.include_compaction:
         # Reuses the SAME llm client as `agent` (a summarization call doesn't need tools bound; a

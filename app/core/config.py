@@ -191,6 +191,11 @@ class Settings(BillingSettings):
     semantic_cache_similarity_threshold: float = 0.95  # cosine; a query must
     # be nearly identical in meaning to reuse a cached answer, not just topically close
     semantic_cache_ttl_seconds: int = 3600
+    # Whether the answer cache is consulted and written at all (the two nodes stay in the graph either way, so the topology does not depend on it). It is only
+    # ever used for a conversation's FIRST question (graph/cache.py): the lookup is by meaning, and "yes" or "and for March?" means nothing on its own. Each
+    # lookup adds an embedding and a vector search to a first turn and each finished turn an embedding and a write, so turn it off when
+    # `agent_semantic_cache_total` shows hits are a small share of lookups (PRODUCTION_REVIEW.md R33).
+    semantic_cache_enabled: bool = True
 
     # Cross-session memory retention (app/core/security.py, app/adapters/outbound/qdrant/memory.py)
     # — a memory older than this is invisible at RECALL time (Policy.lower),
@@ -818,6 +823,7 @@ SKILLS_SEARCH_TOP_K = settings.skills_search_top_k
 APPDATA_DATABASE_URL = settings.appdata_database_url
 REDIS_URL = settings.redis_url
 SEMANTIC_CACHE_SIMILARITY_THRESHOLD = settings.semantic_cache_similarity_threshold
+SEMANTIC_CACHE_ENABLED = settings.semantic_cache_enabled
 SEMANTIC_CACHE_TTL_SECONDS = settings.semantic_cache_ttl_seconds
 MEMORY_RETENTION_DAYS = settings.memory_retention_days
 MAX_COST_USD_PER_TURN = settings.max_cost_usd_per_turn
