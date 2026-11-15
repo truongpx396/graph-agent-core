@@ -18,12 +18,15 @@ download/load cost, not import time) and cached in a module global — same
 reason as `app/agent/runtime/core.py`'s lazy singleton graph: don't pay startup
 cost for a path a process might never exercise.
 """
+import asyncio
+import time
+from collections import OrderedDict
 from typing import TYPE_CHECKING
 
-import httpx
 from langchain_openai import OpenAIEmbeddings
 from pydantic import SecretStr
 
+from app.adapters.outbound.mlservice.http import ml_client
 from app.core.config import (
     EMBED_DOCUMENT_PREFIX,
     EMBED_MODEL,
@@ -55,9 +58,63 @@ embeddings = OpenAIEmbeddings(
 # until an operator opts in, with a re-embed (app/adapters/outbound/embeddings/embedding_identity.py).
 
 
+# A turn embedded the person's question in `check_semantic_cache`, again in each of the two searches of `gather_context` (documents and memories, which
+# run at the same time) and again in `write_semantic_cache`: up to four identical calls to the embedding model where one would do (PRODUCTION_REVIEW.md R10).
+# So `embed_query` remembers what it embedded, briefly, and two concurrent calls for the same text share one request.
+#
+# Keyed by the exact text sent (the prefix included), so a different role or prefix is a different entry. The cached vector is only as valid as the
+# embedding identity (model, dimension, prefixes, revision), which changes only with configuration and so with a restart: no identity in the key. Bounded:
+# 512 entries and 300 seconds (a vector is about 25 KB at 768 dimensions, so about 12 MB at the limit; a question repeated within a turn needs seconds).
+_QUERY_CACHE_MAX_ENTRIES = 512
+_QUERY_CACHE_TTL_SECONDS = 300.0
+_query_cache: "OrderedDict[str, tuple[float, list[float]]]" = OrderedDict()
+# One in-flight request per (loop, text): a future belongs to the loop that made it, and the tests and the one-shot scripts run more than one loop per process.
+# A leader that fails resolves its future with None instead of an exception, so a waiter does its own request: one caller's failure, or its cancellation,
+# is never the failure of another.
+_in_flight: dict[tuple[int, str], "asyncio.Future[list[float] | None]"] = {}
+
+
+def reset_embed_query_cache() -> None:
+    """For tests (it is reset beside `reset_embedding_dim_cache`) and for a process that has just been told the model moved; production restarts instead."""
+    _query_cache.clear()
+    _in_flight.clear()
+
+
 async def embed_query(text: str) -> list[float]:
-    """Embed a search question, or any text compared with other questions (the semantic cache embeds both sides with this)."""
-    return await embeddings.aembed_query(EMBED_QUERY_PREFIX + text)
+    """Embed a search question, or any text compared with other questions (the semantic cache embeds both sides with this). Remembered for a few minutes and
+    shared between concurrent callers (see the note above); a caller gets its own copy of the vector."""
+    key = EMBED_QUERY_PREFIX + text
+    now = time.monotonic()
+    cached = _query_cache.get(key)
+    if cached is not None:
+        if now - cached[0] < _QUERY_CACHE_TTL_SECONDS:
+            _query_cache.move_to_end(key)
+            return list(cached[1])
+        del _query_cache[key]
+
+    flight = (id(asyncio.get_running_loop()), key)
+    pending = _in_flight.get(flight)
+    if pending is not None:
+        shared = await asyncio.shield(pending)
+        if shared is not None:
+            return list(shared)
+        # the first caller failed: fall through and ask for ourselves
+
+    mine: asyncio.Future[list[float] | None] = asyncio.get_running_loop().create_future()
+    _in_flight.setdefault(flight, mine)
+    leader = _in_flight[flight] is mine
+    vector: list[float] | None = None
+    try:
+        vector = await embeddings.aembed_query(key)
+        _query_cache[key] = (time.monotonic(), vector)
+        while len(_query_cache) > _QUERY_CACHE_MAX_ENTRIES:
+            _query_cache.popitem(last=False)
+        return list(vector)
+    finally:
+        if leader:
+            _in_flight.pop(flight, None)
+        if not mine.done():
+            mine.set_result(vector)
 
 
 async def embed_document(text: str) -> list[float]:
@@ -136,21 +193,20 @@ async def rerank(query: str, candidates: list[str]) -> list[float]:
     on failure; the caller owns the degrade policy (see `embed_sparse`). A real HTTP call to the `ml-service`
     container (`ML_SERVICE_URL`), so `async def`.
 
-    A fresh `httpx.AsyncClient` per call, not a shared one: its pool is bound to the loop that creates it (as
-    `AsyncPostgresSaver` in `app/agent/runtime/core.py`), and this is called from different loops (the
-    long-running one `retrieve_context` uses, and the short-lived ones
-    `_search_docs_impl`/`_skill_search_impl` spin up in `run_with_timeout`'s worker threads).
+    Through the loop's shared client (`mlservice/http.py`), not one opened per call: a rerank on every turn paid a new TCP connection. The client is
+    per event loop because its pool is bound to the loop that created it, and nothing calls this from a worker thread any more (every tool body
+    awaits `arun_with_timeout` on the turn's own loop).
 
     The response is `[{"index", "score", ...}]`, placed back into `candidates` order by `index` rather than
     assumed sorted (TEI's `/rerank` is score-sorted, `ml-service` returns input order; reading `index` depends
     on neither). `raw_scores` is for wire-compatibility with TEI: `ml-service` returns only the raw logit, the
     scale `MIN_RERANK_SCORE` (app/agent/tools/builtin.py) is calibrated to.
     """
-    async with httpx.AsyncClient(timeout=_RERANK_TIMEOUT_SECONDS) as client:
-        resp = await client.post(
-            f"{ML_SERVICE_URL}/rerank",
-            json={"query": query, "texts": candidates, "raw_scores": True},
-        )
+    resp = await ml_client().post(
+        f"{ML_SERVICE_URL}/rerank",
+        json={"query": query, "texts": candidates, "raw_scores": True},
+        timeout=_RERANK_TIMEOUT_SECONDS,
+    )
     resp.raise_for_status()
     scores = [0.0] * len(candidates)
     for item in resp.json():

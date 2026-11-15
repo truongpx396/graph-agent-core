@@ -192,6 +192,16 @@ def mock_classification():
 
 
 @pytest.fixture(autouse=True)
+def fresh_embed_query_cache():
+    """`embed_query` remembers what it embedded for a few minutes (PRODUCTION_REVIEW.md R10): a vector one test cached must never answer another's call."""
+    from app.adapters.outbound.embeddings import embeddings as embeddings_module
+
+    embeddings_module.reset_embed_query_cache()
+    yield
+    embeddings_module.reset_embed_query_cache()
+
+
+@pytest.fixture(autouse=True)
 def mock_semantic_cache(monkeypatch):
     # Always a miss, and writes are a no-op — a live embedding/Redis call
     # per graph turn would defeat this suite's "no live services" guarantee

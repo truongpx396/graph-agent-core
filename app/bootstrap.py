@@ -25,6 +25,7 @@ from app.adapters.outbound.mcp.connection import close_all_connections
 from app.adapters.outbound.mcp.sandbox_tools import OpenSandboxCatalog
 from app.adapters.outbound.minio.object_store import MinioObjectStore
 from app.adapters.outbound.mlservice.classification import MlServiceClassifier
+from app.adapters.outbound.mlservice.http import close_ml_client
 from app.adapters.outbound.mlservice.prompt_guard import MlServicePromptGuard
 from app.adapters.outbound.notify.team_channel import LocalAndSlackTeamChannel
 from app.adapters.outbound.postgres.budget_holds import PgBudgetHoldStore
@@ -131,7 +132,8 @@ def verify_wired() -> None:
 
 async def close_adapters() -> None:
     """Ends what the adapters hold open on the running loop: the MCP connections, each a child process (the sandbox bridge), and the Qdrant
-    client. Call it where a process stops, on the loop that served the requests, before it closes the pools the application opened. A no-op if
+    client and the ML service's. Call it where a process stops, on the loop that served the requests, before it closes the pools the application opened. A no-op if
     nothing was opened."""
     await close_all_connections()
     await close_qdrant_client()
+    await close_ml_client()

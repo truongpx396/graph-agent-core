@@ -24,9 +24,8 @@ What comes back is validated, not trusted: a non-200, a body off the documented 
 `choice` for the question asked, a `choice` outside the options, a non-finite or out-of-range similarity or
 confidence, or an unknown `x_served_by` is an error.
 
-A fresh `httpx.AsyncClient` per call, as `moderation.py` does: a client shared across event loops (the worker
-has several) breaks on the loop that didn't create it. The deadline is enforced twice, by httpx's phase
-timeouts and a wall-clock bound around the exchange, because a peer that trickles bytes defeats the former.
+The loop's shared client (`mlservice/http.py`), so a routing decision reuses a connection instead of opening one. The deadline is enforced
+twice, by httpx's phase timeouts and a wall-clock bound around the exchange, because a peer that trickles bytes defeats the former.
 """
 import asyncio
 import logging
@@ -34,6 +33,7 @@ import math
 
 import httpx
 
+from app.adapters.outbound.mlservice.http import ml_client
 from app.core.config import ML_SERVICE_URL, ROUTER_TIMEOUT_SECONDS
 from app.ports.outbound.classification import NO_ANSWER, Choice, Labelled
 
@@ -104,8 +104,7 @@ async def choose(question: Choice, text: str) -> Labelled:
     }
     try:
         async with asyncio.timeout(ROUTER_TIMEOUT_SECONDS):  # the whole exchange, not each phase of it
-            async with httpx.AsyncClient(timeout=ROUTER_TIMEOUT_SECONDS) as client:
-                response = await client.post(f"{ML_SERVICE_URL}{DECIDE_PATH}", json=request)
+            response = await ml_client().post(f"{ML_SERVICE_URL}{DECIDE_PATH}", json=request, timeout=ROUTER_TIMEOUT_SECONDS)
         if _unavailable(response):
             return NO_ANSWER
         if response.status_code != 200:
