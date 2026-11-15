@@ -534,6 +534,16 @@ class TestPublishResultAndReadResults:
             {"type": "done"},
         ]
 
+    async def test_a_job_nobody_took_ends_with_a_worker_unreachable_error_a_client_can_switch_on(self):
+        """The one error event that carried only `content` (PRODUCTION_REVIEW.md R24)."""
+        client = FakeRedis()
+
+        events = [event async for event in queue.read_results(client, "r1", first_event_deadline_seconds=0.001)]
+
+        assert len(events) == 1
+        assert events[0]["code"] == "worker_unreachable"
+        assert events[0]["message"] == events[0]["content"] and "agent-worker" in events[0]["content"]
+
     async def test_no_deadline_given_preserves_the_old_wait_forever_behavior(self):
         """Default (`first_event_deadline_seconds=None`) — every existing
         caller that doesn't opt in keeps its exact prior behavior."""

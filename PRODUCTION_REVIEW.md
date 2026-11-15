@@ -148,7 +148,7 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R21 | Five statements that are no longer true | P1 | S | read from code | | open |
 | R22 | A hung worker is never restarted | P2 | S | read from code | | open |
 | R23 | The answer cache ignores the domain; its expiry is set in a second call | P2 | S | read from code | | open |
-| R24 | Two error events carry no `code` | P2 | S | read from code | | open |
+| R24 | Two error events carry no `code` | P2 | S | read from code | | done |
 | R25 | A pool hands out a connection that died while idle | P2 | S | read from code | | open |
 | R26 | Backups are a paragraph, not a job; no restore drill | P2 | M | read from code | | open |
 | R27 | A transcript is read whole | P2 | S | read from code | | open |
