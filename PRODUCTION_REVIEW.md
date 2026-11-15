@@ -138,7 +138,7 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R11 | Checkpoints are kept forever; no way to delete a conversation | P1 | M | read from code | | open |
 | R12 | An approval approves whatever is pending, not what was shown; decisions are not recorded | P1 | L | read from code | | open |
 | R13 | A dropped connection loses the rest of the answer; no keepalive | P1 | M | read from code | | open |
-| R14 | No size limit on a message, a conversation id or attached images | P1 | S | read from code | | open |
+| R14 | No size limit on a message, a conversation id or attached images | P1 | S | read from code | | done |
 | R15 | Production Redis: one instance for queue and cache, no persistence policy, floating image tags | P1 | M | read from code | R04 | open |
 | R16 | The production gateway stores every prompt and answer | P1 | S | read from code | | done |
 | R17 | No queue depth, queue wait or first-token metric; no traces in production | P1 | M, then L | read from code | | open |

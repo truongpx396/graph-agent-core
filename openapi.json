@@ -3,7 +3,7 @@
   "info": {
     "title": "Graph Agent Core API",
     "description": "A multi-tenant, multi-domain LangGraph RAG agent. A client starts a turn, reads its events as they stream, answers an approval the\nagent asks for, and lists its own past sessions. One graph serves every domain; `X-Domain` picks which (default `ecorp`).\n\n**Who is calling.** Behind the front door (the authlimit service) a client sends `Authorization: Bearer <access token>`; the door\nverifies it and gives the API a signed identity, so the tenant and person are never taken from a header or a body. Only a deployment run\nwith `AUTH_MODE=headers` (a developer's machine, the tests) reads `X-Tenant-Id` and `X-Principal-Id` as sent. Everything a caller reads or\nchanges is scoped to its tenant and person.\n\n**Errors.** A refusal the application makes is the canonical envelope `{\"code\", \"message\", \"details\"}`; switch on `code`, not on the\ntext. A turn's own failures arrive as an `error` event on its stream, in the same shape.\n\n**Streams.** `POST /chat/stream/queued` and `GET /ingest/stream/{job_id}` answer with server-sent events, which OpenAPI describes only\nas a `text/event-stream` body; the event vocabulary is in the first route's description.\n",
-    "version": "2.1.0"
+    "version": "3.0.0"
   },
   "servers": [
     {
@@ -1339,6 +1339,8 @@
         "properties": {
           "thread_id": {
             "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
             "title": "Thread Id",
             "description": "The conversation's thread id to cancel — whether it's actively streaming right now or paused at human_approval; POST /chat/cancel handles both cases from this one field."
           }
@@ -1353,20 +1355,25 @@
         "properties": {
           "message": {
             "type": "string",
+            "maxLength": 32000,
             "minLength": 1,
             "title": "Message",
             "description": "The user's message to the agent."
           },
           "thread_id": {
             "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
             "title": "Thread Id",
             "description": "Conversation id; reuse it across calls to keep memory."
           },
           "images": {
             "items": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 7000000
             },
             "type": "array",
+            "maxItems": 4,
             "title": "Images",
             "description": "Optional image URLs or data URIs to attach to this turn (GRAPH_PATTERNS.md pattern 44) — passed straight through to whichever model is configured behind CHAT_MODEL; a non-vision-capable model simply can't act on them. Never fetched or decoded by this app itself."
           },
@@ -1809,6 +1816,8 @@
         "properties": {
           "thread_id": {
             "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
             "title": "Thread Id",
             "description": "The paused conversation's thread id."
           },
