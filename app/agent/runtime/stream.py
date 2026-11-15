@@ -291,6 +291,9 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
         its marker), where it no-ops, since a "retry" would blank a good answer with nothing to follow.
       A nested `run_subagent` graph shares these node names, so every `on_chain_end` tagged
       `metadata.subagent_name` is ignored.
+      A fourth source is a model stream that broke part-way and that the `agent` node's retry policy ran
+      again (pattern 7): the second attempt's tokens would follow the first's, so a model call that starts
+      while the previous one is still open, and had sent tokens, announces the restart the same way.
     - `{"type": "compacted"}` (NOT terminal): `compact_history` (pattern 41) trimmed context before `agent`
       ran. Informational; fires only when it trimmed something.
     - `{"type": "citations", "items": [...]}` / `{"type": "followups", "items": [...]}`: just before "done",
@@ -304,11 +307,15 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
     """
     trace = trace if isinstance(trace, _TurnTrace) else _TurnTrace(trace)
     start = time.monotonic()
-    final_answer = []
+    final_answer: list[str] = []
     used_citations: list[dict[str, Any]] = []
     ungrounded_claims_count = 0
     followups: list[str] = []
     synthetic_token = ""
+    # A failed model call emits on_chat_model_start and some on_chat_model_stream but never on_chat_model_end,
+    # a finished one always does: so a start while a call is still open, one that had sent tokens, is a retry.
+    model_call_open = False
+    open_call_streamed = False
     try:
         async for event in _iterate_with_timeout(
             graph.astream_events(graph_input, config=cfg, version="v2"),
@@ -316,12 +323,20 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
             cancel_check=cancel_check,
         ):
             kind = event["event"]
+            event_metadata = event.get("metadata", {})
+            is_answer_call = event_metadata.get("langgraph_node") == "agent" and not event_metadata.get("subagent_name")
 
-            if (
-                kind == "on_chat_model_stream"
-                and event.get("metadata", {}).get("langgraph_node") == "agent"
-                and not event.get("metadata", {}).get("subagent_name")
-            ):
+            if kind == "on_chat_model_start" and is_answer_call:
+                if model_call_open and open_call_streamed:
+                    final_answer.clear()
+                    metrics.agent_stream_restarted_total.inc()
+                    yield {"type": "retry"}
+                model_call_open, open_call_streamed = True, False
+
+            elif kind == "on_chat_model_end" and is_answer_call:
+                model_call_open = False
+
+            elif kind == "on_chat_model_stream" and is_answer_call:
                 # astream_events emits on_chat_model_stream for EVERY
                 # chat-model call in the graph, not just the main answer —
                 # without this filter, suggest_followups (pattern 27) and
@@ -342,6 +357,7 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
                 # nested run's own config, can.
                 content = _text_content(event["data"]["chunk"].content)
                 if content:
+                    open_call_streamed = True
                     final_answer.append(content)
                     yield {"type": "token", "content": content}
 

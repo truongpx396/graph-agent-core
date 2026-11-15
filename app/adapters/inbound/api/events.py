@@ -58,7 +58,7 @@ class ToolEndEvent(BaseModel):
 
 
 class RetryEvent(BaseModel):
-    """Not terminal. Discard everything streamed so far: the answer was rejected or replaced, and fresh tokens (or a corrected one) follow."""
+    """Not terminal. Discard everything streamed so far: the answer was rejected or replaced, or the model's stream broke and was started again, and fresh tokens (or a corrected one) follow."""
 
     type: Literal["retry"]
 

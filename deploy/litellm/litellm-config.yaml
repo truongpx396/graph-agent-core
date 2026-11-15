@@ -199,6 +199,9 @@ model_list:
 litellm_settings:
   drop_params: true                    # silently drop params Ollama doesn't support (e.g. encoding_format)
   num_retries: 2                       # retry transient failures
+  # Longer than the production file's 120 on purpose: a local model on CPU can take minutes to send its first token, and the live tests give a
+  # turn 420 s. Three layers retry (the app's SDK, off by default; the graph's policy, 3 attempts; this proxy, 2) and multiply: see
+  # litellm-config.prod.yaml, which is where the timeout was lowered.
   request_timeout: 600
   # If "chat" fails, transparently retry on "chat-backup".
   fallbacks: [{"chat": ["chat-backup"]}]

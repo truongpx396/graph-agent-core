@@ -359,6 +359,12 @@ async def run_subagent_impl(
             time.monotonic() - started
         )
         raise
+    finally:
+        # Every run has a fresh thread id and the cached graph's MemorySaver outlives it: without this each
+        # delegation kept its whole run in the worker's memory for good (pattern 46). `ainvoke`'s return value
+        # is already in `result_state`, so reading it after the delete is safe. Nothing resumes a nested thread,
+        # so no exit needs its checkpoints (the saver stays: `human_approval`'s interrupt() needs one to exist).
+        await nested_graph.checkpointer.adelete_thread(nested_thread_id)
     duration = time.monotonic() - started
 
     total_tokens = result_state.get("total_tokens", 0)

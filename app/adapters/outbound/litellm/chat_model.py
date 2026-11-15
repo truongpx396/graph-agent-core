@@ -21,11 +21,23 @@ decision covering every call, trading granularity for round trips, not visibilit
 """
 from typing import Any
 
+import httpx
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
+from app.core.config import LLM_READ_TIMEOUT_SECONDS, LLM_SDK_MAX_RETRIES
+
+# Connect and pool are short on purpose: an unreachable gateway is told apart from a slow model, and fails in seconds.
+_CONNECT_TIMEOUT_SECONDS = 5.0
+_WRITE_TIMEOUT_SECONDS = 10.0
+_POOL_TIMEOUT_SECONDS = 5.0
+
 
 class OpenAiChatModels:
+    """Bounds the client, which ChatOpenAI leaves open (timeout None, SDK retries 2): the read timeout is the longest SILENCE, so on a
+    streamed answer it is the stall bound and not a cap on the answer's length; the SDK's own retries are off because the graph's
+    retry policy and the gateway's already retry (settings `llm_read_timeout_seconds`, `llm_sdk_max_retries`; pattern 7)."""
+
     def build(self, tools: list[Any], *, model: str, base_url: str, api_key: str) -> Any:
         return ChatOpenAI(
             model=model,
@@ -33,4 +45,11 @@ class OpenAiChatModels:
             api_key=SecretStr(api_key),
             temperature=0,
             stream_usage=True,
+            timeout=httpx.Timeout(
+                connect=_CONNECT_TIMEOUT_SECONDS,
+                read=LLM_READ_TIMEOUT_SECONDS,
+                write=_WRITE_TIMEOUT_SECONDS,
+                pool=_POOL_TIMEOUT_SECONDS,
+            ),
+            max_retries=LLM_SDK_MAX_RETRIES,
         ).bind_tools(tools)
