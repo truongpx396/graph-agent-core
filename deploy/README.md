@@ -330,15 +330,9 @@ dashboard shows no data, check the app droplet's relay first:
 `dc logs otel-collector-agent promtail` on the app droplet — both should show successful pushes to the observability
 droplet, not connection errors.
 
-**Backups**: `enable_backups` (terraform.tfvars) turns on DO's own weekly
-whole-droplet image backups for the **app** droplet only — the simplest
-option, off by default. For a finer-grained alternative, a periodic
-`pg_dump` of the `postgres` volume's `appdata`/`checkpointer`/`litellm`
-databases off-box (e.g. to DO Spaces, the same bucket `MINIO_ENDPOINT`
-already points at) captures the actual stateful data without a whole-image
-snapshot. The observability droplet is never backed up — it holds metrics/
-logs with their own bounded retention (Loki 7d, Prometheus 15d), not data
-worth restoring.
+**Backups**: see "Backups and restore" below (a script, a cron line, a restore that was performed). `enable_backups` (terraform.tfvars) additionally turns on DO's weekly
+whole-droplet image backups for the **app** droplet only, off by default. The observability droplet is never backed up: it holds metrics and logs with their own
+bounded retention (Loki 7d, Prometheus 15d), not data worth restoring.
 
 **Vector payload indexes (once per existing deployment)**: every search filters by `tenant`, `kind`, `owner`, `topic` and `created_at`, and a collection
 built before the payload indexes existed has none, so its filtered search slows as it grows. `make ingest` and `make reembed` build indexed collections;
@@ -448,6 +442,68 @@ opposite drifts on adjacent days: that signature is the straddle, not a loss.
 **`make usage-events-sweep`** deletes the agent's usage events older than `USAGE_EVENT_RETENTION_DAYS` (400 by default, **floor 35**: a monthly cap and the reconciliation read back that far). This is the
 table spend is read from. It takes no arguments; the window is the setting. It prints what it did and says when it stopped at its ceiling (run it again). Nothing schedules it: run it from cron once your retention
 policy is decided. The billing package has its own sweep for its own table (`make billing-usage-sweep`, in the billing [runbook](../packages/billing/docs/RUNBOOK.md)).
+
+## Backups and restore
+
+**What this protects, stated plainly.** The production stack is one droplet with a single instance of each store (Postgres, Redis, Qdrant). Any one of them going down takes the service down, and a backup does not change that:
+it is what lets you rebuild after losing one. The code is ready for more (stateless API and workers, PgBouncer, per-domain queues); moving the stores to managed services is an operations decision, not a code change, and would change this:
+
+| | Today | With a managed service |
+|---|---|---|
+| availability | one instance each; a failure is an outage until you restore | a standby and automatic failover (Postgres), a replica (Redis) |
+| backups | `deploy/backup/backup.sh`, daily, from this droplet | the provider's, with point-in-time recovery for Postgres; this script's Postgres half is then retired |
+| what to change | | the connection strings only: `CHECKPOINTER_DATABASE_URL`, `APPDATA_DATABASE_URL` (through PgBouncer or not), `REDIS_URL`, `QDRANT_URL` |
+| what to check first | | the managed Redis must offer streams, Lua and (for the answer cache) the search and JSON modules, which many do not; without them the cache needs another home or goes off (`SEMANTIC_CACHE_ENABLED=false`). It must also be set to `noeviction` for the queue (see "Redis" below) |
+
+**The job.** `deploy/backup/backup.sh` takes, on the app droplet: `pg_dump --format=custom` of `appdata`, `checkpointer` and `litellm` (inside the `postgres` container) and of Casdoor's `casdoor` (inside `casdoor-db`); a snapshot of every Qdrant collection, with the aliases
+(`scripts/tools/qdrant_backup.py`, from the app image: Qdrant's has no `curl`); and the queue Redis (`redis-cli --rdb -`: the locks, the buckets and the front door's **revocation list**). It reads every dump back with `pg_restore --list`, copies the directory to the uploads bucket under `backups/<UTC stamp>/`
+with a manifest of sizes and SHA-256 (`scripts/tools/backup_upload.py`), and keeps the newest `BACKUP_KEEP_LOCAL` (3) complete copies on the droplet. A directory is complete only once it has lost its `.partial` suffix, and a bucket copy only once its `manifest.json` exists; any failing step fails the run
+and leaves no complete backup. Put it in cron as the deploy user, with the Spaces settings already in `.env`:
+
+```
+17 2 * * *  /opt/graph-agent-core/deploy/backup/backup.sh >> /var/log/graph-agent-backup.log 2>&1
+```
+
+**Not backed up, on purpose:** the answer cache (disposable); the observability droplet; the uploaded files themselves (they live in the bucket: set versioning or a lifecycle rule there, since this job writes beside them and never deletes); and the **secrets**: `.env`, `authlimit-keys/` and the Terraform state are not in any backup, so keep them in a password manager. Casdoor's own signing keys are in its database, which is backed up.
+**Expire old backups** with a lifecycle rule on the `backups/` prefix in the Spaces console; nothing here deletes from the bucket.
+
+**Nothing alerts when the backup stops running.** That is the failure a cron job never reports. From somewhere that is not the droplet (another cron, an uptime monitor), run `python -m scripts.tools.backup_upload --latest --max-age-hours 30` (from the app image): it exits 1 when there is no complete backup or the newest is older than the limit, and prints which one it found.
+
+**RPO** is the cron interval: with the line above, up to a day of conversations, usage events (the spend caps read them, so a restore loses that day's spend and the caps allow it again), documents ingested and approvals paused is gone. Tighten the interval or move Postgres to a managed service if that is too much.
+
+**Restoring onto a rebuilt droplet** (Terraform applied, the repository cloned, `.env` restored; this is the sequence `make restore-drill` performs, against fresh containers):
+
+```
+alias dc='docker compose --project-directory . -f deploy/compose/docker-compose.prod.yml'
+dc up -d postgres casdoor-db redis redis-cache qdrant                       # the stores only: no api, no workers, nothing writing yet
+mkdir -p /restore && dc run --rm --no-deps -T --user "$(id -u):$(id -g)" -v /restore:/backup api python -m scripts.tools.backup_upload --download backups/<stamp> --to /backup   # checks every file against its manifest
+for db in appdata checkpointer litellm; do dc exec -T postgres pg_restore -U langfuse --clean --if-exists -d $db < /restore/$db.dump; done
+dc exec -T casdoor-db pg_restore -U casdoor --clean --if-exists -d casdoor < /restore/casdoor.dump
+dc run --rm --no-deps -T -v /restore:/backup:ro api python -m scripts.tools.qdrant_backup --restore /backup      # the collections, then the aliases
+dc up -d                                                                    # the rest
+```
+
+`--clean --if-exists` drops and recreates each object, so it is safe over the empty schema the init scripts leave. Read `pg_restore`'s exit status: a non-zero one is a failed restore. `qdrant_backup --restore` refuses a collection that already exists (`--overwrite` replaces it).
+Redis is the one that needs care: do **not** just copy `redis.rdb` into place, because with AOF on Redis ignores a snapshot and starts empty (ENGINEERING_PATTERNS.md 100). Either accept an empty Redis (the queue and locks rebuild themselves, and you re-apply revocations from your own record with `authlimit revoke`), or restore it as the drill does:
+stop `redis`, put the file in its volume as `dump.rdb`, start it once with `REDIS_ARGS=--appendonly no` so it loads it, run `redis-cli config set appendonly yes`, wait until `info persistence` shows `aof_rewrite_in_progress:0`, then start it with its normal flags. Then check: `dc exec authlimit authlimit revoke --list`,
+`curl https://<API_DOMAIN>/health/ready`, and one real turn.
+
+**The drill, performed** (`make restore-drill`; `ARGS="--points 100000"` for sizes near yours). It starts throwaway containers from the shipped images (Postgres exactly as the production compose file defines it, on an empty volume initialised from `postgres-init/`), seeds them, runs the commands above, restores into a SECOND set of fresh containers and
+checks: row counts and a checksum over the rows, the points and the same search through the restored alias, the payload indexes, and the Redis keys before and after AOF is turned on again. One run, on a developer laptop (macOS, Apple silicon, Docker Desktop with 12 CPUs and 14 GB), 2026-11-15:
+
+| component | data | backup | restore | verified |
+|---|---|---|---|---|
+| `appdata` + `checkpointer` + `litellm` | 50,000 sessions, 5,000 checkpoints; dumps 0.5, 0.2 and 0.0 MB | 0.3 s | 0.7 s | counts and md5 of the rows |
+| `casdoor` | 2,000 users | 0.1 s | 0.1 s | md5 of the rows |
+| Qdrant | 20,000 points of 768 dimensions, a 141.7 MB snapshot, behind an alias | 2.4 s | 3.1 s | count, top-3 of a query, the payload indexes |
+| Redis | 20,000 keys and a 20,000-entry stream, 0.7 MB | 4.8 s | 1.2 s | every key, before and after AOF is switched on again |
+| total | | 7.6 s | 5.0 s | |
+
+**Read those numbers for what they are.** They are this laptop's, on small data and a local disk: not a droplet's, and nothing like a production database. Another run of the same drill totalled 7.9 s and 4.4 s, so read them to the second, not the decimal. About 5 of the Redis seconds are Redis's own replication delay (`repl-diskless-sync-delay`), not size. They leave out everything around the restore: provisioning the droplet, pulling images, DNS and certificates, and the copy to and from the bucket
+(a network cost that grows with the snapshot: Qdrant's is the large one). So they show the commands work and the data comes back identical, not how long a real recovery takes: **the end-to-end time to recover has not been measured.** Run the drill with your own sizes, and time the rest once on a spare droplet.
+
+**What the drill found.** The production compose file set `POSTGRES_DB: appdata`, so on a NEW volume the Postgres image created `appdata` itself and then `postgres-init/02-appdata.sql` failed on `CREATE DATABASE appdata` ("already exists"): the container exited with status 3. An existing volume never runs the init again, which is why nothing showed it. A rebuilt droplet could not have started its database, so no restore was possible. It is now
+`POSTGRES_DB: postgres`, and `tests/integration/test_production_postgres_initialises.py` starts the production service as defined and fails on the old value.
 
 ## Redis: the queue and the cache
 
