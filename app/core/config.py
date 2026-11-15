@@ -201,6 +201,11 @@ class Settings(BillingSettings):
     # operator's, for every domain at once, with no code change). `build_graph` reads it when the graph is built, once per process (R30).
     followups_enabled: bool = True
 
+    # An earlier turn's tool result longer than this many characters reaches the chat model as a short note, in the copy it is SENT only: the stored
+    # conversation and its checkpoint keep the full text (`agent_node.without_stale_tool_results`). 0 turns it off. 2,000 characters is a few paragraphs.
+    # The provider's prompt cache sees the prefix change once, when a new turn starts; within a turn it is stable (PRODUCTION_REVIEW.md R31).
+    stale_tool_result_max_chars: int = Field(default=2000, ge=0)
+
     # Cross-session memory retention (app/core/security.py, app/adapters/outbound/qdrant/memory.py)
     # — a memory older than this is invisible at RECALL time (Policy.lower),
     # not just eventually removed by delete_memories (pattern 33).
@@ -829,6 +834,7 @@ REDIS_URL = settings.redis_url
 SEMANTIC_CACHE_SIMILARITY_THRESHOLD = settings.semantic_cache_similarity_threshold
 SEMANTIC_CACHE_ENABLED = settings.semantic_cache_enabled
 FOLLOWUPS_ENABLED = settings.followups_enabled
+STALE_TOOL_RESULT_MAX_CHARS = settings.stale_tool_result_max_chars
 SEMANTIC_CACHE_TTL_SECONDS = settings.semantic_cache_ttl_seconds
 MEMORY_RETENTION_DAYS = settings.memory_retention_days
 MAX_COST_USD_PER_TURN = settings.max_cost_usd_per_turn

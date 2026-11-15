@@ -12,9 +12,13 @@ all)."""
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from app.agent.graph.agent_node import CITATION_REMINDER, SUMMARY_REMINDER
+from app.agent.graph.agent_node import (
+    CITATION_REMINDER,
+    STALE_TOOL_RESULT_NOTE,
+    SUMMARY_REMINDER,
+)
 from app.agent.graph.messages import RETRY_ARTIFACT_KEY, with_turn_notes
-from tests.agent.fakes import make_agent_node
+from tests.agent.fakes import make_agent_node, orphan_tool_call_ids
 
 
 class _RecordingFakeLLM:
@@ -488,3 +492,115 @@ def test_notes_wrap_the_text_of_a_multimodal_question_and_keep_the_image():
 def test_notes_that_are_empty_leave_a_multimodal_question_alone():
     question = HumanMessage(content=[{"type": "text", "text": "hi"}])
     assert with_turn_notes(question, [], []).content == [{"type": "text", "text": "hi"}]
+
+
+# --- An earlier turn's long tool result is replaced by a note in what the model is SENT (PRODUCTION_REVIEW.md R31) ---------------------------------
+
+
+def _conversation_with_a_crawled_page(page, *, name="crawl_page"):
+    """Turn one fetched a page; turn two is a different question. Returns the state's messages, the last being turn two's question."""
+    return [
+        HumanMessage(content="summarise https://example.test/long", id="q1"),
+        AIMessage(content="", tool_calls=[{"name": name, "args": {"url": "https://example.test/long"}, "id": "c1"}], id="a1"),
+        ToolMessage(content=page, tool_call_id="c1", name=name, id="t1"),
+        AIMessage(content="It is about refunds.", id="a2"),
+        HumanMessage(content="and what about shipping?", id="q2"),
+    ]
+
+
+async def _sent(messages, **node_kwargs):
+    llm = _RecordingFakeLLM(iter([AIMessage(content="Shipping is free.")]))
+    agent = make_agent_node(llm, **node_kwargs)
+
+    await agent({"messages": messages, "iterations": 0})
+
+    return llm.seen_messages
+
+
+def _tool_messages(sent):
+    return [m for m in sent if isinstance(m, ToolMessage)]
+
+
+async def test_a_long_tool_result_from_an_earlier_turn_reaches_the_model_as_a_note():
+    page = "refunds " * 1000  # 8,000 characters
+
+    (tool_message,) = _tool_messages(await _sent(_conversation_with_a_crawled_page(page)))
+
+    assert tool_message.content == STALE_TOOL_RESULT_NOTE.format(name="crawl_page")
+    assert (tool_message.tool_call_id, tool_message.name) == ("c1", "crawl_page"), "every tool call still has its answer"
+
+
+async def test_a_long_tool_result_from_the_current_turn_reaches_it_whole():
+    page = "refunds " * 1000
+    messages = [
+        HumanMessage(content="summarise https://example.test/long", id="q1"),
+        AIMessage(content="", tool_calls=[{"name": "crawl_page", "args": {}, "id": "c1"}], id="a1"),
+        ToolMessage(content=page, tool_call_id="c1", name="crawl_page", id="t1"),
+    ]
+
+    (tool_message,) = _tool_messages(await _sent(messages))
+
+    assert tool_message.content == page
+
+
+async def test_a_short_tool_result_from_an_earlier_turn_is_unchanged():
+    (tool_message,) = _tool_messages(await _sent(_conversation_with_a_crawled_page("42")))
+
+    assert tool_message.content == "42"
+
+
+async def test_the_stored_messages_keep_the_full_text():
+    page = "refunds " * 1000
+    messages = _conversation_with_a_crawled_page(page)
+
+    await _sent(messages)
+
+    assert messages[2].content == page, "the copy the model reads is shortened; the thread and its checkpoint are not"
+
+
+async def test_every_tool_call_still_has_its_tool_message_in_what_was_sent():
+    sent = await _sent(_conversation_with_a_crawled_page("refunds " * 1000))
+
+    assert orphan_tool_call_ids(sent) == []
+
+
+async def test_a_result_made_of_content_parts_is_measured_by_its_text():
+    parts = [{"type": "text", "text": "x" * 3000}]
+
+    (tool_message,) = _tool_messages(await _sent(_conversation_with_a_crawled_page(parts)))
+
+    assert tool_message.content == STALE_TOOL_RESULT_NOTE.format(name="crawl_page")
+
+
+async def test_a_tool_with_no_name_is_called_a_tool():
+    messages = _conversation_with_a_crawled_page("refunds " * 1000)
+    messages[2] = ToolMessage(content="refunds " * 1000, tool_call_id="c1", id="t1")
+
+    (tool_message,) = _tool_messages(await _sent(messages))
+
+    assert tool_message.content == STALE_TOOL_RESULT_NOTE.format(name="a tool")
+
+
+async def test_zero_turns_it_off_and_the_limit_is_the_nodes_to_set():
+    page = "refunds " * 1000
+
+    assert _tool_messages(await _sent(_conversation_with_a_crawled_page(page), stale_tool_result_max_chars=0))[0].content == page
+    assert _tool_messages(await _sent(_conversation_with_a_crawled_page("x" * 600), stale_tool_result_max_chars=500))[0].content.startswith("[Earlier result")
+
+
+async def test_the_retrieval_anchor_still_points_at_the_question_so_the_context_rides_on_it():
+    """Items are replaced in place: nothing moves."""
+    messages = _conversation_with_a_crawled_page("refunds " * 1000)
+
+    sent = await _sent_with(messages, anchor=4, context="[1] SHIPPING POLICY")
+
+    question = [m for m in sent if isinstance(m, HumanMessage)][-1]
+    assert "SHIPPING POLICY" in str(question.content) and "and what about shipping?" in str(question.content)
+
+
+async def _sent_with(messages, *, anchor, context):
+    llm = _RecordingFakeLLM(iter([AIMessage(content="Shipping is free.")]))
+
+    await make_agent_node(llm)({"messages": messages, "iterations": 0, "context": context, "context_anchor_index": anchor})
+
+    return llm.seen_messages
