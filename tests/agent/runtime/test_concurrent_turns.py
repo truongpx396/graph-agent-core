@@ -196,7 +196,7 @@ async def real_semantic_cache_redis(monkeypatch):
     earlier test or whole run left behind.
     """
     info = ensure_redis()
-    monkeypatch.setattr(semantic_cache, "REDIS_URL", info["redis_url"])
+    monkeypatch.setattr(semantic_cache, "SEMANTIC_CACHE_REDIS_URL", info["redis_url"])
     monkeypatch.setattr(semantic_cache, "_client", None)
     monkeypatch.setattr(semantic_cache, "_ready_indexes", set())
     monkeypatch.setattr(semantic_cache, "embed_query", _fake_embed_text)

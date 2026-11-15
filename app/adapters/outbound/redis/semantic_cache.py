@@ -33,7 +33,7 @@ from app.adapters.outbound.embeddings import embedding_identity
 from app.adapters.outbound.embeddings.embeddings import embed_query
 from app.core import metrics
 from app.core.config import (
-    REDIS_URL,
+    SEMANTIC_CACHE_REDIS_URL,
     SEMANTIC_CACHE_SIMILARITY_THRESHOLD,
     SEMANTIC_CACHE_TTL_SECONDS,
 )
@@ -86,7 +86,7 @@ def _escape_tag(value: str) -> str:
 def _get_client() -> redis.Redis:
     global _client
     if _client is None:
-        _client = redis.Redis.from_url(REDIS_URL)
+        _client = redis.Redis.from_url(SEMANTIC_CACHE_REDIS_URL)  # its own Redis in production (R15), the main one when unset
     return _client
 
 

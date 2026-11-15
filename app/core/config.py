@@ -188,6 +188,10 @@ class Settings(BillingSettings):
     # Semantic cache (app/adapters/outbound/redis/semantic_cache.py) — Redis Stack
     # (RediSearch, for vector KNN), not plain Redis.
     redis_url: str = "redis://localhost:6379"
+    # Where the answer cache lives, when it is not the same Redis as everything else. Empty means `redis_url` (development and every deployment that predates this setting
+    # are unchanged). The production stack points it at its own Redis (`redis-cache`) because a cache wants `allkeys-lru` and the work queue, the conversation locks and the
+    # front door's revocation list must never be evicted: no one eviction policy is right for both (PRODUCTION_REVIEW.md R15).
+    semantic_cache_redis_url: str = ""
     semantic_cache_similarity_threshold: float = 0.95  # cosine; a query must
     # be nearly identical in meaning to reuse a cached answer, not just topically close
     semantic_cache_ttl_seconds: int = 3600
@@ -846,6 +850,7 @@ SKILLS_COLLECTION = settings.skills_collection
 SKILLS_SEARCH_TOP_K = settings.skills_search_top_k
 APPDATA_DATABASE_URL = settings.appdata_database_url
 REDIS_URL = settings.redis_url
+SEMANTIC_CACHE_REDIS_URL = settings.semantic_cache_redis_url or settings.redis_url
 SEMANTIC_CACHE_SIMILARITY_THRESHOLD = settings.semantic_cache_similarity_threshold
 SEMANTIC_CACHE_ENABLED = settings.semantic_cache_enabled
 FOLLOWUPS_ENABLED = settings.followups_enabled

@@ -139,7 +139,7 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R12 | An approval approves whatever is pending, not what was shown; decisions are not recorded | P1 | L | read from code | | open |
 | R13 | A dropped connection loses the rest of the answer; no keepalive | P1 | M | read from code | | done (the server side; the web page and CLI do not reconnect yet) |
 | R14 | No size limit on a message, a conversation id or attached images | P1 | S | read from code | | done |
-| R15 | Production Redis: one instance for queue and cache, no persistence policy, floating image tags | P1 | M | read from code | R04 | open |
+| R15 | Production Redis: one instance for queue and cache, no persistence policy, floating image tags | P1 | M | read from code | R04 | done (both services on the Stack image, see pattern 100; sizes are the owner's; no password; not run on a droplet) |
 | R16 | The production gateway stores every prompt and answer | P1 | S | read from code | | done |
 | R17 | No queue depth, queue wait or first-token metric; no traces in production | P1 | M, then L | read from code | | done (part 1; part 2, traces, needs a spec) |
 | R18 | A re-uploaded document leaves its old chunks; no way to delete a document | P1 | M | read from code | R09 | done (with a version order instead of "another ingest id", see pattern 24; no list route) |
