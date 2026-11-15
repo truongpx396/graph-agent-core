@@ -59,6 +59,9 @@ async def publish_request(
     property of the JOB, not the worker, so it survives a reclaim (`republish_job` keeps the payload) and a
     crashed unattended turn is continued unattended.
 
+    `enqueued_at` (epoch seconds) is stamped on every job the API publishes: the worker observes how long it waited (`agent_queue_wait_seconds`), and a job
+    from an older API, with no stamp, is simply not observed. `republish_job` keeps it, so a reclaimed job's wait runs from its first publish.
+
     `domain` never rides in the payload; the stream it landed on says which domain it is for.
     `publish_resume_request`/`publish_cancel_request` use this SAME per-domain stream (dispatch-by-`kind` in
     agent_worker.py) and a resume/cancel MUST land on the same domain as the original turn, since the paused
@@ -75,6 +78,7 @@ async def publish_request(
             "require_approval": require_approval,
             "images": images or [],
             "unattended": unattended,
+            "enqueued_at": time.time(),
         }
     )
     await client.xadd(requests_stream_key(domain), {"payload": payload})
@@ -102,6 +106,7 @@ async def publish_resume_request(
             "thread_id": thread_id,
             "approved": approved,
             "ctx": ctx,
+            "enqueued_at": time.time(),
         }
     )
     await client.xadd(requests_stream_key(domain), {"payload": payload})
@@ -117,7 +122,7 @@ async def publish_cancel_request(
     (`cancel_run` returns False). `POST /chat/cancel` always does both: set
     the flag AND publish this, so whichever mechanism applies handles it."""
     payload = json.dumps(
-        {"kind": "cancel", "request_id": request_id, "thread_id": thread_id, "ctx": ctx}
+        {"kind": "cancel", "request_id": request_id, "thread_id": thread_id, "ctx": ctx, "enqueued_at": time.time()}
     )
     await client.xadd(requests_stream_key(domain), {"payload": payload})
 

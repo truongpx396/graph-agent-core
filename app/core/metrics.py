@@ -526,6 +526,39 @@ agent_worker_last_loop_timestamp_seconds = Gauge(
     labelnames=["queue", "loop"],
 )  # queue: agent | ingest; loop: read | reclaim
 
+agent_queue_wait_seconds = Histogram(
+    "agent_queue_wait_seconds",
+    "How long a job sat on a requests stream before a worker started it: the worker's `now` minus the `enqueued_at` the API stamped on the job, observed when "
+    "the worker takes it (`queue`: agent | ingest). A job published by an older API during a rolling deploy carries no stamp and is skipped, and a "
+    "reclaimed job keeps its ORIGINAL stamp, so a crash shows up here as a long wait. With agent_first_token_seconds and the queue gauges it is one of the "
+    "numbers that size the worker pool (WORKER_CONCURRENCY.md). Alert AgentQueueWaitHigh. PRODUCTION_REVIEW.md R17.",
+    unit="s",
+    labelnames=["queue"],
+)  # queue: agent | ingest
+
+agent_queue_pending = Gauge(
+    "agent_queue_pending",
+    "Entries a requests stream's consumer group has delivered and not yet acknowledged: jobs running, or whose worker died. Re-set by every worker's reclaim "
+    "pass from XINFO GROUPS (`domain`: a domain name for the chat queue, `ingest` for uploads). The collector forgets a series 5 minutes after its last "
+    "update, which is why it is re-set every pass.",
+    labelnames=["domain"],
+)
+
+agent_queue_lag = Gauge(
+    "agent_queue_lag",
+    "Entries on a requests stream that were added and no consumer has been given yet: jobs waiting for a worker. Read from XINFO GROUPS' `lag` in "
+    "every worker's reclaim pass, and left unset when Redis cannot say (it reports none after entries were deleted from the middle of a group's "
+    "unread range, which `ack_and_delete` does not do). Alert AgentQueueBacklog. A stream whose lag keeps rising means the pool is too small.",
+    labelnames=["domain"],
+)
+
+agent_first_token_seconds = Histogram(
+    "agent_first_token_seconds",
+    "From the start of a turn's graph run to the first `token` event it sends: what a person waits before they see anything. It does NOT include the time the "
+    "job spent on the queue (agent_queue_wait_seconds). A turn with no tokens at all (an error, an approval pause) observes nothing.",
+    unit="s",
+)
+
 agent_worker_queue_read_failed_total = Counter(
     "agent_worker_queue_read_failed_total",
     "A blocking read of a Redis stream failed with a connection, timeout or socket error and was retried "

@@ -40,6 +40,12 @@ _ITERATION_BUCKETS = (1, 2, 3, 4, 5, 7, 10, 15)
 # put every healthy decision in the first bucket.
 _ROUTE_BUCKETS_SECONDS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0)
 
+# How long a job waited for a worker: from nothing (a free worker) up to CHAT_FIRST_RESPONSE_DEADLINE_SECONDS (30 s) and past it, where the API has
+# already given up. The turn-latency buckets start at 0.5 s and would put every healthy wait in the first one.
+_QUEUE_WAIT_BUCKETS_SECONDS = (0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0)
+# What a person waits for the first token: a cache hit answers in a fraction of a second, a cold local model takes tens of seconds.
+_FIRST_TOKEN_BUCKETS_SECONDS = (0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0)
+
 _configured = False
 _provider: MeterProvider | None = None
 
@@ -104,6 +110,14 @@ def _build_provider(service_name: str) -> MeterProvider:
             aggregation=ExplicitBucketHistogramAggregation(
                 boundaries=_ROUTE_BUCKETS_SECONDS
             ),
+        ),
+        View(
+            instrument_name="agent_queue_wait_seconds",
+            aggregation=ExplicitBucketHistogramAggregation(boundaries=_QUEUE_WAIT_BUCKETS_SECONDS),
+        ),
+        View(
+            instrument_name="agent_first_token_seconds",
+            aggregation=ExplicitBucketHistogramAggregation(boundaries=_FIRST_TOKEN_BUCKETS_SECONDS),
         ),
     ]
 

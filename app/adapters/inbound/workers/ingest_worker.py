@@ -48,9 +48,11 @@ from app.adapters.inbound.workers.streams import (
     RECLAIM_ATTEMPTS_FIELD,
     ack_and_delete,
     claim_free_slots,
+    observe_queue_wait,
     pause_after_failed_read,
     publish_dead_letter,
     reclaim_stale_entries,
+    record_queue_depth,
     release_consumer,
     release_slots,
     republish_job,
@@ -113,6 +115,7 @@ async def process_job(client: redis.Redis, entry_id: str, fields: dict[str, Any]
     the caller decide whether to re-upload is the more useful behavior."""
     payload = json.loads(fields["payload"])
     job_id = payload["job_id"]
+    observe_queue_wait("ingest", payload)  # how long this job waited for a worker (R17)
     with bind_request_id(job_id):
         try:
             await publish_result(client, job_id, {"type": "started"})
@@ -265,6 +268,7 @@ async def _reclaim_loop(client: redis.Redis, stop_event: asyncio.Event) -> None:
             for entry_id, fields in entries:
                 await _handle_reclaimed_job(client, entry_id, fields)
             await trim_stale_entries(client, INGEST_REQUESTS_STREAM, max_age_seconds=REQUESTS_STREAM_MAX_AGE_SECONDS)
+            await record_queue_depth(client, INGEST_REQUESTS_STREAM, INGEST_CONSUMER_GROUP, "ingest")
         except Exception as exc:  # noqa: BLE001 - one bad pass must not end reclaim for this process's whole life
             logger.warning("ingest_worker_reclaim_pass_failed", extra={"error_class": type(exc).__name__})
 
