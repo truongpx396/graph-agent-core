@@ -9,6 +9,8 @@ domain reads as not found. Methods raise when the store cannot be reached; the a
 """
 from __future__ import annotations
 
+import builtins
+from datetime import datetime
 from typing import Any, Protocol
 
 from app.ports.slot import Slot
@@ -29,6 +31,22 @@ class SessionStore(Protocol):
 
     async def list(self, tenant: str, principal: str, domain: str) -> list[dict[str, Any]]:
         """The person's threads in the domain, most recently active first: `thread_id`, `title`, `created_at`, `last_active_at`."""
+        ...
+
+    async def list_inactive(self, before: datetime, limit: int, after: tuple[datetime, str] | None = None) -> builtins.list[dict[str, Any]]:  # `list` is a method of this class: the builtin by name
+
+        """Threads whose `last_active_at` is before `before`, oldest first, at most `limit`: `thread_id`, `tenant`, `principal`, `domain`, `last_active_at`.
+        `after` is the `(last_active_at, thread_id)` of the last row of the previous page, so a run that deletes nothing (a dry run) still moves forward.
+
+        The one method here that spans tenants and people, ON PURPOSE: retention is a property of the table, and the sweep that calls it is an operator's job
+        (`scripts/jobs/checkpoint_sweep.py`). No request may reach it (`tests/core/test_session_sweep_is_not_reachable_from_requests.py`)."""
+        ...
+
+    async def delete(
+        self, tenant: str, principal: str, thread_id: str, domain: str, *, inactive_before: datetime | None = None
+    ) -> bool:
+        """Removes the thread's row if it belongs to exactly this tenant, person and domain, and reports whether a row went. With `inactive_before`, only if it
+        is STILL inactive since then: a thread that got a message while a sweep was running keeps its row. Idempotent."""
         ...
 
 

@@ -490,6 +490,11 @@ agent_ingest_cleanup_failed_total = Counter(
     "(PRODUCTION_REVIEW.md R18)",
 )
 
+agent_checkpoint_sweep_deleted_total = Counter(
+    "agent_checkpoint_sweep_deleted_total",
+    "Conversations removed by scripts/jobs/checkpoint_sweep.py: their checkpoints and their session row (PRODUCTION_REVIEW.md R11)",
+)
+
 agent_moderation_total = Counter(
     "agent_moderation_total",
     "Input moderation screens by outcome (app/core/moderation.py)",

@@ -29,6 +29,7 @@ from app.platform.sql_store import POOLER_SAFE_CONNECTION_KWARGS
 class PgCheckpointing:
     def __init__(self) -> None:
         self._pool: AsyncConnectionPool | None = None
+        self._saver: AsyncPostgresSaver | None = None  # kept so `delete_thread` uses the pool `open` made, on the loop it opened them on
 
     async def open(self) -> AsyncPostgresSaver:
         pool = AsyncConnectionPool(
@@ -46,9 +47,17 @@ class PgCheckpointing:
             saver.lock = asyncio.Semaphore(CHECKPOINTER_POOL_MAX_SIZE)  # type: ignore[assignment]  # a Semaphore has the same `async with` protocol; it is the upstream fix (#7269)
         await saver.setup()
         self._pool = pool
+        self._saver = saver
         return saver
 
     async def close(self) -> None:
+        self._saver = None
         if self._pool is not None:
             await self._pool.close()
             self._pool = None
+
+    async def delete_thread(self, thread_id: str) -> None:
+        """`AsyncPostgresSaver.adelete_thread`: the thread's rows in `checkpoints`, `checkpoint_blobs` and `checkpoint_writes`, in one pipeline."""
+        if self._saver is None:
+            raise RuntimeError("PgCheckpointing.delete_thread was called before open(): there is no saver to delete through")
+        await self._saver.adelete_thread(thread_id)
