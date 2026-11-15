@@ -24,7 +24,10 @@ def test_by_default_a_call_may_stay_silent_as_long_as_a_turn_may_run_and_the_sdk
 
 
 def test_a_slower_turn_limit_carries_the_default_read_timeout_with_it():
-    assert Settings(_env_file=None, request_timeout_seconds=420).effective_llm_read_timeout_seconds == 420.0
+    # The reclaim idle goes with a widened turn limit (420 x 4 + 30 s at least): the queue's own validator refuses the default otherwise (pattern 99).
+    settings = Settings(_env_file=None, request_timeout_seconds=420, agent_worker_reclaim_idle_seconds=1800)
+
+    assert settings.effective_llm_read_timeout_seconds == 420.0
 
 
 def test_a_lower_read_timeout_is_used_as_given():
