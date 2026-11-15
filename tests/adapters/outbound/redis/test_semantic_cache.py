@@ -138,13 +138,14 @@ class TestWhichRedisTheCacheUses:
         import os
         import subprocess
         import sys
-        from pathlib import Path
 
-        repo = str(Path(__file__).resolve().parents[4])
+        # The child gets this process's import path, not just the repo: the billing package is found by pytest's `pythonpath` setting, not installed, so a child
+        # started with only the repo on its path cannot import `app.core.config` (CI, where nothing is installed in editable mode). `-S` below makes a local run behave like CI.
+        import_path = os.pathsep.join(p for p in sys.path if p)
         clean = {k: v for k, v in os.environ.items() if k not in {"REDIS_URL", "SEMANTIC_CACHE_REDIS_URL"}}
         out = subprocess.run(
-            [sys.executable, "-c", "from app.core.config import SEMANTIC_CACHE_REDIS_URL as u; print(u)"],
-            env={**clean, "PYTHONPATH": repo, **env}, capture_output=True, text=True, check=True, cwd=tmp_path,
+            [sys.executable, "-S", "-c", "from app.core.config import SEMANTIC_CACHE_REDIS_URL as u; print(u)"],  # -S: no `.pth` files, so nothing installed locally can hide a missing path
+            env={**clean, "PYTHONPATH": import_path, **env}, capture_output=True, text=True, check=True, cwd=tmp_path,
         )
 
         assert out.stdout.strip() == expected
