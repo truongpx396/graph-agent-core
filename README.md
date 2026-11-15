@@ -826,6 +826,7 @@ until configured**.
 | `make authlimit-test` · `-up` · `-up-app` · `-keys` · `-smoke` · `-revoke` · `-latency` · `-mutants` · `-web-check` | The front door ([commands](#front-door-authlimit)) |
 | **⏰ One-shot jobs** (for cron; nothing schedules them) | |
 | `make ops-digest` · `make followup-sweep` · `make tool-call-dedup-sweep` | The ops digest · the sales follow-up sweep · the dedup-table sweep |
+| `make restore-drill` | Restore backups of a seeded Postgres, Casdoor DB, Qdrant and Redis into fresh containers and time it (needs Docker; `ARGS="--points 50000"`). The backup job is `deploy/backup/backup.sh` (`deploy/README.md`, "Backups and restore") |
 | `make checkpoint-sweep` | Delete conversations (checkpoints and session rows) older than `CHECKPOINT_RETENTION_DAYS`; **0 is off**, `ARGS=--dry-run` first |
 | **✅ Gates and tools** | |
 | `make lint` · `make typecheck` · `make test` | The CI gates |

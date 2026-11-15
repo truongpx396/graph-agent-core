@@ -14,6 +14,9 @@ tool-call-dedup-sweep:  ## Delete stale tool_call_dedup rows past their retentio
 checkpoint-sweep:  ## Delete conversations (checkpoints and session rows) older than CHECKPOINT_RETENTION_DAYS; 0 = off. ARGS=--dry-run first (cron it once the retention policy is decided)
 	python -m scripts.jobs.checkpoint_sweep $(ARGS)
 
+restore-drill:  ## Restore backups of a seeded Postgres, Casdoor DB, Qdrant and Redis into fresh containers and time it (needs Docker; sizes: ARGS="--points 50000"). PRODUCTION_REVIEW.md R26
+	python -m scripts.checks.restore_drill $(ARGS)
+
 usage-events-sweep:  ## Delete usage events older than USAGE_EVENT_RETENTION_DAYS (min 35). The caps read this table: cron it only once the retention policy is decided
 	python -m scripts.jobs.usage_events_sweep
 

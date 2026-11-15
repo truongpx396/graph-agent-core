@@ -150,7 +150,7 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R23 | The answer cache ignores the domain; its expiry is set in a second call | P2 | S | read from code | | done |
 | R24 | Two error events carry no `code` | P2 | S | read from code | | done |
 | R25 | A pool hands out a connection that died while idle | P2 | S | read from code | | open |
-| R26 | Backups are a paragraph, not a job; no restore drill | P2 | M | read from code | | open |
+| R26 | Backups are a paragraph, not a job; no restore drill | P2 | M | read from code | | done (the job, a verified download and a performed drill; the drill found that production's Postgres could not initialise a new volume, now fixed; the end-to-end recovery time is not measured; not run on a droplet) |
 | R27 | A transcript is read whole | P2 | S | read from code | | done |
 | R28 | Nothing learns from production answers | P2 | M | from the field | R17 | open |
 | R29 | Retrieval runs on every turn, after the router instead of beside it | P1 | M | read from code; reproduced (parallel join) | R17 | done (the parallel step and the `prefetch` switch; no domain is switched, see pattern 20) |

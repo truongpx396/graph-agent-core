@@ -113,7 +113,10 @@ services:
       # There is no `langfuse` database here, just the role.
       POSTGRES_USER: langfuse
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: appdata
+      # `postgres`, the database every image already has. It was `appdata`, which the image then creates itself BEFORE postgres-init/02-appdata.sql runs
+      # `CREATE DATABASE appdata`: that failed ("already exists"), the init aborted and the container exited with status 3, so a NEW volume (a new droplet, or a restore onto
+      # a rebuilt one) could not start. Found by `make restore-drill`. An existing volume ignores this setting, and the init scripts create appdata, litellm and checkpointer.
+      POSTGRES_DB: postgres
     volumes:
       - postgres:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d:ro
