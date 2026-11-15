@@ -34,6 +34,7 @@ from app.agent.graph.messages import (
     COMPACTION_MARKER_KEY,
     is_retry_artifact,
 )
+from app.agent.graph.stream_events import STREAM_EVENT
 from app.agent.runtime import cancelled_turn
 from app.agent.runtime import core as runtime_module
 from app.core import gateway, metrics, tracing
@@ -299,21 +300,22 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
     - `{"type": "approval_required", "tool_calls": [...]}`: paused at human_approval's interrupt
       (graph/hitl.py); resume via `astream_events_resume`.
     - `{"type": "retry"}` (NOT terminal): discard everything streamed so far, because it was rejected or
-      replaced (else old and retried answers render concatenated). It comes from three `on_chain_end` sources,
-      each replacing the last message in place:
+      replaced (else old and retried answers render concatenated). A NODE announces it (`graph/stream_events.py`,
+      `adispatch_custom_event`), and this function forwards the announcement without knowing which node it was:
       - `retry_output`: check_output rejected the answer; the loop to `agent` supplies fresh tokens;
       - `check_output` itself, when it inserted a missing citation marker after the answer streamed: no
-        `agent` call follows, so a synthetic "token" event carries the corrected text after "retry";
+        `agent` call follows, so the announcement carries the corrected text too and it is forwarded as a
+        "token" after the "retry";
       - `retry_exhausted`: `route_after_check` gave up after MAX_CONSECUTIVE_SAME_RETRY_REASON and replaces
         the message the same way, EXCEPT for checks marked `trust_on_exhaust` (a real answer merely missing
-        its marker), where it no-ops, since a "retry" would blank a good answer with nothing to follow.
-      A nested `run_subagent` graph shares these node names, so every `on_chain_end` tagged
+        its marker), where it announces nothing, since a "retry" would blank a good answer with nothing to follow.
+      A nested `run_subagent` graph shares those node names, so every announcement tagged
       `metadata.subagent_name` is ignored.
       A fourth source is a model stream that broke part-way and that the `agent` node's retry policy ran
       again (pattern 7): the second attempt's tokens would follow the first's, so a model call that starts
       while the previous one is still open, and had sent tokens, announces the restart the same way.
     - `{"type": "compacted"}` (NOT terminal): `compact_history` (pattern 41) trimmed context before `agent`
-      ran. Informational; fires only when it trimmed something.
+      ran, and said so the same way. Informational; fires only when it trimmed something.
     - `{"type": "citations", "items": [...]}` / `{"type": "followups", "items": [...]}`: just before "done",
       when the answer cited something / suggest_followups (pattern 27) produced any.
     - `{"type": "done"}`: the turn finished.
@@ -405,58 +407,19 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
                     payload["subagent"] = subagent_name
                 yield payload
 
-            elif kind == "on_chain_end" and event.get("metadata", {}).get("subagent_name"):
-                # A nested run_subagent graph shares the node names below (check_output,
-                # retry_output, ...), and its events arrive on THIS stream. They describe the
-                # subagent's own turn: acting on them cleared the parent's answer, yielded
-                # `retry` and then the subagent's text as a token, which the client showed as
-                # the answer. Only tool_start/tool_end are surfaced from a nested run (tagged
-                # with `subagent` above), so the chain ends are ignored here.
-                pass
-
-            elif kind == "on_chain_end" and event["name"] == "retry_output":
-                # check_output rejected the answer; discard what's streamed
-                # so far (see this function's docstring, "retry").
-                final_answer.clear()
-                yield {"type": "retry"}
-
-            elif kind == "on_chain_end" and event["name"] == "check_output":
-                # check_output mechanically inserted a missing citation
-                # marker after the answer already streamed (see docstring)
-                # — only fires when it actually returned a replacement.
-                output = event["data"].get("output") or {}
-                replacement_messages = output.get("messages") or []
-                if replacement_messages:
+            elif kind == "on_custom_event" and event["name"] == STREAM_EVENT and not event_metadata.get("subagent_name"):
+                # A node announced what the client should see (`graph/stream_events.py`): the runtime no longer recognises nodes by name. A nested
+                # `run_subagent` graph shares the node names and its announcements arrive on THIS stream, tagged `metadata.subagent_name`: they
+                # describe the subagent's own turn, and acting on them cleared the parent's answer and showed the subagent's text as the answer.
+                announced = event["data"]
+                if announced["type"] == "retry":
                     final_answer.clear()
                     yield {"type": "retry"}
-                    replacement_text = replacement_messages[-1].content
-                    if isinstance(replacement_text, str) and replacement_text:
-                        final_answer.append(replacement_text)
-                        yield {"type": "token", "content": replacement_text}
-
-            elif kind == "on_chain_end" and event["name"] == "retry_exhausted":
-                # route_after_check gave up after
-                # MAX_CONSECUTIVE_SAME_RETRY_REASON and unconditionally
-                # replaced the message — except for
-                # the checks marked trust_on_exhaust, where it no-ops (see this
-                # function's docstring, "retry", for the two real bugs this
-                # branch guards against).
-                output = event["data"].get("output") or {}
-                replacement_messages = output.get("messages") or []
-                if replacement_messages:
-                    final_answer.clear()
-                    yield {"type": "retry"}
-                    replacement_text = replacement_messages[-1].content
-                    if isinstance(replacement_text, str) and replacement_text:
-                        final_answer.append(replacement_text)
-                        yield {"type": "token", "content": replacement_text}
-
-            elif kind == "on_chain_end" and event["name"] == "compact_history":
-                # Runs every turn but only does real work once its
-                # ceiling trips; `output` is `{}` (app/agent/graph/core.py's early
-                # return) otherwise.
-                output = event["data"].get("output") or {}
-                if output.get("messages"):
+                elif announced["type"] == "token":
+                    # The replacement text after a `retry`: no model call follows to stream a new one, and the trace and the fallback read `final_answer`.
+                    final_answer.append(announced["content"])
+                    yield {"type": "token", "content": announced["content"]}
+                elif announced["type"] == "compacted":
                     yield {"type": "compacted"}
 
     except TurnCancelledError:

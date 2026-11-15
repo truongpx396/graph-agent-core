@@ -75,6 +75,12 @@ from app.agent.graph.state import (
     MAX_TOKENS_PER_TURN,
     State,
 )
+from app.agent.graph.stream_events import (
+    announcing,
+    rejected_the_answer,
+    replaced_the_answer,
+    trimmed_the_history,
+)
 from app.agent.graph.tool_guards import tool_batch_guard
 from app.agent.graph.utils import NodeFn, friendly_tool_error, instrumented, make_llm
 from app.agent.tools import builtin
@@ -319,9 +325,10 @@ def build_graph(
     add("tools", run_tools)
     add("human_approval", make_human_approval_node(deps.interrupt or interrupt))
     add("tool_batch_guard", domain_tool_batch_guard)
-    add("check_output", domain_check_output)
-    add("retry_output", retry_output)
-    add("retry_exhausted", make_retry_exhausted_node(emit_message=emit_no_answer_message))
+    # These four announce what the client should see (`stream_events.py`) instead of the runtime recognising them by name.
+    add("check_output", announcing(domain_check_output, replaced_the_answer))
+    add("retry_output", announcing(retry_output, rejected_the_answer))
+    add("retry_exhausted", announcing(make_retry_exhausted_node(emit_message=emit_no_answer_message), replaced_the_answer))
     add(
         "no_answer",
         make_no_answer_fallback_node(
@@ -353,11 +360,14 @@ def build_graph(
         # tool-bound client asked a plain prompt just answers it).
         add(
             "compact_history",
-            make_compact_history_node(
-                llm_client,
-                ceiling=history_token_ceiling if history_token_ceiling is not None else HISTORY_TOKEN_CEILING,
-                floor=history_token_floor if history_token_floor is not None else HISTORY_TOKEN_FLOOR,
-                model_alias=model_alias,
+            announcing(
+                make_compact_history_node(
+                    llm_client,
+                    ceiling=history_token_ceiling if history_token_ceiling is not None else HISTORY_TOKEN_CEILING,
+                    floor=history_token_floor if history_token_floor is not None else HISTORY_TOKEN_FLOOR,
+                    model_alias=model_alias,
+                ),
+                trimmed_the_history,
             ),
         )
         add("context_window_exceeded", context_window_exceeded)
