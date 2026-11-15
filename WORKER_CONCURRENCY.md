@@ -74,6 +74,12 @@ Neither comes from a formula:
 - **`REQUESTS_STREAM_MAX_AGE_SECONDS`** (86400) is the net under "acknowledge, then delete": a reclaim pass drops requests-stream entries older than that. It must exceed both reclaim idles. The worker deletes each job as it acknowledges it, so in a healthy deployment the stream holds only what is waiting or running; a requests stream whose length keeps growing is the symptom of a worker that does not.
 - **A Redis blip is survived, not fatal.** A failed read is retried after 0.5 s, doubling to 5 s, and counted (`agent_worker_queue_read_failed_total`); a worker told to stop during the wait stops at once.
 
+## What one streamed event costs the worker
+
+Every event of a turn (a token, a tool start) was three Redis round trips awaited one after another on the model's own stream: the cancel check (`GET`), then the `XADD` and the `EXPIRE` that put the event on the results stream. An answer of 500 tokens was 1,500 round trips, and each held up the next chunk. Now the `XADD` and the `EXPIRE` are one pipelined `MULTI` (`streams.py::publish_result`; the same for the ingest worker), and the cancel check runs at most every 250 ms and always before the first event, so a stop takes effect within a quarter of a second at an event boundary, as before.
+
+Measured on a real Redis over loopback, 500 events: 232 ms before, 123 ms after (0.46 to 0.25 ms per event, median of five runs). Loopback understates it: the saving grows with the network round-trip time between the worker and Redis. **Step 2 is not done:** batching what is waiting into one write (joining adjacent tokens) needs `make loadtest-queued-headless` before and after, and the work order says not to merge it if the gain is small. That was not measured.
+
 ## Postgres connection budget
 
 Every process that runs the graph (each `agent-worker` replica **and** the API, via `init_graph_async()` in its lifespan) holds two client-side pools: the appdata pool (`app/platform/sql_store.py`, `APPDATA_POOL_MAX_SIZE`, default `10`) and the checkpointer pool (`CHECKPOINTER_POOL_MAX_SIZE`, default `10`). Direct to Postgres, scaling replicas multiplied that, and nothing enforced the ceiling:

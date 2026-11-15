@@ -132,7 +132,7 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R05 | Request timeout, lock lifetime and reclaim idle are related only by comment | P0 | M | read from code | | done |
 | R06 | The chat client has no HTTP timeout; three layers each retry | P0 | S | verified in the installed source | | done |
 | R07 | A Redis error in the worker's read loop ends the process | P0 | S | read from code | | done |
-| R08 | Three Redis round trips for every token | P1 | S, then M | read from code | | open |
+| R08 | Three Redis round trips for every token | P1 | S, then M | read from code | | done (step 1; step 2 needs a load-test measurement first) |
 | R09 | No payload index on the fields every vector search filters by | P1 | S | read from code | R03 | open |
 | R10 | One HTTP client per ML-service call; the same question embedded up to four times a turn | P1 | M | read from code | | open |
 | R11 | Checkpoints are kept forever; no way to delete a conversation | P1 | M | read from code | | open |
