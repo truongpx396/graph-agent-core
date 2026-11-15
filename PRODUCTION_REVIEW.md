@@ -159,7 +159,7 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R32 | Output checks built for small models also run on strong ones | P2 | M | read from code | R17 | done (the mechanism; which codes to list is the owner's, from the numbers) |
 | R33 | The answer cache can answer a follow-up from another conversation | P1 | S | read from code | | done |
 | R34 | Every change to the history stores the whole history again | P2 | M | reproduced | R19 | open |
-| R35 | Code structure: node names in the runtime, repeated entry points, patch-shaped modules | P2 | S to L | read from code; reproduced (custom events) | | open |
+| R35 | Code structure: node names in the runtime, repeated entry points, patch-shaped modules | P2 | S to L | read from code; reproduced (custom events) | | done (A, B and C; D and E are gradual and optional, not done) |
 
 Suggested order: R01, R02, R03, R06, R07 (five small, independent fixes), then R04 and R05 (the queue), then R16 and
 R21 (two small ones), then R17 part 1 (the measurements), then R33 and R30 and R31 (small, and each cuts work from every

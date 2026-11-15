@@ -991,13 +991,10 @@ class _ScriptedEventsGraph:
         return SimpleNamespace(next=(), tasks=(), values=values)
 
 
-def _chain_end(name, *, subagent=None, output=None):
-    return {
-        "event": "on_chain_end",
-        "name": name,
-        "metadata": {"subagent_name": subagent} if subagent else {},
-        "data": {"output": output or {"messages": [AIMessage(content="replacement text")]}},
-    }
+def _announce(event, *, subagent=None):
+    """What a node's `adispatch_custom_event("agent_stream", ...)` looks like on the stream (`graph/stream_events.py`, PRODUCTION_REVIEW.md R35 part A):
+    the runtime forwards the announcement and no longer knows which node made it."""
+    return {"event": "on_custom_event", "name": "agent_stream", "metadata": {"subagent_name": subagent} if subagent else {}, "data": event}
 
 
 async def _event_types(events):
@@ -1005,21 +1002,44 @@ async def _event_types(events):
     return [e["type"] async for e in stream_module._run_graph_stream(graph, {}, {}, None)]
 
 
-async def test_a_nested_subagents_chain_ends_never_reach_the_parents_stream():
-    """The nested graph shares the node names below with the parent's, and its events arrive on
-    the parent's stream: acting on them cleared the parent's answer and replaced it."""
-    for name in ("retry_output", "check_output", "retry_exhausted", "compact_history"):
-        assert await _event_types([_chain_end(name, subagent="researcher")]) == ["token", "done"]
+async def test_a_nested_subagents_announcements_never_reach_the_parents_stream():
+    """The nested graph has the same nodes as the parent's, and its announcements arrive on the parent's stream: acting on them cleared the parent's answer
+    and replaced it with the subagent's text."""
+    for event in ({"type": "retry"}, {"type": "token", "content": "subagent text"}, {"type": "compacted"}):
+        assert await _event_types([_announce(event, subagent="researcher")]) == ["token", "done"]
 
 
-async def test_the_same_chain_ends_still_act_when_they_are_the_parents_own():
-    """The control for the test above: it proves the guard is on `subagent_name`, not that these
-    branches stopped working."""
-    assert await _event_types([_chain_end("retry_output")]) == ["retry", "token", "done"]
-    assert await _event_types([_chain_end("check_output")]) == ["retry", "token", "done"]
-    assert await _event_types([_chain_end("retry_exhausted")]) == ["retry", "token", "done"]
-    assert await _event_types([_chain_end("compact_history")]) == ["compacted", "token", "done"]
+async def test_the_same_announcements_are_forwarded_when_they_are_the_parents_own():
+    """The control for the test above: the guard is on `subagent_name`, not a branch that stopped working."""
+    assert await _event_types([_announce({"type": "retry"})]) == ["retry", "token", "done"]
+    # a retry followed by its replacement text: that text IS the answer, so no synthetic token follows it
+    assert await _event_types([_announce({"type": "retry"}), _announce({"type": "token", "content": "replacement text"})]) == ["retry", "token", "done"]
+    assert await _event_types([_announce({"type": "compacted"})]) == ["compacted", "token", "done"]
 
+
+async def test_the_runtime_forwards_an_announcement_without_knowing_which_node_made_it():
+    """The point of R35 part A: the node's name is not in the event the runtime reads, so renaming a node cannot change what the client sees."""
+    event = _announce({"type": "retry"})
+    event["metadata"]["langgraph_node"] = "a_node_that_does_not_exist"
+
+    assert (await _event_types([event]))[0] == "retry"
+
+
+async def test_a_replacement_announced_after_a_retry_is_the_answer_the_trace_and_the_fallback_see():
+    """`final_answer` is what the trace records and what the no-token fallback reads: the replacement text must land in it."""
+    graph = _ScriptedEventsGraph([_announce({"type": "retry"}), _announce({"type": "token", "content": "corrected text"})], final_text="corrected text")
+    trace = _FakeTrace()
+
+    [e async for e in stream_module._run_graph_stream(graph, {}, {}, trace)]
+
+    assert any(update.get("output") == "corrected text" for update in trace.updates)
+
+
+async def test_other_custom_events_are_not_forwarded():
+    """A custom event of another name (a tool's, a library's) is not the client's business."""
+    other = {"event": "on_custom_event", "name": "something_else", "metadata": {}, "data": {"type": "retry"}}
+
+    assert await _event_types([other]) == ["token", "done"]
 
 
 # --- A model stream that fails part-way and is retried (PRODUCTION_REVIEW.md R01, pattern 7) -------------
