@@ -153,7 +153,7 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R26 | Backups are a paragraph, not a job; no restore drill | P2 | M | read from code | | open |
 | R27 | A transcript is read whole | P2 | S | read from code | | done |
 | R28 | Nothing learns from production answers | P2 | M | from the field | R17 | open |
-| R29 | Retrieval runs on every turn, after the router instead of beside it | P1 | M | read from code; reproduced (parallel join) | R17 | open |
+| R29 | Retrieval runs on every turn, after the router instead of beside it | P1 | M | read from code; reproduced (parallel join) | R17 | done (the parallel step and the `prefetch` switch; no domain is switched, see pattern 20) |
 | R30 | A second model call for follow-ups holds back `done` | P1 | S | read from code | | done |
 | R31 | Old tool results are re-sent to the model on every later call | P1 | S | read from code | | done |
 | R32 | Output checks built for small models also run on strong ones | P2 | M | read from code | R17 | done (the mechanism; which codes to list is the owner's, from the numbers) |

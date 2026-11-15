@@ -21,7 +21,7 @@ concrete domains are in `app/domains/<name>/domain.py`; Ecorp is one of them, wi
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from app.core.security import Policy
 from app.ports.slot import Slot
@@ -69,6 +69,12 @@ class AgentManifest:
     # It runs in parallel with the cache write, but `done` waits for both, so it costs a model call and the time of one on every cited answer. A domain
     # whose answers usually end in an action rather than a reading list leaves it off (PRODUCTION_REVIEW.md R30); the node is then not in its graph at all.
     suggest_followups: bool = True
+    # Whether `retrieve_context` runs before the model on every turn: a document search and a memory search, each with an embedding, a sparse vector, a
+    # Qdrant query and a rerank, for "hi", for "thanks" and for "log an incident" in a domain whose tools do not read documents (PRODUCTION_REVIEW.md R29).
+    # With "never" the node is not in the graph and the model sees no pre-fetched documents or memories: a domain that still needs documents must have
+    # the `search_docs` tool and its prompt must tell the model to call it. "always" is the shipped behaviour, for every domain: switching one over
+    # changes what its answers are grounded on, which `make eval` and the domain's promptfoo suite judge, not a unit test.
+    prefetch: Literal["always", "never"] = "always"
 
 
 class DomainCatalog(Protocol):

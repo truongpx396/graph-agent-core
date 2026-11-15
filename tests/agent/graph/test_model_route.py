@@ -332,14 +332,17 @@ async def _noop_set(*args):
     return None
 
 
-async def test_it_runs_after_moderation_the_cache_and_compaction_and_before_retrieval(monkeypatch):
+async def test_it_runs_after_moderation_the_cache_and_compaction_and_beside_retrieval(monkeypatch):
+    """Both start after the earlier stages and before `agent`; neither is ordered before the other (PRODUCTION_REVIEW.md R29): they read and write different
+    state, so the router's latency is no longer added in front of retrieval."""
     Recorder(monkeypatch)
     graph = build_graph(GraphDeps(llm=_llm(AIMessage(content="A long enough answer.")), cache_get=_miss, cache_set=_noop_set))
 
     names = await _nodes_run(graph, "what are the support hours")
 
-    order = [names.index(n) for n in ("moderate_input", "check_semantic_cache", "compact_history", "route_model", "retrieve_context", "agent")]
-    assert order == sorted(order)
+    before = [names.index(n) for n in ("moderate_input", "check_semantic_cache", "compact_history")]
+    side_by_side = [names.index(n) for n in ("route_model", "retrieve_context")]
+    assert before == sorted(before) and max(before) < min(side_by_side) and max(side_by_side) < names.index("agent")
 
 
 async def test_a_refused_input_never_reaches_the_router(monkeypatch):
@@ -386,7 +389,8 @@ async def test_the_router_runs_without_the_optional_stages_too(monkeypatch):
 
     names = await _nodes_run(graph, "what are the support hours")
 
-    assert names.index("moderate_input") < names.index("route_model") < names.index("retrieve_context")
+    assert max(names.index("moderate_input"), 0) < min(names.index("route_model"), names.index("retrieve_context"))
+    assert max(names.index("route_model"), names.index("retrieve_context")) < names.index("agent")
     assert rec.asked == [("route-topics", "what are the support hours")]
 
 

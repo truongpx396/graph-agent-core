@@ -153,7 +153,9 @@ flowchart TB
     end
 
     Validate --> Moderate --> CacheCheck
-    CacheCheck -- miss --> Compact --> Route --> Retrieve --> AgentNode
+    CacheCheck -- miss --> Compact
+    Compact --> Route --> AgentNode
+    Compact --> Retrieve --> AgentNode
     CacheCheck -- hit --> Output
     CacheCheck -. look up .-> SemCache[("Redis Stack: semantic cache<br/>vector KNN, per tenant + principal")]
     AgentNode -- invalid tool batch --> BatchGuard --> AgentNode

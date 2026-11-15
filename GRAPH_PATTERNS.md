@@ -160,6 +160,7 @@ A `SecurityCtx` (`tenant`, `principal`, `claims`) is stamped once by `validate_i
 - Citations are the intersection of the answer's markers and what retrieval offered, so a hallucinated or forgotten marker resolves correctly.
 - **Bug:** `qdrant_store.get_client()` built a new `AsyncQdrantClient` on every call (eleven call sites). In qdrant-client 1.19.0 each construction starts a daemon thread that makes a blocking version-check request and builds a connection pool, so every search, upsert and probe paid a thread, a request and a TCP handshake for a client nobody closed, and a turn makes at least two searches. It now returns one client per event loop (weakly keyed, because a connection belongs to the loop that opened it and the scripts and the tests run more than one loop per process), and `close_adapters` closes it where each long-lived process stops, the ingest worker included (PRODUCTION_REVIEW.md R03).
 - **Use when:** retrieval quality matters and an answer needs an audit trail.
+- **Cost: retrieval ran on every turn, after the router instead of beside it** (*read from code; the parallel join reproduced on langgraph 0.2.76*). `retrieve_context` is a document search and a memory search, each with an embedding, a sparse vector, a Qdrant query and a rerank, and it ran for "hi", for "thanks" and for "log an incident" in a domain whose tools read no documents. And `route_model` ran BEFORE it although neither reads what the other writes (the router reads the person's message and writes `model_route`; retrieval writes `context`, `citations` and `context_anchor_index`), so the router's latency (up to `ROUTER_TIMEOUT_SECONDS`) was added to every routed turn first. **Now:** the two are one parallel step and `agent` waits for both (the conditional edges that lead into the stage return the pair, because a path map cannot take a list). No `STATE_SCHEMA_VERSION` bump: a paused conversation sits at `human_approval`, whose edges do not change, and a turn that crashed exactly between these nodes during the deploy is what `test_checkpoint_across_a_topology_change.py` covers (the reclaim path dead-letters it). **`AgentManifest.prefetch`** (`"always"`, the default for every domain) set to `"never"` leaves `retrieve_context` out of that domain's graph: the model then sees no pre-fetched documents or memories, so a domain that still needs documents must have `search_docs` and say so in its prompt. **Decide:** which domains use `"never"`. The work order recommends `ops` only (its tools read metrics, and it has no `search_docs`), judged by `make eval` and its promptfoo suite; **none is switched here, because that changes what its answers are grounded on and those could not be run**. A third mode that skips the search for greetings is possible later, with a measurement of how many turns it would skip (PRODUCTION_REVIEW.md R29).
 
 ### 21. Fixed-tool structured data access, plus MCP exposure
 `query_employees` is a closed, typed Postgres query: `tenant` (from `SecurityCtx`), `department` (a closed enum) and `name_contains` are the only variables, every query is parameterized and always ANDs `WHERE tenant = %s`. There is no `execute(sql)` anywhere. Same principle as `add_note` (15), for reads: the access boundary lives in reviewable code, not a string the model writes.
@@ -695,11 +696,12 @@ route_after_validation?  ← valid ctx? last user message (not retry feedback, p
                 route_after_compaction?  ← history_summary over MAX_HISTORY_SUMMARY_CHARS?
                  ├─→ context_window_exceeded  (a named dead end, not silent truncation) → END
                  └─→ route_model  ← asks the ML service whether this prompt needs a stronger model (pattern 68);
-                      │                  writes ONLY `model_route`; every failure = local; off by default
-                      ↓
-                     retrieve_context  ← hybrid dense+BM25, RRF, rerank, numbered citations
-                      │                  (pattern 20) + this principal's memories; degrades on failure
-                      ↓
+                      │ ║                writes ONLY `model_route`; every failure = local; off by default
+                      │ ║  in the SAME step as retrieve_context: neither reads what the other writes (R29)
+                      │ ╚═ retrieve_context  ← hybrid dense+BM25, RRF, rerank, numbered citations
+                      │                      (pattern 20) + this principal's memories; degrades on failure;
+                      │                      not in the graph when the manifest says prefetch="never"
+                      ↓  agent waits for both
                      agent  ← LLM call with context as an untrusted <retrieved_document>
                       │       block ahead of the question (79); retried on transient failure (AGENT_RETRY_POLICY);
                       │       may call ask_clarification (pattern 27)
