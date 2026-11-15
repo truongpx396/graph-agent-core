@@ -1,0 +1,31 @@
+meta {
+  name: Read a turn again
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/chat/stream/{{requestId}}
+  body: none
+  auth: inherit
+}
+
+headers {
+  Accept: text/event-stream
+  ~Last-Event-ID: 
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("the finished turn is read again, ending with done", function () {
+    expect(res.getBody()).to.include('"type": "done"');
+  });
+}
+
+docs {
+  Reads the turn `Send a message` started (its `X-Request-Id`, saved as `requestId`) from the start. After a dropped connection, set `Last-Event-ID` to the `id:` of the last frame
+  received (enable the header above) and only later events are sent. The events stay for five minutes after the last one; after that, or for an id that is not the caller's, the answer is a 404.
+}

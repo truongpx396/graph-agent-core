@@ -1,7 +1,8 @@
 """The server-sent events the streaming routes send, as models for the OpenAPI document and for nothing else.
 
-A stream is a sequence of `data: <one JSON object>` frames and nothing else (no `event:` or `id:` field), and each object's `type` says
-which. OpenAPI 3.1 has no way to say "a stream of these", so the document puts the schema of ONE event under `text/event-stream`, which is
+A stream is a sequence of `data: <one JSON object>` frames, and each object's `type` says which. A chat stream's frames also carry an `id:` (the position a client
+sends back as `Last-Event-ID` to read on after a dropped connection) and the stream sends the SSE comment `: keepalive` while it is silent; an ingest stream's frames
+have neither. No stream has an `event:` field. Standard SSE parsers ignore comments and fields they do not use. OpenAPI 3.1 has no way to say "a stream of these", so the document puts the schema of ONE event under `text/event-stream`, which is
 what 3.2's `itemSchema` says properly; the route's description says so too.
 
 Nothing builds an event through these models: events are plain dicts made in a hot loop (a `token` per token) in

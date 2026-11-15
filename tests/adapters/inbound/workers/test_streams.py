@@ -16,13 +16,15 @@ STREAM, GROUP = "agent:requests:test", "workers-test"
 class TestPublishResult:
     """An answer of 500 tokens was 1,500 sequential round trips: the cancel check, an XADD and an EXPIRE for each event (PRODUCTION_REVIEW.md R08, step 1)."""
 
-    async def test_an_event_and_its_expiry_are_one_pipelined_round_trip(self):
+    async def test_an_event_and_the_expiry_of_its_stream_and_its_owner_are_one_pipelined_round_trip(self):
+        """The second EXPIRE keeps the conversation a request id belongs to alive as long as the stream is (what authorizes `GET /chat/stream/{request_id}`, R13)."""
         client = FakeRedis()
 
         await streams.publish_result(client, "req-1", {"type": "token", "content": "hi"})
 
-        assert client.pipeline_runs == [(True, ["xadd", "expire"])]
+        assert client.pipeline_runs == [(True, ["xadd", "expire", "expire"])]
         assert client.expiries["agent:results:req-1"] == streams.RESULTS_STREAM_TTL_SECONDS
+        assert client.expiries["agent:request_thread:req-1"] == streams.RESULTS_STREAM_TTL_SECONDS
         assert len(client.streams["agent:results:req-1"]) == 1
 
     async def test_every_event_of_a_turn_is_one_round_trip_and_the_ttl_is_refreshed_on_each(self):
@@ -31,7 +33,7 @@ class TestPublishResult:
         for event in ({"type": "token", "content": "a"}, {"type": "token", "content": "b"}, {"type": "done"}):
             await streams.publish_result(client, "req-2", event)
 
-        assert client.pipeline_runs == [(True, ["xadd", "expire"])] * 3
+        assert client.pipeline_runs == [(True, ["xadd", "expire", "expire"])] * 3
 
     async def test_the_ingest_workers_publisher_is_the_same(self):
         from app.adapters.inbound.workers import ingest_streams
