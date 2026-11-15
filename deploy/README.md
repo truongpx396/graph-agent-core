@@ -540,6 +540,29 @@ Tried on real containers with the shipped image: after those steps a stream entr
 
 **Not done:** a password (`requirepass`) for either Redis. Neither publishes a port in production, so it is defence in depth, and it is optional in the work order; it would mean `REDIS_URL=redis://:<password>@redis:6379` in every service that reads it, `AUTHLIMIT_REDIS_URL` and the exporter included.
 
+## Learning from production answers
+
+Two advisory signals, both from real traffic (PRODUCTION_REVIEW.md R28; the offline tier, `make eval` and promptfoo, stays the gate).
+
+**Ratings.** `POST /chat/feedback` stores a thumbs up or down and an optional comment on one answer, for the signed-in person's own conversation (anyone else's is a 404). It is counted as `agent_feedback_total{rating}` (a person changing their mind replaces their rating and is not counted twice) and kept in `chat_feedback` for a reviewer to read; nothing the agent does depends on it,
+and the comment is never logged. **An existing deployment needs the table once**: `/health/ready` warns that it is missing and names the script. Apply it:
+
+```
+dc exec -T postgres psql -U langfuse -d postgres -f /docker-entrypoint-initdb.d/26-chat-feedback.sql      # idempotent
+```
+
+The web page and the CLI have no thumbs yet, and a rating is not yet attached to a trace as a score: that waits for traces in production (R17 part 2). Read the ratings with SQL, for example `SELECT rating, count(*) FROM chat_feedback WHERE created_at > now() - interval '7 days' GROUP BY 1`.
+
+**The answer sample.** `make answer-sample` (`ARGS="--date YYYY-MM-DD"`; yesterday UTC by default) reads up to `ANSWER_SAMPLE_SIZE` (50) random conversations that were last active that day and runs the grounded-claims checks the graph runs on every turn (`count_ungrounded_claims`, `find_likely_uncited`, `find_likely_misattributed`) over each one's final answer and citations, from the checkpoint. It calls no model.
+It exports **counts**, `agent_answer_sample_total{outcome=judged|no_citations|unreadable}` and `agent_answer_sample_finding_total{finding=ungrounded_marker|uncited|misattributed}`, so a rate is `finding / judged`. Nothing alerts on them: the checks are heuristics tuned on small models, a trend to watch and not a verdict. Cron, once you have decided:
+
+```
+30 4 * * * cd /opt/graph-agent-core && docker compose --project-directory . -f deploy/compose/docker-compose.prod.yml run --rm --no-deps -T api python -m scripts.jobs.answer_sample
+```
+
+**It reads answers across tenants.** Like the retention sweep it is an operator job, never reachable from a request, but unlike it, it reads CONTENT: the final answer and its citations of each sampled conversation. It emits and logs no text, tenant, person or thread id (tested, including the log records' structured fields). If your data policy does not allow an operator job to read answers, leave it unscheduled, or set `ANSWER_SAMPLE_TENANTS` to the tenants that agree.
+A conversation counts as the day's if its last message was that day, and only its LAST turn is judged.
+
 ## Trimming conversations
 
 **`make checkpoint-sweep`** deletes a conversation (every checkpoint of it, and its row in the session directory) `CHECKPOINT_RETENTION_DAYS` after its last message. **The default is 0, which is off**:

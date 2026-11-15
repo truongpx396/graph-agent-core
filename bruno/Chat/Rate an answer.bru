@@ -1,0 +1,30 @@
+meta {
+  name: Rate an answer
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/chat/feedback
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "thread_id": "{{threadId}}",
+    "rating": "up",
+    "message_index": 1,
+    "comment": "Correct and easy to follow."
+  }
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Thumbs up or down on one answer, with an optional comment. Advisory: it is counted and stored for a reviewer to read, and nothing the agent does depends on it.
+  The conversation must be the caller's (anyone else's is a 404). Identify the answer by `message_index` (the `index` in `Session messages`) or by `request_id` (the
+  `X-Request-Id` of the response that carried it; saved by `Send a message` as `requestId`). Rating the same answer again replaces the earlier rating.
+}

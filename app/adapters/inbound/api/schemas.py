@@ -2,9 +2,9 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 
 from app.core.config import (
     CHAT_IMAGE_MAX_CHARS,
@@ -95,6 +95,24 @@ class IngestUploadResult(BaseModel):
             "independently; see ingest_upload's own docstring."
         ),
     )
+
+
+class FeedbackRequest(BaseModel):
+    thread_id: str = Field(..., min_length=1, max_length=THREAD_ID_MAX_LENGTH, description="The conversation the answer is in. It must be the caller's own.")
+    rating: Literal["up", "down"] = Field(..., description="Thumbs up or thumbs down.")
+    comment: str | None = Field(None, max_length=1000, description="Optional words about the answer. Stored for a reviewer to read; never shown to the agent.")
+    message_index: int | None = Field(
+        None, ge=0, description="The answer's place in the transcript (`index` in `GET /chat/sessions/{thread_id}/messages`). Give this or `request_id`."
+    )
+    request_id: str | None = Field(
+        None, min_length=1, max_length=64, description="The `X-Request-Id` of the response that carried the answer. Used when `message_index` is not given."
+    )
+
+    @model_validator(mode="after")
+    def _the_answer_is_identified(self) -> "FeedbackRequest":
+        if self.message_index is None and not self.request_id:
+            raise ValueError("give message_index or request_id: the answer being rated has to be identified")
+        return self
 
 
 class ErrorResponse(BaseModel):

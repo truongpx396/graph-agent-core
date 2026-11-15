@@ -495,6 +495,28 @@ agent_checkpoint_sweep_deleted_total = Counter(
     "Conversations removed by scripts/jobs/checkpoint_sweep.py: their checkpoints and their session row (PRODUCTION_REVIEW.md R11)",
 )
 
+agent_feedback_total = Counter(
+    "agent_feedback_total",
+    "New ratings of an answer by the person who read it (app/agent/runtime/feedback.py); a rating that REPLACES the same person's earlier one is not counted again. "
+    "Advisory (PRODUCTION_REVIEW.md R28)",
+    ["rating"],
+)  # rating: up | down
+
+agent_answer_sample_total = Counter(
+    "agent_answer_sample_total",
+    "Conversations the daily sampling job read, by what became of each (scripts/jobs/answer_sample.py): judged (the answer had citations and was checked), "
+    "no_citations (a general-knowledge or calculator answer: nothing to check), unreadable (no final answer in the saved state). Advisory (PRODUCTION_REVIEW.md R28)",
+    ["outcome"],
+)  # outcome: judged | no_citations | unreadable
+
+agent_answer_sample_finding_total = Counter(
+    "agent_answer_sample_finding_total",
+    "Findings of the grounded-claims checks over the sampled answers: ungrounded_marker (a [n] no source offered), uncited (a source used without its marker), "
+    "misattributed (a marker on a sentence unrelated to that source). Divide by agent_answer_sample_total{outcome=\"judged\"} for a rate. Heuristics tuned on small "
+    "models: a trend, not a verdict (PRODUCTION_REVIEW.md R28)",
+    ["finding"],
+)  # finding: ungrounded_marker | uncited | misattributed
+
 agent_moderation_total = Counter(
     "agent_moderation_total",
     "Input moderation screens by outcome (app/core/moderation.py)",

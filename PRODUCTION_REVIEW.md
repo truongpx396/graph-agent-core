@@ -152,7 +152,7 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R25 | A pool hands out a connection that died while idle | P2 | S | read from code | | open |
 | R26 | Backups are a paragraph, not a job; no restore drill | P2 | M | read from code | | done (the job, a verified download and a performed drill; the drill found that production's Postgres could not initialise a new volume, now fixed; the end-to-end recovery time is not measured; not run on a droplet) |
 | R27 | A transcript is read whole | P2 | S | read from code | | done |
-| R28 | Nothing learns from production answers | P2 | M | from the field | R17 | open |
+| R28 | Nothing learns from production answers | P2 | M | from the field | R17 | done (ratings and the answer sample, both advisory; no thumbs in the web page or CLI yet; a rating is not attached to a trace, which waits for R17 part 2) |
 | R29 | Retrieval runs on every turn, after the router instead of beside it | P1 | M | read from code; reproduced (parallel join) | R17 | done (the parallel step and the `prefetch` switch; no domain is switched, see pattern 20) |
 | R30 | A second model call for follow-ups holds back `done` | P1 | S | read from code | | done |
 | R31 | Old tool results are re-sent to the model on every later call | P1 | S | read from code | | done |

@@ -4,6 +4,7 @@ import pytest
 from app.ports.outbound import checkpointing as checkpointing_ports
 from app.ports.outbound import classification as classification_ports
 from app.ports.outbound import cost as cost_ports
+from app.ports.outbound import feedback as feedback_ports
 from app.ports.outbound import models as model_ports
 from app.ports.outbound import retrieval as retrieval_ports
 from app.ports.outbound import screening as screening_ports
@@ -18,6 +19,7 @@ from tests.fakes.cost import (
     NoGatewayModelCatalog,
 )
 from tests.fakes.documents import InMemoryDocumentWriter, InMemoryObjectStore
+from tests.fakes.feedback import InMemoryFeedbackStore
 from tests.fakes.ml import ConstantScorer, NoAnswerClassifier
 from tests.fakes.sessions import InMemoryCheckpointing, InMemorySessionStore
 
@@ -31,6 +33,7 @@ FAKES = [
     (retrieval_ports.document_writer, InMemoryDocumentWriter),
     (storage_ports.object_store, InMemoryObjectStore),
     (session_ports.session_store, InMemorySessionStore),
+    (feedback_ports.feedback_store, InMemoryFeedbackStore),
     (checkpointing_ports.checkpointing, InMemoryCheckpointing),
 ]
 
