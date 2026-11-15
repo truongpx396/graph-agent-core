@@ -208,8 +208,9 @@ flowchart TD
     check_semantic_cache -->|"miss"| compact_history
     compact_history -->|"summary too large"| context_window_exceeded
     compact_history --> route_model
-    route_model --> retrieve_context
-    retrieve_context --> to_agent["agent (second half)"]
+    compact_history --> retrieve_context
+    route_model --> to_agent["agent (second half)"]
+    retrieve_context --> to_agent
 
     classDef gate stroke-width:3px
     classDef exit stroke-dasharray:4 3
