@@ -20,7 +20,7 @@ from app.platform import sql_store
 
 REPO = Path(__file__).resolve().parents[2]
 SCANNED = [*sorted((REPO / "app").rglob("*.py")), *sorted((REPO / "packages" / "billing" / "src").rglob("*.py"))]
-POOL_CLASSES = {"AsyncConnectionPool", "ConnectionPool"}
+POOL_CLASSES = {"AsyncConnectionPool", "ConnectionPool", "SelfHealingPool"}
 # What a direct connect() is called on; `client.connect(host)` and the like are not database connections.
 CONNECT_RECEIVERS = {"psycopg", "psycopg.AsyncConnection", "psycopg.Connection", "AsyncConnection", "Connection"}
 
@@ -106,7 +106,7 @@ class _FakePool:
 
 
 async def test_the_appdata_pool_is_sized_by_the_setting_and_does_not_prepare_statements(monkeypatch):
-    monkeypatch.setattr(sql_store, "AsyncConnectionPool", _FakePool)
+    monkeypatch.setattr(sql_store, "SelfHealingPool", _FakePool)
     monkeypatch.setattr(sql_store, "APPDATA_POOL_MAX_SIZE", 7)
     monkeypatch.setattr(sql_store, "_pool", None)
 
@@ -114,6 +114,7 @@ async def test_the_appdata_pool_is_sized_by_the_setting_and_does_not_prepare_sta
 
     assert _FakePool.seen["max_size"] == 7
     assert _FakePool.seen["kwargs"] == {"prepare_threshold": None}
+    assert _FakePool.seen["name"] == "appdata", "the pool's name is the label of agent_db_pool_connection_lost_total"
 
 
 async def test_the_checkpointer_pool_does_not_prepare_statements_and_keeps_its_other_settings(monkeypatch):
@@ -126,7 +127,8 @@ async def test_the_checkpointer_pool_does_not_prepare_statements_and_keeps_its_o
         async def setup(self):
             pass
 
-    monkeypatch.setattr(checkpointing, "AsyncConnectionPool", _FakePool)
+    monkeypatch.setattr(checkpointing, "SelfHealingPool", _FakePool)
+    monkeypatch.setattr(checkpointing, "AsyncConnectionPool", _FakePool)  # the `isinstance` that picks the lock workaround
     monkeypatch.setattr(checkpointing, "AsyncPostgresSaver", FakeSaver)
 
     await checkpointing.PgCheckpointing().open()
@@ -134,3 +136,4 @@ async def test_the_checkpointer_pool_does_not_prepare_statements_and_keeps_its_o
     kwargs = _FakePool.seen["kwargs"]
     assert kwargs["prepare_threshold"] is None, "0 means 'prepare on the first run', the opposite of what a transaction pooler needs"
     assert kwargs["autocommit"] is True and "row_factory" in kwargs
+    assert _FakePool.seen["name"] == "checkpointer"

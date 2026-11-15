@@ -149,7 +149,7 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R22 | A hung worker is never restarted | P2 | S | read from code | | done |
 | R23 | The answer cache ignores the domain; its expiry is set in a second call | P2 | S | read from code | | done |
 | R24 | Two error events carry no `code` | P2 | S | read from code | | done |
-| R25 | A pool hands out a connection that died while idle | P2 | S | read from code | | open |
+| R25 | A pool hands out a connection that died while idle | P2 | S | read from code | | done (not with `check=`: measured, it stalls the first request 30 s after a restart; the pool's own `check()` once after the first failure instead, see pattern 102) |
 | R26 | Backups are a paragraph, not a job; no restore drill | P2 | M | read from code | | done (the job, a verified download and a performed drill; the drill found that production's Postgres could not initialise a new volume, now fixed; the end-to-end recovery time is not measured; not run on a droplet) |
 | R27 | A transcript is read whole | P2 | S | read from code | | done |
 | R28 | Nothing learns from production answers | P2 | M | from the field | R17 | done (ratings and the answer sample, both advisory; no thumbs in the web page or CLI yet; a rating is not attached to a trace, which waits for R17 part 2) |

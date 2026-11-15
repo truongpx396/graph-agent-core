@@ -524,6 +524,6 @@ def test_there_are_files_for_these_rules_to_be_about():
 def test_the_platform_plumbing_is_in_its_own_package_and_is_an_adapter():
     """The folder says what the test enforces: nothing in `app/core` opens a connection, and `app/platform` is the adapter side of the kernel."""
     platform = sorted(p.stem for p in (REPO / "app/platform").glob("*.py") if p.stem != "__init__")
-    assert platform == ["internal_identity", "job_runtime", "logging_config", "profiling", "redis_client", "sql_store", "telemetry", "worker_heartbeat"]
+    assert platform == ["internal_identity", "job_runtime", "logging_config", "profiling", "redis_client", "self_healing_pool", "sql_store", "telemetry", "worker_heartbeat"]
     assert {ring_of(f"app/platform/{stem}.py") for stem in platform} == {"adapter"}
     assert not any((REPO / "app/core" / f"{stem}.py").exists() for stem in platform)

@@ -23,6 +23,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from app.core.config import CHECKPOINTER_DATABASE_URL, CHECKPOINTER_POOL_MAX_SIZE
+from app.platform.self_healing_pool import SelfHealingPool
 from app.platform.sql_store import POOLER_SAFE_CONNECTION_KWARGS
 
 
@@ -32,8 +33,9 @@ class PgCheckpointing:
         self._saver: AsyncPostgresSaver | None = None  # kept so `delete_thread` uses the pool `open` made, on the loop it opened them on
 
     async def open(self) -> AsyncPostgresSaver:
-        pool = AsyncConnectionPool(
+        pool = SelfHealingPool(
             CHECKPOINTER_DATABASE_URL,
+            name="checkpointer",
             min_size=1,
             max_size=CHECKPOINTER_POOL_MAX_SIZE,
             # Was prepare_threshold=0, which prepares every statement on its first run: the opposite of what a transaction pooler needs.
