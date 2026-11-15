@@ -13,11 +13,14 @@ and `assert_safe_url` for sync ones. Name resolution is blocking `getaddrinfo`; 
 coroutine it froze the event loop for the lookup's duration (measured: a 0.5 s resolver stalled a heartbeat
 0.51 s), so the async entry point resolves through the loop's own resolver, which runs it on a worker thread.
 
-Disclosed limitation: this validates resolution now, but the caller (httpx / headless browser) resolves and
-connects separately a moment later, so a DNS-rebinding attack could slip through that gap. Closing it means
-pinning the connection to the address validated here, real added complexity neither caller takes on. Also
-unbounded: how long a lookup may take (it no longer blocks the loop, but a hung resolver holds the calling
-task and a worker thread).
+DNS rebinding: a check that only validates resolution leaves a gap, because the caller resolves again a moment later
+and a name that answers differently the second time reaches an internal address. `resolve_checked_async` closes it for
+a caller that can connect to an address of its choosing: it returns the checked addresses, and the plain-GET page fetcher
+(`app/adapters/outbound/web/page_fetch.py`) connects to one of THOSE (TLS still verified against the real hostname).
+**Still open for the headless browser** (`crawl4ai/web_crawler.py`): the browser resolves by itself and follows redirects
+and loads sub-resources of its own, so its isolation belongs to the network (`deploy/README.md`, "The crawler's network"),
+not to this module. Also unbounded: how long a lookup may take (it no longer blocks the loop, but a hung resolver holds
+the calling task and a worker thread).
 """
 import asyncio
 import ipaddress
@@ -84,13 +87,20 @@ def assert_safe_url(url: str) -> None:
     _check_resolved_addresses(addr_info)
 
 
-async def assert_safe_url_async(url: str) -> None:
-    """`assert_safe_url` for async callers: identical verdicts, but the name is
-    resolved on the loop's resolver thread so a slow lookup cannot freeze every
-    other turn, stream and health check running on this event loop."""
+async def resolve_checked_async(url: str) -> list[str]:
+    """The addresses `url`'s host resolves to, once EVERY one has passed the guard, in the order the resolver gave them and without repeats. Raises
+    `UnsafeURLError` otherwise. A caller that connects to one of these (instead of resolving the name again) cannot be rebound to an internal
+    address between the check and the connection (PRODUCTION_REVIEW.md R20). The name is resolved on the loop's resolver thread so a slow lookup
+    cannot freeze every other turn, stream and health check running on this event loop."""
     hostname = _hostname_or_refuse(url)
     try:
         addr_info = await asyncio.get_running_loop().getaddrinfo(hostname, None)
     except socket.gaierror as exc:
         raise UnsafeURLError(f"could not resolve host {hostname!r}: {exc}") from exc
     _check_resolved_addresses(addr_info)
+    return list(dict.fromkeys(str(sockaddr[0]) for _family, _type, _proto, _canonname, sockaddr in addr_info))
+
+
+async def assert_safe_url_async(url: str) -> None:
+    """`assert_safe_url` for async callers: identical verdicts (`resolve_checked_async` without the addresses)."""
+    await resolve_checked_async(url)

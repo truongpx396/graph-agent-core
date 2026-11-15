@@ -373,8 +373,9 @@ ingest_url("https://example.com/article", ctx)     # SSRF-guarded fetch
 ingest_text("some pasted text", title="My Notes", ctx=ctx)
 ```
 
-`ingest_url` is https-only, refuses any non-globally-routable address and follows no redirects (disclosed gap: a DNS-rebinding
-race between validation and fetch). Production uploads (`POST /ingest/upload`) go to object storage, then the ingest-worker pool.
+`ingest_url` is https-only, refuses any non-globally-routable address, follows no redirects and connects to the address it checked (so a name that
+answers differently the second time cannot reach an internal address), reading at most the size limit. The headless crawler is the open part: it resolves
+names and follows redirects itself, so its containment is its network (`deploy/README.md`, "The crawler's network"). Production uploads (`POST /ingest/upload`) go to object storage, then the ingest-worker pool.
 
 ### Embedding models, and swapping them
 

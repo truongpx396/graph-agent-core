@@ -455,6 +455,36 @@ Everything about credit billing (turning it on, changing a wallet, reconciling t
 [`packages/billing/docs/RUNBOOK.md`](../packages/billing/docs/RUNBOOK.md). Deployment specifics that are this repository's: apply the package's schema to an existing volume with `make billing-migrate`
 (`make billing-migrate-status ARGS=--check` is the deploy gate), before the code that uses it, and start its workers from the app image as shown above.
 
+## The crawler's network
+
+The crawler (`crawl4ai`, headless Chromium; `app/adapters/outbound/crawl4ai/web_crawler.py`) is **not in the production stack, and must not be added to it as it is.** The app checks the first
+URL it hands over (`app/core/url_safety.py`); the browser then follows redirects and loads sub-resources by itself, so a page that passes the check can send it to `http://qdrant:6333`,
+`http://litellm:4000` or the droplet's metadata address. Isolation for that is the network's job, not the application's (PRODUCTION_REVIEW.md R20, specs/009 A1).
+
+What the development compose file does (`deploy/compose/docker-compose.yml`): `crawl4ai` is alone on its own `crawler` network, and the three app roles that call it (`api`, `agent-worker`,
+`ingest-worker`) are on `crawler` and on `default`. Checked on a real Docker daemon with stand-in containers: a container on `crawler` alone cannot resolve or reach one on `default`, by name
+or by address; an app container on both reaches both.
+
+What that does **not** do, and what to add before the crawler runs anywhere that matters:
+
+1. **Name and pin the network's subnet** in the production compose file (`ipam: config: [{subnet: 172.30.50.0/24}]`), so a firewall rule can name it. Publish no port for the crawler; the app reaches it by its
+   service name, and `CRAWL4AI_API_TOKEN` is set (crawl4ai 0.9+ refuses to listen beyond loopback without one).
+2. **Block what a bridge network still reaches.** A bridge network has internet egress, and on a cloud droplet that includes the provider's metadata service (`169.254.169.254`: instance credentials)
+   and the VPC's private addresses. Docker offers no option for this; it is a host firewall rule in the `DOCKER-USER` chain, scoped to the crawler's subnet, for example:
+
+   ```
+   sudo iptables -I DOCKER-USER -s 172.30.50.0/24 -d 169.254.169.254 -j DROP
+   sudo iptables -I DOCKER-USER -s 172.30.50.0/24 -d 10.0.0.0/8 -j DROP
+   sudo iptables -I DOCKER-USER -s 172.30.50.0/24 -d 172.16.0.0/12 ! -d 172.30.50.0/24 -j DROP
+   sudo iptables -I DOCKER-USER -s 172.30.50.0/24 -d 192.168.0.0/16 -j DROP
+   ```
+
+   Make them persistent (`iptables-persistent`, or a systemd unit that runs before Docker) and confirm from inside the container (`docker exec <crawler> curl -m 3 http://169.254.169.254/`) that each one times out.
+   **These rules were not run on a droplet from here**: treat them as the shape of the control, and test them where they will apply.
+3. **The development stack is weaker than this.** It publishes its infrastructure on the host's ports (Qdrant, Redis, Postgres and others), and a bridge network reaches the host through its gateway
+   (`host.docker.internal` on Docker Desktop), so on a developer's machine the crawler can still reach those published ports. Do not point the dev crawler at a page you do not trust.
+4. The application's own check on the first URL stays: it is the first line, not the only one.
+
 ## Security scanning in front of all this
 
 - **Checkov** (`.checkov.yaml`, CI's `checkov` job, `make checkov`) scans
