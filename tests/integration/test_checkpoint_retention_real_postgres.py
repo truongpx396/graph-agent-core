@@ -18,8 +18,10 @@ from langgraph.checkpoint.base import empty_checkpoint
 
 from app.adapters.outbound.postgres import checkpointing as pg_checkpointing
 from app.adapters.outbound.postgres import sessions as pg_sessions
+from app.agent.runtime import sessions
 from app.agent.runtime.retention import sweep_inactive_conversations
 from app.ports.outbound.checkpointing import checkpointing
+from app.ports.outbound.jobs import turn_queue
 from app.ports.outbound.sessions import session_store
 from tests.containers import ensure_pgbouncer, ensure_postgres
 
@@ -117,3 +119,39 @@ async def test_the_sweep_over_the_real_session_directory_and_saver_removes_what_
     async with get_connection() as conn:
         left = [row[0] for row in await (await conn.execute("SELECT thread_id FROM chat_sessions WHERE tenant = %s", (tenant,))).fetchall()]
     assert left == [fresh]
+
+
+class _IdleQueue:
+    async def is_thread_busy(self, thread_id: str) -> bool:
+        return False
+
+
+async def test_the_owner_deletes_a_conversation_through_the_real_stores_and_nobody_else_can(adapter, urls, monkeypatch):
+    """`DELETE /chat/sessions/{id}` end to end below the HTTP layer: the real session directory and the real saver. The row delete is scoped to tenant, person
+    and domain in SQL, so a caller who is not the owner removes nothing even if an id reached it (R11, part 2)."""
+    @asynccontextmanager
+    async def get_connection():
+        async with await psycopg.AsyncConnection.connect(urls["appdata"], autocommit=True) as conn:
+            yield conn
+
+    monkeypatch.setattr(pg_sessions, "get_connection", get_connection)
+    thread = f"owned-{uuid.uuid4().hex}"
+    alice = {"tenant": "acme", "principal": "alice", "claims": {}}
+    mallory = {"tenant": "acme", "principal": "mallory", "claims": {}}
+    async with get_connection() as conn:
+        await conn.execute("INSERT INTO chat_sessions (thread_id, tenant, principal, title, domain) VALUES (%s, 'acme', 'alice', 't', 'ecorp')", (thread,))
+    await _write_thread(adapter._saver, thread)
+
+    store = pg_sessions.PgSessionStore()
+    with session_store.overriding(store), checkpointing.overriding(adapter), turn_queue.overriding(_IdleQueue()):
+        assert await store.delete("acme", "mallory", thread, "ecorp") is False, "the SQL itself refuses a row that is not the caller's"
+        assert await store.delete("globex", "alice", thread, "ecorp") is False
+        assert await store.delete("acme", "alice", thread, "sales") is False
+        assert await sessions.delete_session(mallory, thread) is False
+        assert all(count > 0 for count in (await _rows(urls["direct"], thread)).values()), "nothing reached the checkpointer for a caller who is not the owner"
+
+        assert await sessions.delete_session(alice, thread) is True
+
+    assert await _rows(urls["direct"], thread) == dict.fromkeys(TABLES, 0)
+    async with get_connection() as conn:
+        assert await (await conn.execute("SELECT 1 FROM chat_sessions WHERE thread_id = %s", (thread,))).fetchone() is None

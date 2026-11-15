@@ -3,7 +3,7 @@
   "info": {
     "title": "Graph Agent Core API",
     "description": "A multi-tenant, multi-domain LangGraph RAG agent. A client starts a turn, reads its events as they stream, answers an approval the\nagent asks for, and lists its own past sessions. One graph serves every domain; `X-Domain` picks which (default `ecorp`).\n\n**Who is calling.** Behind the front door (the authlimit service) a client sends `Authorization: Bearer <access token>`; the door\nverifies it and gives the API a signed identity, so the tenant and person are never taken from a header or a body. Only a deployment run\nwith `AUTH_MODE=headers` (a developer's machine, the tests) reads `X-Tenant-Id` and `X-Principal-Id` as sent. Everything a caller reads or\nchanges is scoped to its tenant and person.\n\n**Errors.** A refusal the application makes is the canonical envelope `{\"code\", \"message\", \"details\"}`; switch on `code`, not on the\ntext. A turn's own failures arrive as an `error` event on its stream, in the same shape.\n\n**Streams.** `POST /chat/stream/queued` and `GET /ingest/stream/{job_id}` answer with server-sent events, which OpenAPI describes only\nas a `text/event-stream` body; the event vocabulary is in the first route's description.\n",
-    "version": "3.1.0"
+    "version": "3.2.0"
   },
   "servers": [
     {
@@ -676,6 +676,121 @@
                     "$ref": "#/components/schemas/SessionSummary"
                   },
                   "title": "Response Chat Sessions Chat Sessions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/sessions/{thread_id}": {
+      "delete": {
+        "tags": [
+          "sessions"
+        ],
+        "summary": "Chat Delete Session",
+        "description": "Delete one of the caller's own sessions: its saved conversation (every checkpoint) and its entry in the session list.\n\n`session_belongs_to` is checked first, as on the GET routes, and is the whole authorization boundary: the saved conversation has no tenant, person or\ndomain of its own. A session with a turn running on it is refused (409, `thread_busy`) rather than pulled out from under the turn; one paused at an\napproval is deleted, and the approval can no longer be given. A message sent on the id afterwards starts a new conversation. This does not remove the\ncopies of the text that Langfuse or the gateway's logs may hold.",
+        "operationId": "chat_delete_session_chat_sessions__thread_id__delete",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "x-tenant-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Header mode only: the tenant, as sent. Ignored in identity mode.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Header mode only: the tenant, as sent. Ignored in identity mode."
+          },
+          {
+            "name": "x-principal-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Header mode only: the principal, as sent. Ignored in identity mode.",
+              "title": "X-Principal-Id"
+            },
+            "description": "Header mode only: the principal, as sent. Ignored in identity mode."
+          },
+          {
+            "name": "x-internal-identity",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identity mode only: the front door's signed identity. Never send it yourself; the front door overwrites it.",
+              "title": "X-Internal-Identity"
+            },
+            "description": "Identity mode only: the front door's signed identity. Never send it yourself; the front door overwrites it."
+          },
+          {
+            "name": "x-domain",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Which domain (app/domains/registry.py) this turn runs against. Read by every chat endpoint below (all of them queued).",
+              "default": "ecorp",
+              "title": "X-Domain"
+            },
+            "description": "Which domain (app/domains/registry.py) this turn runs against. Read by every chat endpoint below (all of them queued)."
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "No such session for the caller (another person's session reads the same as an unknown one)."
+          },
+          "409": {
+            "description": "`thread_busy`: a turn is running on this session. Try again when it has finished or been cancelled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1639,6 +1754,36 @@
         "title": "DoneEvent",
         "description": "Terminal: the turn finished."
       },
+      "ErrorCode": {
+        "type": "string",
+        "enum": [
+          "timeout",
+          "moderation_blocked",
+          "checkpoint_lost",
+          "checkpoint_incompatible",
+          "pending_approval",
+          "unattended_pause",
+          "cancelled",
+          "cost_ceiling_exceeded",
+          "tenant_budget_exceeded",
+          "personal_budget_exceeded",
+          "budget_check_unavailable",
+          "insufficient_credits",
+          "provider_budget_exceeded",
+          "model_unpriced",
+          "embedding_identity_mismatch",
+          "thread_busy",
+          "no_progress",
+          "worker_lost",
+          "worker_unreachable",
+          "unauthenticated",
+          "forbidden",
+          "rate_limited",
+          "auth_unavailable",
+          "internal"
+        ],
+        "title": "ErrorCode"
+      },
       "ErrorEvent": {
         "properties": {
           "type": {
@@ -1693,6 +1838,39 @@
         ],
         "title": "ErrorEvent",
         "description": "Terminal. `code`, `message` and `details` are the canonical error envelope (app/core/errors.py): switch on `code`. Every error the API and the\nworkers send carries it (a queued job nobody took is `worker_unreachable`, a resume with nothing to resume is `checkpoint_lost` or\n`checkpoint_incompatible`); the fields stay optional in the schema so a client written before that still validates."
+      },
+      "ErrorResponse": {
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode",
+            "description": "What went wrong, as a stable code a client can switch on."
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Written for the person; never an exception's text."
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Details",
+            "description": "Extra fields for some codes."
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ErrorResponse",
+        "description": "The envelope the front door answers with, for an error the API itself reports over plain HTTP (the streaming routes report theirs as an `error` event)."
       },
       "FollowupsEvent": {
         "properties": {

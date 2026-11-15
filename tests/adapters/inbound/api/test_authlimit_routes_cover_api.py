@@ -35,6 +35,7 @@ EXPECTED_CLASS = {
     ("DELETE", "/ingest/documents"): "upload",  # it lists a tenant's stored files: charged like the upload it undoes
     ("POST", "/chat/cancel"): "cancel",
     ("GET", "/chat/sessions"): "read",
+    ("DELETE", "/chat/sessions/{thread_id}"): "read",  # one indexed lookup and two small deletes, owner-scoped: as cheap as the GETs beside it, and throttling it would break "clear my history"
     ("GET", "/chat/sessions/{thread_id}/messages"): "read",
     ("GET", "/chat/sessions/{thread_id}/pending_approval"): "read",
     ("GET", "/usage"): "read",

@@ -93,6 +93,11 @@ class TurnQueue(Protocol):
         """Flags the turn streaming on `thread_id` to stop at its next check. Short-lived."""
         ...
 
+    async def is_thread_busy(self, thread_id: str) -> bool:
+        """Whether a worker holds `thread_id`'s conversation lock, that is, a turn is running on it. A conversation paused at an approval is not busy (the worker
+        releases the lock when it publishes the pause). A lock that outlived a crashed worker reads as busy until it expires (`THREAD_LOCK_TTL_SECONDS`)."""
+        ...
+
     def read_results(self, request_id: str, *, first_event_deadline_seconds: float | None = None) -> AsyncIterator[dict[str, Any]]:
         """Yields each event of `request_id`'s turn, in order, until a terminal one. `first_event_deadline_seconds` bounds only the wait for the FIRST
         event: if nobody ever publishes, it yields one `error` event and ends instead of hanging."""

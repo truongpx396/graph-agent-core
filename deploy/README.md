@@ -462,6 +462,8 @@ stopped at its ceiling of 50,000 conversations (run it again). Nothing schedules
 
 (`-T` because cron has no terminal, and `api` because it is the service the other one-off commands in this file run from. That line was written from the compose file and the other commands here, not run on a droplet: try it by hand with `--dry-run` before relying on it.)
 
+A person can also delete one of their own conversations with `DELETE /chat/sessions/{id}` (it refuses while a turn is running on it). That route acts only for the signed-in person: there is no operator route that deletes one named person's conversations on request, so a deletion request has this sweep (everything past a number of days) or the person's own delete to rely on.
+
 It does not touch the usage events (`make usage-events-sweep`), the wallet, a person's cross-session memories, the gateway's spend logs (`store_prompts_in_spend_logs` is off in production) or Langfuse, and it
 does not trim old checkpoints inside a conversation that is still in use. A conversation that gets a message while the sweep runs keeps its row, but may lose its older history. One that was paused at an
 approval is deleted with the rest, and the approval can no longer be given, which runs nothing.
