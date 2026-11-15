@@ -1489,6 +1489,73 @@ class TestSubagentGraphCache:
             ("support", "researcher"),
         }
 
+    async def test_a_finished_subagent_run_leaves_nothing_in_its_checkpointer(self):
+        """Real bug (reproduced on langgraph 0.2.76: 201 threads held after 200 one-shot runs): every run uses a
+        fresh thread id, the cached graph's MemorySaver lives as long as the worker, and nothing removed a
+        thread from it, so each delegation kept its whole run in memory for good (PRODUCTION_REVIEW.md R02)."""
+        registry = {"researcher": (_fake_subagent_record(), ("calculator",))}
+        fake_llm = _RecordingFakeLLM(*[AIMessage(content=f"answer {i}, long enough.") for i in range(3)])
+
+        for i in range(3):
+            await run_subagent_impl(
+                "researcher", f"task {i}", _subagent_cfg(), registry=registry, llm=fake_llm,
+                domain="ecorp", use_cache=True,
+            )
+
+        saver = subagent_tools._subagent_graph_cache[("ecorp", "researcher")].checkpointer
+        assert dict(saver.storage) == {}
+        assert dict(saver.writes) == {}
+        assert dict(saver.blobs) == {}
+
+    async def test_a_subagent_run_that_times_out_or_fails_also_leaves_nothing_behind(self, monkeypatch):
+        class _SlowLLM:
+            async def ainvoke(self, messages, *a, **kw):
+                await asyncio.sleep(0.5)
+                return AIMessage(content="too slow")
+
+        class _BrokenLLM:
+            async def ainvoke(self, messages, *a, **kw):
+                raise RuntimeError("the model is down")
+
+        registry = {"researcher": (_fake_subagent_record(), ())}
+        monkeypatch.setattr(subagent_tools, "SUBAGENT_TIMEOUT_SECONDS", 0.05)
+        with pytest.raises(TimeoutError):
+            await run_subagent_impl(
+                "researcher", "task", _subagent_cfg(), registry=registry, llm=_SlowLLM(),
+                domain="ecorp", use_cache=True,
+            )
+        saver = subagent_tools._subagent_graph_cache[("ecorp", "researcher")].checkpointer
+        assert dict(saver.storage) == {}
+
+        subagent_tools.reset_subagent_graph_cache()
+        monkeypatch.setattr(subagent_tools, "SUBAGENT_TIMEOUT_SECONDS", 5)
+        with pytest.raises(RuntimeError, match="the model is down"):
+            await run_subagent_impl(
+                "researcher", "task", _subagent_cfg(), registry=registry, llm=_BrokenLLM(),
+                domain="ecorp", use_cache=True,
+            )
+        saver = subagent_tools._subagent_graph_cache[("ecorp", "researcher")].checkpointer
+        assert dict(saver.storage) == {}
+
+    async def test_deleting_a_finished_run_leaves_a_concurrent_runs_thread_alone(self):
+        """Only the run's own thread id is removed: the cached graph is shared by every delegation in the process."""
+        registry = {"researcher": (_fake_subagent_record(), ("calculator",))}
+        # The cached graph keeps the first call's model, so it needs a reply for each run.
+        fake_llm = _RecordingFakeLLM(*[AIMessage(content=f"answer {i}, long enough.") for i in range(2)])
+        await run_subagent_impl(
+            "researcher", "warm the cache", _subagent_cfg(), registry=registry, llm=fake_llm,
+            domain="ecorp", use_cache=True,
+        )
+        saver = subagent_tools._subagent_graph_cache[("ecorp", "researcher")].checkpointer
+        saver.storage["someone-elses-running-thread"]["ns"]["id"] = ("kept",)
+
+        await run_subagent_impl(
+            "researcher", "another", _subagent_cfg(), registry=registry, llm=fake_llm,
+            domain="ecorp", use_cache=True,
+        )
+
+        assert list(saver.storage) == ["someone-elses-running-thread"]
+
     async def test_without_use_cache_the_graph_cache_is_never_touched(self):
         registry = {"researcher": (_fake_subagent_record(), ("calculator",))}
         fake_llm = _RecordingFakeLLM(AIMessage(content="an answer, long enough to pass."))

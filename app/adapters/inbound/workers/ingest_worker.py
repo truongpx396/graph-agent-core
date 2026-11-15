@@ -56,7 +56,7 @@ from app.adapters.inbound.workers.streams import (
     republish_job,
     trim_stale_entries,
 )
-from app.bootstrap import verify_wired, wire
+from app.bootstrap import close_adapters, verify_wired, wire
 from app.core import metrics
 from app.core.config import (
     INGEST_WORKER_MAX_CONCURRENCY,
@@ -351,6 +351,8 @@ async def run() -> None:
     await reclaim_task  # stop_event already set above, so this returns promptly
     await release_consumer(client, INGEST_REQUESTS_STREAM, INGEST_CONSUMER_GROUP, CONSUMER_NAME)  # see agent_worker.py's shutdown
     await client.aclose()
+    # The Qdrant client the ingestor wrote through (same reasoning as agent_worker.py's shutdown).
+    await close_adapters()
 
 
 if __name__ == "__main__":

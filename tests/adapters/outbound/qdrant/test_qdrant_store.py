@@ -14,6 +14,8 @@ repo's established pattern for exercising async code from a plain
 `def test_...`. `embed_text`/`embed_sparse` mocks stay plain sync lambdas
 (those two legs are unchanged); `rerank` mocks are small `async def`s.
 """
+import asyncio
+import weakref
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -24,7 +26,7 @@ from app.adapters.outbound.qdrant import qdrant_store
 from app.core.config import COLLECTION
 from app.core.security import DEFAULT_POLICY, AccessScope
 from tests.adapters.outbound.qdrant.fake_qdrant import FakeQdrant
-from tests.conftest import TEST_EMBEDDING_IDENTITY
+from tests.conftest import REAL_QDRANT_GET_CLIENT, TEST_EMBEDDING_IDENTITY
 
 # Every access goes through the `<collection>-live` alias and the physical collection is named after the embedding identity
 # (specs/014, qdrant_store's docstring), so what reaches the client is the alias for reads and writes and the hashed name for creation.
@@ -314,3 +316,69 @@ class TestScopeFilter:
     def test_no_scope_means_no_tenant_predicate_so_only_a_catalog_may_ask(self):
         """`scope=None` is for the skills and subagents catalogs, which hold no tenant data (`DocumentIndex.search_catalog`)."""
         assert qdrant_store._build_filter(None, None) is None
+
+
+class _CountingClient:
+    """Stands in for AsyncQdrantClient: no network, and it counts what was built and closed."""
+
+    built: list["_CountingClient"] = []
+
+    def __init__(self, **kwargs):
+        self.kwargs, self.closed = kwargs, False
+        _CountingClient.built.append(self)
+
+    async def close(self):
+        self.closed = True
+
+
+def _real_client_getter(monkeypatch):
+    """The real `get_client` (the autouse guard replaces it), over a stand-in client class and an empty cache."""
+    _CountingClient.built = []
+    monkeypatch.setattr(qdrant_store, "AsyncQdrantClient", _CountingClient)
+    monkeypatch.setattr(qdrant_store, "_clients", weakref.WeakKeyDictionary())
+    monkeypatch.setattr(qdrant_store, "get_client", REAL_QDRANT_GET_CLIENT)
+
+
+async def test_the_client_is_built_once_per_loop_not_once_per_call(monkeypatch):
+    """Real cost (qdrant-client 1.19.0): every construction starts a thread that makes a blocking version-check
+    request and builds a new connection pool, and `get_client()` ran for every search, upsert and probe, so each
+    one paid a thread, a request and a TCP handshake for a client nobody closed (PRODUCTION_REVIEW.md R03)."""
+    _real_client_getter(monkeypatch)
+
+    first, second = qdrant_store.get_client(), qdrant_store.get_client()
+
+    assert first is second
+    assert len(_CountingClient.built) == 1
+
+
+async def test_another_event_loop_gets_its_own_client(monkeypatch):
+    """A connection belongs to the loop that opened it, and the one-shot scripts and the test suite run more than one loop per process."""
+    _real_client_getter(monkeypatch)
+    here = qdrant_store.get_client()
+
+    elsewhere = await asyncio.to_thread(lambda: asyncio.run(_client_on_a_fresh_loop()))
+
+    assert elsewhere is not here
+    assert len(_CountingClient.built) == 2
+
+
+async def _client_on_a_fresh_loop():
+    return qdrant_store.get_client()
+
+
+async def test_close_client_closes_and_forgets_it(monkeypatch):
+    _real_client_getter(monkeypatch)
+    client = qdrant_store.get_client()
+
+    await qdrant_store.close_client()
+
+    assert client.closed is True
+    assert qdrant_store.get_client() is not client  # the next call builds a fresh one, as after a restart
+
+
+async def test_close_client_with_nothing_open_is_a_no_op(monkeypatch):
+    _real_client_getter(monkeypatch)
+
+    await qdrant_store.close_client()
+
+    assert _CountingClient.built == []
