@@ -340,6 +340,11 @@ snapshot. The observability droplet is never backed up — it holds metrics/
 logs with their own bounded retention (Loki 7d, Prometheus 15d), not data
 worth restoring.
 
+**Vector payload indexes (once per existing deployment)**: every search filters by `tenant`, `kind`, `owner`, `topic` and `created_at`, and a collection
+built before the payload indexes existed has none, so its filtered search slows as it grows. `make ingest` and `make reembed` build indexed collections;
+for the one you already have, run `make qdrant-indexes` once (`ssh` in, then `dc run --rm api python -m scripts.tools.qdrant_indexes`, or from a checkout
+that reaches Qdrant). It is online, safe to repeat, and reads and writes no point.
+
 **A hung worker**: the agent and ingest workers bind no port, so each touches a heartbeat file from its read loop and its reclaim loop
 (`app/platform/worker_heartbeat.py`) and the compose health check fails when one is more than two minutes old (a stuck event loop, a
 deadlock). `dc ps` then shows the worker `unhealthy` and the alert `AgentWorkerLoopStalled` fires when no replica of that queue has
