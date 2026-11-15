@@ -34,6 +34,7 @@ func TestEveryRouteTheAPIServesIsInTheDefaultTable(t *testing.T) {
 		{"POST", "/chat/stream/queued", Turn},
 		{"POST", "/chat/resume", Turn},
 		{"POST", "/ingest/upload", Upload},
+		{"DELETE", "/ingest/documents", Upload},
 		{"POST", "/chat/cancel", Cancel},
 		{"GET", "/chat/sessions", Read},
 		{"GET", "/chat/sessions/abc-123/messages", Read},

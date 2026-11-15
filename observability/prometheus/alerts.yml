@@ -389,6 +389,20 @@ groups:
           summary: "Semantic cache lookups are erroring"
           description: "agent_semantic_cache_total{outcome=\"error\"} — Redis Stack is likely unhealthy."
 
+      - alert: IngestCleanupFailing
+        expr: increase(agent_ingest_cleanup_failed_total[30m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "A re-uploaded document's older version could not be removed"
+          description: >-
+            agent_ingest_cleanup_failed_total increased: an upload wrote a document's new
+            version and then failed to delete the chunks of the version it replaces, so
+            retrieval can answer, and cite, from either. The new text is live and the job
+            reported success; nothing else tells anyone. The next upload of the same file
+            name retries the removal, and so does DELETE /ingest/documents. Look for
+            Qdrant errors in the ingest worker's `ingest_cleanup_failed` log lines.
+
       - alert: CheckpointIssues
         expr: increase(agent_checkpoint_issue_total[15m]) > 0
         labels:

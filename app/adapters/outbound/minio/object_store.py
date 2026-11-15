@@ -96,6 +96,15 @@ def download_bytes(key: str) -> bytes:
         response.release_conn()
 
 
+def list_keys(prefix: str) -> list[str]:
+    """Every key under `prefix` in the shared bucket. Raises on an unreachable MinIO (a caller deleting by name must not report "nothing there" for a store it
+    could not read). An empty bucket, or one not yet created, is an empty list."""
+    client = get_client()
+    if not client.bucket_exists(MINIO_BUCKET):
+        return []
+    return [obj.object_name for obj in client.list_objects(MINIO_BUCKET, prefix=prefix, recursive=True) if obj.object_name]
+
+
 class MinioObjectStore:
     """The `ObjectStore` adapter (`app/ports/outbound/storage.py`). The module's functions are looked up at call time, which is how their tests patch them."""
 
@@ -107,3 +116,6 @@ class MinioObjectStore:
 
     def download_bytes(self, key: str) -> bytes:
         return download_bytes(key)
+
+    def list_keys(self, prefix: str) -> list[str]:
+        return list_keys(prefix)

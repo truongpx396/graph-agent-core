@@ -768,11 +768,12 @@ sequenceDiagram
         W->>E: embed_documents (dense), sparse vectors for the whole document
         W->>R: progress: chunks embedded of total
     end
-    W->>Q: upsert points tagged tenant, kind document and topic, ids derived from content
+    W->>Q: upsert points tagged tenant, kind document, topic, ingest id and the time the job was queued; ids derived from content and the job id
+    W->>Q: then delete the same source's chunks from OLDER ingests of that tenant (best effort, counted when it fails)
     W->>R: done with the chunk count, then XACK and XDEL
     R-->>A: progress events
     A-->>C: SSE progress, then done
-    Note over W,Q: content-derived ids make a re-run an overwrite, so a crashed ingest job is safely retried
+    Note over W,Q: ids come from content and the job id, so a re-run of the SAME job is an overwrite (a crashed job is safely retried) and two uploads of one name never share an id.<br/>A newer upload's chunks are never removed by an older one, so overlapping uploads cannot leave no document; an older job that finishes last leaves its chunks until the next upload
 ```
 
 - The ingest queue and the turn queue are separate streams and consumer groups, so a burst of uploads cannot starve chat.

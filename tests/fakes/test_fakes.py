@@ -4,7 +4,9 @@ import pytest
 from app.ports.outbound import classification as classification_ports
 from app.ports.outbound import cost as cost_ports
 from app.ports.outbound import models as model_ports
+from app.ports.outbound import retrieval as retrieval_ports
 from app.ports.outbound import screening as screening_ports
+from app.ports.outbound import storage as storage_ports
 from app.ports.outbound.cost import Override
 from tests.fakes.conformance import mismatches
 from tests.fakes.cost import (
@@ -13,6 +15,7 @@ from tests.fakes.cost import (
     InMemoryUsageEventStore,
     NoGatewayModelCatalog,
 )
+from tests.fakes.documents import InMemoryDocumentWriter, InMemoryObjectStore
 from tests.fakes.ml import ConstantScorer, NoAnswerClassifier
 
 FAKES = [
@@ -22,6 +25,8 @@ FAKES = [
     (model_ports.model_catalog, NoGatewayModelCatalog),
     (classification_ports.route_classifier, NoAnswerClassifier),
     (screening_ports.injection_scorer, ConstantScorer),
+    (retrieval_ports.document_writer, InMemoryDocumentWriter),
+    (storage_ports.object_store, InMemoryObjectStore),
 ]
 
 

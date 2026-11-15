@@ -103,6 +103,17 @@ class DocumentWriter(Protocol):
         Raises when the collection was built under another embedding identity."""
         ...
 
+    async def delete_older_versions(self, *, tenant: str, source: str, version: float) -> int:
+        """Removes `tenant`'s document chunks of `source` that an ingest OLDER than `version` wrote (epoch seconds; a chunk with no version at all predates the
+        field and counts as older), and returns how many. A chunk of `version` itself or of a newer ingest is never touched, so two ingests of one source that
+        overlap in time cannot remove each other's writes. Always scoped to `tenant` and to documents (never memories) (PRODUCTION_REVIEW.md R18)."""
+        ...
+
+    async def delete_document(self, *, tenant: str, source: str) -> int:
+        """Removes every chunk of `source` for `tenant` (documents only) and returns how many; 0 when there was none. The tenant is the caller's, from the
+        verified identity, never from a request (Principle I)."""
+        ...
+
 
 class AnswerCache(Protocol):
     async def get(self, ctx: SecurityCtx | None, query: str, *, domain: str) -> tuple[str, list[dict[str, Any]]] | None:

@@ -32,6 +32,7 @@ EXPECTED_CLASS = {
     ("POST", "/chat/stream/queued"): "turn",
     ("POST", "/chat/resume"): "turn",
     ("POST", "/ingest/upload"): "upload",
+    ("DELETE", "/ingest/documents"): "upload",  # it lists a tenant's stored files: charged like the upload it undoes
     ("POST", "/chat/cancel"): "cancel",
     ("GET", "/chat/sessions"): "read",
     ("GET", "/chat/sessions/{thread_id}/messages"): "read",
@@ -105,11 +106,17 @@ def test_fastapis_own_pages_are_listed_as_read_not_left_to_burn_a_persons_turn_b
         assert classify(method, path) == ("read", True), f"{method} {path} is unlisted, so the front door would treat it as a turn"
 
 
-def test_only_the_three_turn_creating_routes_are_limited():
-    """The same set the app's own limiter covered before spec 018, and now the only routes the front door charges to a bucket."""
+def test_only_the_routes_that_start_work_are_limited():
+    """The routes the front door charges to a bucket: the two that start a turn, the upload, and the delete of an uploaded document (it lists a tenant's stored
+    files and writes to two stores, so it is charged like the upload it undoes; PRODUCTION_REVIEW.md R18). Every other route is verified and never charged."""
     limited = {r for r in _documented_routes() if classify(*r)[0] in TABLE["limits"] and classify(*r)[0] != "mcp"}
 
-    assert limited == {("POST", "/chat/stream/queued"), ("POST", "/chat/resume"), ("POST", "/ingest/upload")}
+    assert limited == {
+        ("POST", "/chat/stream/queued"),
+        ("POST", "/chat/resume"),
+        ("POST", "/ingest/upload"),
+        ("DELETE", "/ingest/documents"),
+    }
 
 
 def test_the_port_of_the_matcher_agrees_with_the_go_fallback_for_a_route_nobody_listed():

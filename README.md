@@ -323,7 +323,8 @@ suspecting the app.
 | `POST /chat/resume` · `POST /chat/cancel` | Approve/reject a paused tool call · stop a run |
 | `GET /chat/sessions` · `…/{id}/messages` · `…/{id}/pending_approval` | Conversation history and any pending approval |
 | `GET /usage` | The tenant's cost, `budgets` (each limit with spent, remaining, `resets_at`) and `credits` (the wallet, or `null` when off or none) |
-| `POST /ingest/upload` · `GET /ingest/stream/{job_id}` | Upload PDF/DOCX/text to the ingest worker · follow its progress |
+| `POST /ingest/upload` · `GET /ingest/stream/{job_id}` | Upload PDF/DOCX/text to the ingest worker · follow its progress. Uploading a file name again **replaces** the earlier upload of that name |
+| `DELETE /ingest/documents` | Delete an uploaded document by file name: its chunks and its stored files, for the caller's tenant only |
 
 Interactive docs at `/docs`. The caller is stamped into a `SecurityCtx` that scopes everything the request can see or touch;
 `AUTH_MODE` decides where it comes from:
@@ -352,7 +353,7 @@ curl -s -N -X POST http://localhost:8000/chat/stream/queued \
 - ✋ **Approvals:** `POST /chat/resume` approves or rejects an `approval_required` event; `POST /chat/cancel` stops the run.
 - 🧵 **Threads:** reuse a `thread_id` to continue a conversation (Langfuse groups traces by it). It belongs to whoever sends on it first (tenant + principal + domain); anyone else gets the same 404 an unknown id gets, so switching identity needs a new one. `telegram:<chat id>` ids are reserved. The check lives at the API; the worker doesn't repeat it (pattern 17).
 - 🔁 **Resubmits:** an identical `(thread_id, message, images)` within `CHAT_SUBMIT_DEDUP_TTL_SECONDS` (10) streams the first attempt's turn.
-- 🚦 **Limits:** the API doesn't limit turns or uploads; the [front door](#front-door-authlimit) does, as a token bucket per tenant and per person on `POST /chat/stream/queued`, `/chat/resume` and `/ingest/upload` (defaults in `services/authlimit/routes.json`: 30 a minute per tenant, 10 per person). ⚠️ **The production Caddyfile doesn't route through it yet** (spec 018), so production currently has no limit on turns or uploads. The CLI and the Telegram channel are counted like the web UI: each person has their own bucket, and a refusal reaches them as a message with the wait time. The API's own limit is per source address on the payment webhook (`BILLING_WEBHOOK_RATE_LIMIT_PER_MINUTE`). CORS: `CORS_ALLOWED_ORIGINS`.
+- 🚦 **Limits:** the API doesn't limit turns or uploads; the [front door](#front-door-authlimit) does, as a token bucket per tenant and per person on `POST /chat/stream/queued`, `/chat/resume`, `/ingest/upload` and `DELETE /ingest/documents` (defaults in `services/authlimit/routes.json`: 30 a minute per tenant, 10 per person). ⚠️ **The production Caddyfile doesn't route through it yet** (spec 018), so production currently has no limit on turns or uploads. The CLI and the Telegram channel are counted like the web UI: each person has their own bucket, and a refusal reaches them as a message with the wait time. The API's own limit is per source address on the payment webhook (`BILLING_WEBHOOK_RATE_LIMIT_PER_MINUTE`). CORS: `CORS_ALLOWED_ORIGINS`.
 - 📈 **Metrics** are pushed over OTLP; the API has no `/metrics` route.
 - 🖥️ **Web UI:** `make serve`, then http://localhost:8000/. It drives the full approve/reject flow and has a real-browser test (`tests/live/test_chat_ui.py`, pattern 48). Behind the front door (`make authlimit-up-app`) it signs in through Casdoor; `make authlimit-web-check` drives that in a browser.
 
@@ -375,6 +376,10 @@ ingest_text("some pasted text", title="My Notes", ctx=ctx)
 
 `ingest_url` is https-only, refuses any non-globally-routable address and follows no redirects (disclosed gap: a DNS-rebinding
 race between validation and fetch). Production uploads (`POST /ingest/upload`) go to object storage, then the ingest-worker pool.
+A file name identifies a document within a tenant: uploading it again writes the new chunks, then removes the earlier upload's (only after the new ones are stored, so a failed
+re-upload leaves the old version serving), and `DELETE /ingest/documents` removes a document and its stored files. Two people in one tenant who upload different files
+under one name replace each other. An answer the semantic cache already holds may quote the old text for up to `SEMANTIC_CACHE_TTL_SECONDS` (an hour); it is not invalidated
+by content. There is no route that lists a tenant's documents.
 
 ### Embedding models, and swapping them
 

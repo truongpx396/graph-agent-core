@@ -3,7 +3,7 @@
   "info": {
     "title": "Graph Agent Core API",
     "description": "A multi-tenant, multi-domain LangGraph RAG agent. A client starts a turn, reads its events as they stream, answers an approval the\nagent asks for, and lists its own past sessions. One graph serves every domain; `X-Domain` picks which (default `ecorp`).\n\n**Who is calling.** Behind the front door (the authlimit service) a client sends `Authorization: Bearer <access token>`; the door\nverifies it and gives the API a signed identity, so the tenant and person are never taken from a header or a body. Only a deployment run\nwith `AUTH_MODE=headers` (a developer's machine, the tests) reads `X-Tenant-Id` and `X-Principal-Id` as sent. Everything a caller reads or\nchanges is scoped to its tenant and person.\n\n**Errors.** A refusal the application makes is the canonical envelope `{\"code\", \"message\", \"details\"}`; switch on `code`, not on the\ntext. A turn's own failures arrive as an `error` event on its stream, in the same shape.\n\n**Streams.** `POST /chat/stream/queued` and `GET /ingest/stream/{job_id}` answer with server-sent events, which OpenAPI describes only\nas a `text/event-stream` body; the event vocabulary is in the first route's description.\n",
-    "version": "3.0.0"
+    "version": "3.1.0"
   },
   "servers": [
     {
@@ -1228,6 +1228,107 @@
           }
         }
       }
+    },
+    "/ingest/documents": {
+      "delete": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "Ingest Delete Document",
+        "description": "Delete an uploaded document from the tenant's knowledge base: every chunk retrieval could return, and the stored copies of the file.\n\nThe document is named by the file name it was uploaded under. The tenant is the signed-in caller's (never a field of the request), and both what is deleted\nfrom the vector store and which stored files are matched are derived from it by code (Principle I, Principle III). A file name identifies a document\nwithin a tenant: anyone in the tenant who uploads a name replaces, and can delete, the one before it.\n\nRepeating the request is safe: a second one finds nothing and answers 404. A 502 means the chunks are gone but the stored files could not be listed;\nsend it again. An answer already cached for up to an hour (`SEMANTIC_CACHE_TTL_SECONDS`) may still quote the document; it is not invalidated by content.\nThis is a route for a signed-in person, deliberately not an agent tool.",
+        "operationId": "ingest_delete_document_ingest_documents_delete",
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Header mode only: the tenant, as sent. Ignored in identity mode.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Header mode only: the tenant, as sent. Ignored in identity mode."
+          },
+          {
+            "name": "x-principal-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Header mode only: the principal, as sent. Ignored in identity mode.",
+              "title": "X-Principal-Id"
+            },
+            "description": "Header mode only: the principal, as sent. Ignored in identity mode."
+          },
+          {
+            "name": "x-internal-identity",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identity mode only: the front door's signed identity. Never send it yourself; the front door overwrites it.",
+              "title": "X-Internal-Identity"
+            },
+            "description": "Identity mode only: the front door's signed identity. Never send it yourself; the front door overwrites it."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestDeleteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestDeleteResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This tenant has no document, and no stored upload, under that file name."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1639,6 +1740,50 @@
         },
         "type": "object",
         "title": "HealthResponse"
+      },
+      "IngestDeleteRequest": {
+        "properties": {
+          "filename": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Filename",
+            "description": "The file name the document was uploaded under, as `IngestUploadResult.filename` returned it (any directory part is dropped, as an upload drops it). The tenant is the caller's own and is never read from the request."
+          }
+        },
+        "type": "object",
+        "required": [
+          "filename"
+        ],
+        "title": "IngestDeleteRequest"
+      },
+      "IngestDeleteResult": {
+        "properties": {
+          "filename": {
+            "type": "string",
+            "title": "Filename",
+            "description": "The file name that was deleted, after any directory part was dropped."
+          },
+          "chunks_removed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Chunks Removed",
+            "description": "How many of the tenant's chunks of this document were removed from the knowledge base."
+          },
+          "objects_removed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Objects Removed",
+            "description": "How many stored copies of the uploaded file were removed (one per upload of this name, best effort: a copy that could not be removed is not counted out)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "filename",
+          "chunks_removed",
+          "objects_removed"
+        ],
+        "title": "IngestDeleteResult"
       },
       "IngestDoneEvent": {
         "properties": {

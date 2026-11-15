@@ -14,10 +14,11 @@ API_TITLE = "Graph Agent Core API"
 # The CONTRACT's version, not a release number: nothing else in the repository is versioned. Raise it with every change to the contract
 # (`make openapi-version` fails one that did not) and its major with a break (`make openapi-breaking` fails a break that did not); which
 # step is the author's call. CI's `openapi` job runs both on every pull request.
-API_VERSION = "3.0.0"
+API_VERSION = "3.1.0"
 # 2.0.0: the document was corrected (it said the four streaming routes returned application/json).
 # 2.1.0: the transcript can be read a page at a time (`limit`, `before`, and an `index` on each message).
 # 3.0.0: a chat request is bounded: `message` (32,000 characters), `thread_id` (1 to 200, on chat, resume and cancel), `images` (4, each 7,000,000 characters).
+# 3.1.0: a document can be deleted (`DELETE /ingest/documents`).
 
 API_DESCRIPTION = """\
 A multi-tenant, multi-domain LangGraph RAG agent. A client starts a turn, reads its events as they stream, answers an approval the

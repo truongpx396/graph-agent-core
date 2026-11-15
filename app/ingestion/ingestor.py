@@ -17,6 +17,7 @@ import asyncio
 import hashlib
 import html.parser
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
@@ -46,7 +47,7 @@ _MAX_URL_BYTES = 2_000_000  # 2 MB — bounded fetch size, part of the SSRF/DoS 
 _POINT_ID_NAMESPACE = uuid.UUID("6f0d6b1e-6d0f-4b6e-9f0a-7e9c1a2b3c4d")
 
 
-def _content_point_id(tenant: str, source: str, index: int, text: str) -> str:
+def _content_point_id(tenant: str, source: str, index: int, text: str, ingest_id: str | None = None) -> str:
     """A point id derived entirely from WHAT is being written, not a random
     draw — re-ingesting byte-identical content (a retried/reclaimed job, or
     a client's double-submitted upload) always recomputes the exact same
@@ -62,9 +63,23 @@ def _content_point_id(tenant: str, source: str, index: int, text: str) -> str:
     correctness boundary Qdrant itself enforces (payload-filtered, not a
     separate collection per tenant), so the id space must keep it apart on
     its own.
+
+    `ingest_id`, for an ingest that REPLACES its source, is folded in too, so
+    two ingests of one source never share an id: with identical chunks in
+    both, a shared id would let one ingest overwrite the other's version stamp
+    and the older one's cleanup delete chunks the newer one still needs. The
+    same ingest repeated (a reclaimed job keeps its id) still lands on the
+    same ids. Without it the ids are what they always were.
     """
     digest = hashlib.sha256(text.encode()).hexdigest()
-    return uuid.uuid5(_POINT_ID_NAMESPACE, f"{tenant}|{source}|{index}|{digest}").hex
+    key = f"{tenant}|{source}|{index}|{digest}" if ingest_id is None else f"{tenant}|{source}|{index}|{digest}|{ingest_id}"
+    return uuid.uuid5(_POINT_ID_NAMESPACE, key).hex
+
+
+def upload_source(filename: str) -> str:
+    """The `source` an uploaded file's chunks carry. One definition for the worker that writes them and the route that deletes them, so the two cannot disagree
+    about which chunks a file name means (the route derives its target from the name, never from a caller-supplied source: Principle III)."""
+    return f"upload:{filename}"
 
 
 class IngestRefusedError(Exception):
@@ -109,9 +124,19 @@ async def ingest_text(
     source: str = "text",
     topic: str | None = None,
     on_progress: Callable[[int, int], Awaitable[None]] | None = None,
+    *,
+    ingest_id: str | None = None,
+    queued_at: float | None = None,
 ) -> int:
     """Chunk, embed and upsert `text` as one or more Qdrant points: the shared core every `ingest_*` entry point
     funnels through. Returns the number of child chunks written (0 for blank text).
+
+    `ingest_id` says "`source` names ONE document, and this ingest is its newest version": the chunks are written under this id, and once they are
+    all written the same source's chunks from OLDER ingests are removed, so an edited document that is uploaded again stops answering with its old
+    text (PRODUCTION_REVIEW.md R18). `queued_at` (epoch seconds, default now) orders versions: the upload worker passes when the job was queued, so a
+    job retried after a crash is not newer than an upload made after it. Not given, the ingest only adds (what `scripts/tools/seed.py` needs: many
+    documents under the one source `sample_docs`). The removal runs only after the upsert succeeded, so a failed re-ingest leaves the old version
+    serving; a failure of the removal itself is counted and logged, not raised, because the new version is already live.
 
     Sparse vectors are computed in one batched call for the whole document (local ONNX, ~0.5s for 5700
     chunks). Dense vectors, the real bottleneck (an HTTP round trip per batch), are embedded
@@ -124,10 +149,10 @@ async def ingest_text(
     directly, since this function and `Embedder`/`DocumentWriter` all run on the caller's event
     loop.
 
-    Safe to call twice with byte-identical `text`/`source`/`ctx`: every point id is derived from that content
-    (`_content_point_id`), so a repeat (a retried ingest job, a double-submitted upload) upserts onto the SAME
-    ids instead of duplicating. That is what lets `ingest_worker.py`'s reclaim loop auto-retry a crashed job
-    instead of only dead-lettering it.
+    Safe to call twice with byte-identical `text`/`source`/`ctx` (and the same `ingest_id`, if one is given): every point id is derived from that
+    content (`_content_point_id`), so a repeat (a retried ingest job) upserts onto the SAME ids instead of duplicating. That is what lets
+    `ingest_worker.py`'s reclaim loop auto-retry a crashed job instead of only dead-lettering it. A double-submitted upload is two jobs, so two
+    `ingest_id`s: both write, and the older one's chunks are then removed (the newer one's never are).
     """
     if not valid_ctx(ctx):
         metrics.agent_ingest_refused_total.labels(reason="no_ctx").inc()
@@ -147,11 +172,12 @@ async def ingest_text(
         if on_progress is not None:
             await on_progress(len(dense_vectors), total)
 
+    version = (queued_at if queued_at is not None else time.time()) if ingest_id is not None else None
     points = []
     i = 0
     for parent in parents:
         for child_text in parent.children:
-            payload = {
+            payload: dict[str, object] = {
                 "text": child_text,
                 "parent_id": parent.parent_id,
                 "parent_text": parent.text,
@@ -163,9 +189,12 @@ async def ingest_text(
             }
             if topic:
                 payload["topic"] = topic
+            if ingest_id is not None:
+                payload["ingest_id"] = ingest_id
+                payload["ingested_at"] = version
             points.append(
                 DocumentPoint(
-                    point_id=_content_point_id(ctx["tenant"], source, i, child_text),
+                    point_id=_content_point_id(ctx["tenant"], source, i, child_text, ingest_id),
                     dense_vector=dense_vectors[i],
                     payload=payload,
                     sparse_vector=sparse_vectors[i] if sparse_vectors is not None else None,
@@ -174,8 +203,25 @@ async def ingest_text(
             i += 1
 
     await document_writer.get().upsert(points)
+    if version is not None:
+        await _remove_older_versions(ctx["tenant"], source, version)
     metrics.agent_ingest_total.labels(source=source.split(":")[0]).inc()
     return len(points)
+
+
+async def _remove_older_versions(tenant: str, source: str, version: float) -> None:
+    """Best effort, after the new version is fully written: the old chunks still answer until this runs, and the next ingest of the source retries it."""
+    try:
+        removed = await document_writer.get().delete_older_versions(tenant=tenant, source=source, version=version)
+    except Exception as exc:  # noqa: BLE001 - the new version is already live; a stuck cleanup must not fail the job that wrote it
+        metrics.agent_ingest_cleanup_failed_total.inc()
+        logger.warning(
+            "ingest_cleanup_failed",
+            extra={"ingest_source": source.split(":")[0], "error_class": type(exc).__name__},
+        )
+        return
+    if removed:
+        logger.info("ingest_replaced_older_version", extra={"ingest_source": source.split(":")[0], "chunks_removed": removed})
 
 
 async def ingest_file(path: str, ctx: SecurityCtx | None, topic: str | None = None) -> int:
@@ -191,7 +237,7 @@ async def ingest_file(path: str, ctx: SecurityCtx | None, topic: str | None = No
         )
     # Off the loop: an upload-sized read inline would stall every other coroutine in the process while it lasts.
     text = await asyncio.to_thread(p.read_text, encoding="utf-8", errors="replace")
-    return await ingest_text(text, title=p.stem, ctx=ctx, source=f"file:{p.name}", topic=topic)
+    return await ingest_text(text, title=p.stem, ctx=ctx, source=f"file:{p.name}", topic=topic, ingest_id=uuid.uuid4().hex)
 
 
 class _TextExtractor(html.parser.HTMLParser):
@@ -261,4 +307,4 @@ async def ingest_url(url: str, ctx: SecurityCtx | None, topic: str | None = None
     else:
         text = page.text
 
-    return await ingest_text(text, title=url, ctx=ctx, source=f"url:{url}", topic=topic)
+    return await ingest_text(text, title=url, ctx=ctx, source=f"url:{url}", topic=topic, ingest_id=uuid.uuid4().hex)
