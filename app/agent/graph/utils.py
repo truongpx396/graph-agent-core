@@ -45,6 +45,10 @@ def instrumented(node_name: str) -> Callable[[F], F]:
     `human_approval`'s `interrupt()` raises `GraphInterrupt` (a `GraphBubbleUp`) to pause the run: normal
     control flow, logged as `node_paused` and re-raised untouched, not `node_failed`.
 
+    `node_started` is DEBUG and the rest are INFO: a turn runs 25 to 30 nodes and logging both ends of each at INFO was
+    that many lines per turn for no more information, since `node_completed` carries the node, the run, the outcome and
+    the duration (PRODUCTION_REVIEW.md R35, part C).
+
     Async-aware: nodes that call an LLM or hit Redis/Qdrant/ml-service (`agent`, `compact_history`,
     `suggest_followups`, `check_semantic_cache`, `retrieve_context`, `write_semantic_cache`, `moderate_input`)
     are `async def`, so their I/O waits on the event loop instead of occupying LangChain's shared default
@@ -59,7 +63,7 @@ def instrumented(node_name: str) -> Callable[[F], F]:
             @functools.wraps(fn)
             async def async_wrapper(state: Any, *args: Any, **kwargs: Any) -> Any:
                 run_id = state.get("run_id", "-") if isinstance(state, dict) else "-"
-                logger.info("node_started", extra={"node": node_name, "run_id": run_id})
+                logger.debug("node_started", extra={"node": node_name, "run_id": run_id})
                 start = time.monotonic()
                 try:
                     result = await fn(state, *args, **kwargs)
@@ -94,7 +98,7 @@ def instrumented(node_name: str) -> Callable[[F], F]:
         @functools.wraps(fn)
         def wrapper(state: Any, *args: Any, **kwargs: Any) -> Any:
             run_id = state.get("run_id", "-") if isinstance(state, dict) else "-"
-            logger.info("node_started", extra={"node": node_name, "run_id": run_id})
+            logger.debug("node_started", extra={"node": node_name, "run_id": run_id})
             start = time.monotonic()
             try:
                 result = fn(state, *args, **kwargs)
