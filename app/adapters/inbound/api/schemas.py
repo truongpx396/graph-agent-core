@@ -96,6 +96,28 @@ class IngestUploadResult(BaseModel):
     )
 
 
+class IngestDeleteRequest(BaseModel):
+    filename: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        description=(
+            "The file name the document was uploaded under, as `IngestUploadResult.filename` returned it (any directory part is dropped, as an upload drops it). "
+            "The tenant is the caller's own and is never read from the request."
+        ),
+    )
+
+
+class IngestDeleteResult(BaseModel):
+    filename: str = Field(..., description="The file name that was deleted, after any directory part was dropped.")
+    chunks_removed: int = Field(..., ge=0, description="How many of the tenant's chunks of this document were removed from the knowledge base.")
+    objects_removed: int = Field(
+        ...,
+        ge=0,
+        description="How many stored copies of the uploaded file were removed (one per upload of this name, best effort: a copy that could not be removed is not counted out).",
+    )
+
+
 class SessionSummary(BaseModel):
     thread_id: str = Field(..., description="Reuse as ChatRequest.thread_id to continue this session.")
     title: str = Field(..., description="The opening message that started this session, truncated.")

@@ -1,13 +1,14 @@
-"""Document upload and its SSE progress.
+"""Document upload, its SSE progress, and document deletion.
 
 Fire-and-forget: `POST /ingest/upload` only gets bytes into object storage and a job onto the
 ingest queue, which is SEPARATE from the chat-turn queue (see app/adapters/outbound/redis/ingest_queue.py);
 parsing and embedding happen in ingest_worker.py. `GET /ingest/stream/{job_id}` relays that job's
-progress.
+progress. `DELETE /ingest/documents` removes a document's chunks and stored files (PRODUCTION_REVIEW.md R18).
 """
 import asyncio
 import json
 import logging
+import re
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -17,7 +18,11 @@ from fastapi.responses import StreamingResponse
 
 from app.adapters.inbound.api.deps import get_ctx
 from app.adapters.inbound.api.events import EventStreamResponse, IngestEvent
-from app.adapters.inbound.api.schemas import IngestUploadResult
+from app.adapters.inbound.api.schemas import (
+    IngestDeleteRequest,
+    IngestDeleteResult,
+    IngestUploadResult,
+)
 from app.core import metrics
 from app.core.config import (
     INGEST_FIRST_RESPONSE_DEADLINE_SECONDS,
@@ -26,7 +31,9 @@ from app.core.config import (
 )
 from app.core.security import SecurityCtx
 from app.ingestion.extractors import EXTRACTORS_BY_SUFFIX
+from app.ingestion.ingestor import upload_source
 from app.ports.outbound.jobs import ingest_queue
+from app.ports.outbound.retrieval import document_writer
 from app.ports.outbound.storage import object_store
 
 logger = logging.getLogger(__name__)
@@ -34,6 +41,16 @@ router = APIRouter(tags=["ingest"])
 
 _UPLOAD_READ_CHUNK_BYTES = 1024 * 1024  # 1 MB per read() call
 _MAX_UPLOAD_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+
+
+def _object_key(tenant: str, job_id: str, filename: str) -> str:
+    return f"{tenant}/{job_id}-{filename}"
+
+
+def _is_upload_of(key: str, tenant: str, filename: str) -> bool:
+    """Whether `key` is an upload of `filename` by `tenant`: exactly `_object_key`'s shape (a job id is `uuid4().hex`). Matching the whole shape, not a
+    prefix or a suffix, is what keeps another tenant's `<tenant>/...` keys, or a file whose name merely ends the same way, out of a delete."""
+    return re.fullmatch(rf"{re.escape(tenant)}/[0-9a-f]{{32}}-{re.escape(filename)}", key) is not None
 
 
 async def _read_bounded(upload: UploadFile, filename: str) -> bytes:
@@ -122,7 +139,7 @@ async def ingest_upload(
             continue
 
         job_id = uuid.uuid4().hex
-        object_key = f"{ctx['tenant']}/{job_id}-{filename}"
+        object_key = _object_key(ctx["tenant"], job_id, filename)
         try:
             # Blocking MinIO I/O off the event loop — this IS the shared
             # SSE-serving process, so a large upload must not stall other requests.
@@ -201,3 +218,42 @@ async def ingest_stream(job_id: str) -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.delete(
+    "/ingest/documents",
+    response_model=IngestDeleteResult,
+    responses={404: {"description": "This tenant has no document, and no stored upload, under that file name."}},
+)
+async def ingest_delete_document(body: IngestDeleteRequest, ctx: SecurityCtx = Depends(get_ctx)) -> IngestDeleteResult:
+    """Delete an uploaded document from the tenant's knowledge base: every chunk retrieval could return, and the stored copies of the file.
+
+    The document is named by the file name it was uploaded under. The tenant is the signed-in caller's (never a field of the request), and both what is deleted
+    from the vector store and which stored files are matched are derived from it by code (Principle I, Principle III). A file name identifies a document
+    within a tenant: anyone in the tenant who uploads a name replaces, and can delete, the one before it.
+
+    Repeating the request is safe: a second one finds nothing and answers 404. A 502 means the chunks are gone but the stored files could not be listed;
+    send it again. An answer already cached for up to an hour (`SEMANTIC_CACHE_TTL_SECONDS`) may still quote the document; it is not invalidated by content.
+    This is a route for a signed-in person, deliberately not an agent tool.
+    """
+    filename = Path(body.filename).name  # the same normalisation an upload applies, so a name that was uploaded can be deleted
+    if not filename:
+        raise HTTPException(status_code=422, detail="filename must name a file")
+    tenant = ctx["tenant"]
+    chunks = await document_writer.get().delete_document(tenant=tenant, source=upload_source(filename))
+    try:
+        keys = await asyncio.to_thread(object_store.get().list_keys, f"{tenant}/")
+    except Exception as exc:
+        # The chunks are already gone: say so, and let the caller repeat the request for the files.
+        logger.warning("ingest_delete_list_failed", extra={"error_class": type(exc).__name__, "chunks_removed": chunks})
+        raise HTTPException(
+            status_code=502,
+            detail="the document's chunks were removed but its stored files could not be listed; send the request again",
+        ) from exc
+    mine = [key for key in keys if _is_upload_of(key, tenant, filename)]
+    for key in mine:
+        await asyncio.to_thread(object_store.get().delete_object, key)
+    if chunks == 0 and not mine:
+        raise HTTPException(status_code=404, detail=f"no document named {filename!r}")
+    logger.info("ingest_document_deleted", extra={"chunks_removed": chunks, "objects_removed": len(mine)})
+    return IngestDeleteResult(filename=filename, chunks_removed=chunks, objects_removed=len(mine))

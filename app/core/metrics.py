@@ -484,6 +484,12 @@ agent_ingest_refused_total = Counter(
     ["reason"],
 )  # reason: no_ctx | bad_file_type | ssrf_blocked | fetch_failed | too_large
 
+agent_ingest_cleanup_failed_total = Counter(
+    "agent_ingest_cleanup_failed_total",
+    "Ingests that wrote a document's new version but could not remove its older one (app/ingestion/ingestor.py): both versions answer until the next ingest of that source "
+    "(PRODUCTION_REVIEW.md R18)",
+)
+
 agent_moderation_total = Counter(
     "agent_moderation_total",
     "Input moderation screens by outcome (app/core/moderation.py)",

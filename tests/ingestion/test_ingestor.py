@@ -359,10 +359,11 @@ class TestIngestUrl:
         html = "<html><body><script>evil()</script><p>Real content here.</p></body></html>"
         captured = {}
 
-        async def fake_ingest_text(text, title, ctx, source="text", topic=None):
+        async def fake_ingest_text(text, title, ctx, source="text", topic=None, *, ingest_id=None):
             captured["text"] = text
             captured["title"] = title
             captured["source"] = source
+            captured["ingest_id"] = ingest_id
             return 1
 
         monkeypatch.setattr(ingestor, "ingest_text", fake_ingest_text)
@@ -373,6 +374,7 @@ class TestIngestUrl:
         assert "Real content here." in captured["text"]
         assert "evil()" not in captured["text"]
         assert captured["source"] == "url:https://example.com/page"
+        assert captured["ingest_id"], "a page is one document: fetching it again replaces the earlier copy (R18)"
 
     async def test_refuses_when_response_exceeds_size_limit(self, monkeypatch):
         monkeypatch.setattr(ingestor, "_assert_safe_url", _allow_any_url)

@@ -64,6 +64,7 @@ from qdrant_client.models import (
     PayloadSchemaType,
     PointStruct,
     Prefetch,
+    Range,
     ScoredPoint,
     SparseVector,
     SparseVectorParams,
@@ -518,6 +519,33 @@ async def count_by_filter(count_filter: Filter) -> int:
     return result.count
 
 
+def document_filter(tenant: str, source: str, *, older_than: float | None = None) -> Filter:
+    """The chunks of one document: `tenant`'s, `kind == "document"` (a memory or a note is never matched, whatever its `source`) and this `source`. With
+    `older_than`, only those an ingest older than that wrote: `ingested_at` below it, or absent (written before the field existed). Written as "NOT at or
+    above" so the absent case matches; a plain range would leave every chunk written before the field existed in place for good (PRODUCTION_REVIEW.md R18).
+
+    Every delete of a document goes through this filter, so the tenant condition cannot be left out of one of them (Principle I)."""
+    must: list[Condition] = [
+        FieldCondition(key="tenant", match=MatchValue(value=tenant)),
+        FieldCondition(key="kind", match=MatchValue(value="document")),
+        FieldCondition(key="source", match=MatchValue(value=source)),
+    ]
+    must_not: list[Condition] = []
+    if older_than is not None:
+        must_not.append(FieldCondition(key="ingested_at", range=Range(gte=older_than)))
+    return Filter(must=must, must_not=must_not or None)
+
+
+async def delete_document_chunks(tenant: str, source: str, *, older_than: float | None = None) -> int:
+    """Deletes what `document_filter` selects and returns how many were there. Qdrant's delete reports no count, so it is counted just before (the
+    accepted race `memory.delete_memories` documents: a chunk written in between is deleted and not counted, never the reverse)."""
+    selector = document_filter(tenant, source, older_than=older_than)
+    count = await count_by_filter(selector)
+    if count:
+        await delete_by_filter(selector)
+    return count
+
+
 def _hit(point: ScoredPoint) -> SearchHit:
     # The client's point id may also be a UUID object; the port carries a str or an int.
     point_id = point.id if isinstance(point.id, str | int) else str(point.id)
@@ -561,3 +589,9 @@ class QdrantDocumentWriter:
         await upsert(
             [build_point(point_id=p.point_id, dense_vector=p.dense_vector, payload=p.payload, sparse_vector=p.sparse_vector) for p in points]
         )
+
+    async def delete_older_versions(self, *, tenant: str, source: str, version: float) -> int:
+        return await delete_document_chunks(tenant, source, older_than=version)
+
+    async def delete_document(self, *, tenant: str, source: str) -> int:
+        return await delete_document_chunks(tenant, source)

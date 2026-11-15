@@ -21,6 +21,7 @@
     { "method": "POST", "pattern": "/chat/stream/queued", "class": "turn" },
     { "method": "POST", "pattern": "/chat/resume", "class": "turn" },
     { "method": "POST", "pattern": "/ingest/upload", "class": "upload" },
+    { "method": "DELETE", "pattern": "/ingest/documents", "class": "upload" },
 
     { "method": "POST", "pattern": "/chat/cancel", "class": "cancel" },
     { "method": "GET", "pattern": "/chat/sessions", "class": "read" },

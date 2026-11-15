@@ -34,6 +34,7 @@ class _FakeMinioClient:
         self.put_calls = []
         self.get_calls = []
         self.removed = []
+        self.list_calls = []
         self._stored: dict[str, bytes] = {}
 
     def bucket_exists(self, name):
@@ -57,6 +58,10 @@ class _FakeMinioClient:
     def remove_object(self, bucket, object_name):
         self.removed.append(object_name)
         self._stored.pop(object_name, None)
+
+    def list_objects(self, bucket, prefix=None, recursive=False, **kw):
+        self.list_calls.append({"bucket": bucket, "prefix": prefix, "recursive": recursive})
+        return [type("Obj", (), {"object_name": name})() for name in self._stored if name.startswith(prefix or "")]
 
 
 @pytest.fixture(autouse=True)
@@ -215,3 +220,40 @@ class TestObjectStoreAdapter:
         assert calls == [
             ("up", "k", b"data", "text/plain"), ("up", "k2", b"d2", "application/octet-stream"), ("del", "k"), ("down", "k"),
         ]
+
+
+class TestListKeys:
+    """PRODUCTION_REVIEW.md R18: a document delete finds a tenant's uploads of one file name by listing, since a key carries the job id that made it."""
+
+    def test_lists_the_keys_under_a_prefix_recursively(self, monkeypatch):
+        fake = _FakeMinioClient()
+        fake._stored = {"acme/a": b"", "acme/b": b"", "globex/a": b""}
+        monkeypatch.setattr(object_store, "get_client", lambda: fake)
+
+        assert object_store.list_keys("acme/") == ["acme/a", "acme/b"]
+        assert fake.list_calls == [{"bucket": object_store.MINIO_BUCKET, "prefix": "acme/", "recursive": True}]
+
+    def test_a_bucket_that_was_never_created_has_no_keys_and_is_not_created_by_a_read(self, monkeypatch):
+        fake = _FakeMinioClient(bucket_exists=False)
+        monkeypatch.setattr(object_store, "get_client", lambda: fake)
+
+        assert object_store.list_keys("acme/") == []
+        assert fake.made_buckets == []
+
+    def test_an_unreachable_store_raises_rather_than_answering_that_nothing_is_there(self, monkeypatch):
+        """A delete that read "no keys" from a store it could not reach would report a clean result for files that are still there."""
+        fake = _FakeMinioClient()
+
+        def unreachable(name):
+            raise ConnectionError("minio is down")
+
+        fake.bucket_exists = unreachable
+        monkeypatch.setattr(object_store, "get_client", lambda: fake)
+
+        with pytest.raises(ConnectionError):
+            object_store.list_keys("acme/")
+
+    def test_the_adapter_class_delegates(self, monkeypatch):
+        monkeypatch.setattr(object_store, "list_keys", lambda prefix: [f"{prefix}x"])
+
+        assert object_store.MinioObjectStore().list_keys("acme/") == ["acme/x"]

@@ -42,7 +42,7 @@ variables, new for each run).
 - **Chat**: send a message (SSE), list this caller's sessions, read one's messages.
 - **Approval**: ask with `require_approval`, look at the pending approval, resume (approve or reject), cancel.
 - **Usage**: the tenant's spend, the caller's limits and the credit wallet.
-- **Ingest**: upload `files/sample.pdf` (PDF or DOCX only) and follow its job. This adds a page to the tenant's corpus.
+- **Ingest**: upload `files/sample.pdf` (PDF or DOCX only), follow its job, then delete it. The upload adds a page to the tenant's corpus; `Delete a document` removes it again (run it only after the job is `done`).
 
 Not here: `GET /` (the web page), `POST /billing/webhooks/{provider}` (the payment provider signs it; it is not in the OpenAPI document),
 the MCP gateway and the ML service.

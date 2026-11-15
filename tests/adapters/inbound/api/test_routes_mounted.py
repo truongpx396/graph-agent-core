@@ -23,6 +23,7 @@ EXPECTED = {
     ("GET", "/chat/sessions/{thread_id}/messages"),
     ("GET", "/chat/sessions/{thread_id}/pending_approval"),
     ("POST", "/ingest/upload"),
+    ("DELETE", "/ingest/documents"),
     ("GET", "/ingest/stream/{job_id}"),
 }
 HTTP_METHODS = {"get", "post", "put", "patch", "delete"}

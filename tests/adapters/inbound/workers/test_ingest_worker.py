@@ -13,6 +13,7 @@ import signal
 import threading
 import time
 
+import pytest
 import redis.asyncio as redis_module
 
 from app.adapters.inbound.workers import ingest_streams, ingest_worker
@@ -38,17 +39,18 @@ def _async_ingest_text_returning(chunk_count):
     return fake_ingest_text
 
 
-def _entry(job_id="j1", filename="report.pdf", object_key="ecorp/abc-report.pdf", topic=None, ctx=None):
-    payload = json.dumps(
-        {
-            "job_id": job_id,
-            "object_key": object_key,
-            "filename": filename,
-            "content_type": "application/pdf",
-            "ctx": ctx or TEST_CTX,
-            "topic": topic,
-        }
-    )
+def _entry(job_id="j1", filename="report.pdf", object_key="ecorp/abc-report.pdf", topic=None, ctx=None, enqueued_at=None):
+    payload = {
+        "job_id": job_id,
+        "object_key": object_key,
+        "filename": filename,
+        "content_type": "application/pdf",
+        "ctx": ctx or TEST_CTX,
+        "topic": topic,
+    }
+    if enqueued_at is not None:
+        payload["enqueued_at"] = enqueued_at
+    payload = json.dumps(payload)
     return "0-1", {"payload": payload}  # never an id FakeRedis hands out (timestamps): an ack now removes the entry by id
 
 
@@ -66,8 +68,8 @@ class TestProcessJob:
 
         monkeypatch.setitem(ingest_worker.EXTRACTORS_BY_SUFFIX, ".pdf", fake_extract_pdf)
 
-        async def fake_ingest_text(text, title, ctx, source, topic=None, on_progress=None):
-            captured.update(text=text, title=title, ctx=ctx, source=source, topic=topic)
+        async def fake_ingest_text(text, title, ctx, source, topic=None, on_progress=None, *, ingest_id=None, queued_at=None):
+            captured.update(text=text, title=title, ctx=ctx, source=source, topic=topic, ingest_id=ingest_id, queued_at=queued_at)
             return 3
 
         monkeypatch.setattr(ingest_worker.ingestor, "ingest_text", fake_ingest_text)
@@ -89,6 +91,40 @@ class TestProcessJob:
         assert events == [{"type": "started"}, {"type": "done", "chunks": 3}]
         assert client.acked == [entry_id]
 
+    async def test_the_upload_replaces_older_versions_ordered_by_when_it_was_queued(self, monkeypatch):
+        """PRODUCTION_REVIEW.md R18: the job id names the ingest (stable across a reclaim, so a retry lands on the same ids) and the API's `enqueued_at` orders it,
+        so a job a crash made run again is not newer than an upload made after it."""
+        captured = {}
+        monkeypatch.setattr(minio_object_store, "download_bytes", lambda key: b"pdf-bytes")
+        monkeypatch.setitem(ingest_worker.EXTRACTORS_BY_SUFFIX, ".pdf", lambda data: "text")
+
+        async def fake_ingest_text(text, title, ctx, source, topic=None, on_progress=None, *, ingest_id=None, queued_at=None):
+            captured.update(source=source, ingest_id=ingest_id, queued_at=queued_at)
+            return 1
+
+        monkeypatch.setattr(ingest_worker.ingestor, "ingest_text", fake_ingest_text)
+        entry_id, fields = _entry(job_id="j-77", filename="handbook.pdf", enqueued_at=1_700_000_000.25)
+
+        await ingest_worker.process_job(FakeRedis(), entry_id, fields)
+
+        assert captured == {"source": "upload:handbook.pdf", "ingest_id": "j-77", "queued_at": 1_700_000_000.25}
+
+    async def test_a_job_queued_before_the_field_existed_is_still_ingested_and_counts_as_queued_now(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(minio_object_store, "download_bytes", lambda key: b"pdf-bytes")
+        monkeypatch.setitem(ingest_worker.EXTRACTORS_BY_SUFFIX, ".pdf", lambda data: "text")
+
+        async def fake_ingest_text(text, title, ctx, source, topic=None, on_progress=None, *, ingest_id=None, queued_at=None):
+            captured.update(ingest_id=ingest_id, queued_at=queued_at)
+            return 1
+
+        monkeypatch.setattr(ingest_worker.ingestor, "ingest_text", fake_ingest_text)
+        entry_id, fields = _entry(job_id="old-job")
+
+        await ingest_worker.process_job(FakeRedis(), entry_id, fields)
+
+        assert captured == {"ingest_id": "old-job", "queued_at": None}
+
     async def test_ingest_texts_progress_callback_publishes_progress_events_in_order(self, monkeypatch):
         """Proves progress events reach the results stream WHILE ingest_text
         is still "running" (simulated here by awaiting on_progress twice
@@ -101,7 +137,7 @@ class TestProcessJob:
         monkeypatch.setattr(minio_object_store, "download_bytes", lambda key: b"pdf-bytes")
         monkeypatch.setitem(ingest_worker.EXTRACTORS_BY_SUFFIX, ".pdf", lambda data: "text")
 
-        async def fake_ingest_text(text, title, ctx, source, topic=None, on_progress=None):
+        async def fake_ingest_text(text, title, ctx, source, topic=None, on_progress=None, **_):
             await on_progress(200, 570)
             await on_progress(570, 570)
             return 570
@@ -637,3 +673,11 @@ class TestReclaimLoop:
         await asyncio.wait_for(task, timeout=1)
 
         assert len(calls) >= 2  # survived the first pass's failure and ran again
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(1700000000.5, 1700000000.5), (1700000000, 1700000000.0), (None, None), ("1700000000", None), (True, None), ([], None)],
+)
+def test_the_queue_time_is_a_number_or_nothing(value, expected):
+    assert ingest_worker._queued_at({"enqueued_at": value} if value is not None else {}) == expected
