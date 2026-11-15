@@ -74,6 +74,16 @@ Neither comes from a formula:
 - **`REQUESTS_STREAM_MAX_AGE_SECONDS`** (86400) is the net under "acknowledge, then delete": a reclaim pass drops requests-stream entries older than that. It must exceed both reclaim idles. The worker deletes each job as it acknowledges it, so in a healthy deployment the stream holds only what is waiting or running; a requests stream whose length keeps growing is the symptom of a worker that does not.
 - **A Redis blip is survived, not fatal.** A failed read is retried after 0.5 s, doubling to 5 s, and counted (`agent_worker_queue_read_failed_total`); a worker told to stop during the wait stops at once.
 
+## Seeing the queue: the three numbers that size the pool
+
+Nothing here scales on queue depth, and until now nothing could even see it. Three measurements say whether the pool is the right size, and each has a panel on the agent dashboard ("Queue & first token") and, for the first two, an alert:
+
+- **`agent_queue_lag{domain}` and `agent_queue_pending{domain}`**: jobs on the requests stream that no worker has been given yet, and jobs a worker has been given and not acknowledged. Every worker's reclaim pass reads them from `XINFO GROUPS` and sets them (`ingest` is the upload queue). A lag that keeps rising means the pool takes jobs slower than they arrive: `AgentQueueBacklog` fires above 20 for five minutes.
+- **`agent_queue_wait_seconds{queue}`**: how long a job sat on the stream before a worker started it, from the `enqueued_at` the API stamps on every job. `AgentQueueWaitHigh` fires when its p95 passes ten seconds, which says the pool is undersized before a lasting backlog does. A job from an older API during a rolling deploy carries no stamp and is not observed; a reclaimed job keeps its first stamp, so a crashed worker is one long wait.
+- **`agent_first_token_seconds`**: from the start of a turn's run to the first token it sends, which is what a person waits before they see anything. It does not include the queue wait; add the two for the whole wait.
+
+These are what the sizing above should be judged against: raise `AGENT_WORKER_MAX_CONCURRENCY` or add replicas when the wait and the lag rise while the workers' own CPU and the model backend have room, and not when the first-token time is the problem (that is the model, not the pool).
+
 ## What one streamed event costs the worker
 
 Every event of a turn (a token, a tool start) was three Redis round trips awaited one after another on the model's own stream: the cancel check (`GET`), then the `XADD` and the `EXPIRE` that put the event on the results stream. An answer of 500 tokens was 1,500 round trips, and each held up the next chunk. Now the `XADD` and the `EXPIRE` are one pipelined `MULTI` (`streams.py::publish_result`; the same for the ingest worker), and the cancel check runs at most every 250 ms and always before the first event, so a stop takes effect within a quarter of a second at an event boundary, as before.

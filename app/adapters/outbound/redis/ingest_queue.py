@@ -46,6 +46,7 @@ async def publish_ingest_request(
             "content_type": content_type,
             "ctx": ctx,
             "topic": topic,
+            "enqueued_at": time.time(),  # the worker observes how long the job waited (agent_queue_wait_seconds, R17)
         }
     )
     await client.xadd(INGEST_REQUESTS_STREAM, {"payload": payload})

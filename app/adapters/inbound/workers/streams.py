@@ -14,6 +14,7 @@ from typing import Any, cast
 
 import redis.asyncio as redis
 
+from app.core import metrics
 from app.ports.outbound.jobs import (
     CONSUMER_GROUP,
     RESULTS_STREAM_TTL_SECONDS,
@@ -302,3 +303,25 @@ async def claim_free_slots(
 def release_slots(semaphore: asyncio.Semaphore, count: int) -> None:
     for _ in range(count):
         semaphore.release()
+
+
+def observe_queue_wait(queue: str, payload: dict[str, Any]) -> None:
+    """How long a job waited on the stream before this worker took it (`agent_queue_wait_seconds`): now minus the `enqueued_at` the API stamped on it. A job
+    with no stamp (published by an older API during a rolling deploy) or a nonsense one is skipped, and a clock a little behind the API's counts as no wait
+    rather than a negative one. Never raises: a measurement must not fail a job (PRODUCTION_REVIEW.md R17)."""
+    enqueued_at = payload.get("enqueued_at")
+    if isinstance(enqueued_at, bool) or not isinstance(enqueued_at, int | float):
+        return
+    metrics.agent_queue_wait_seconds.labels(queue=queue).observe(max(0.0, time.time() - enqueued_at))
+
+
+async def record_queue_depth(client: redis.Redis, stream: str, group: str, domain: str) -> None:
+    """Sets `agent_queue_pending` and `agent_queue_lag` for `domain` from XINFO GROUPS, once per reclaim pass of every worker (the last writer wins, and they
+    agree). Lag is left unset when Redis reports none: it cannot say after entries were deleted from the middle of a group's unread range."""
+    for info in await client.xinfo_groups(stream):
+        if info.get("name") != group:
+            continue
+        metrics.agent_queue_pending.labels(domain=domain).set(float(info.get("pending") or 0))
+        if info.get("lag") is not None:
+            metrics.agent_queue_lag.labels(domain=domain).set(float(info["lag"]))
+        return

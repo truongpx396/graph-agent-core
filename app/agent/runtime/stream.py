@@ -334,6 +334,7 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
     # a finished one always does: so a start while a call is still open, one that had sent tokens, is a retry.
     model_call_open = False
     open_call_streamed = False
+    first_token_seen = False  # what a person waits before they see anything: agent_first_token_seconds (R17)
     try:
         async for event in _iterate_with_timeout(
             graph.astream_events(graph_input, config=cfg, version="v2"),
@@ -376,6 +377,9 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
                 content = _text_content(event["data"]["chunk"].content)
                 if content:
                     open_call_streamed = True
+                    if not first_token_seen:
+                        first_token_seen = True
+                        metrics.agent_first_token_seconds.observe(time.monotonic() - start)
                     final_answer.append(content)
                     yield {"type": "token", "content": content}
 
@@ -610,6 +614,9 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
             # to leave a finished turn with a blank trace and no metrics. The client still gets
             # the same events in the same order.
             if synthetic_token:
+                if not first_token_seen:  # a cache hit or a rejection: the person's first sight of text, and the fastest turns there are
+                    first_token_seen = True
+                    metrics.agent_first_token_seconds.observe(time.monotonic() - start)
                 yield {"type": "token", "content": synthetic_token}
             terminal_event = {"type": "done"}
     # No per-turn flush: the shared client's own background consumer sends

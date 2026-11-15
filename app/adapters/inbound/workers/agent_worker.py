@@ -93,10 +93,12 @@ from app.adapters.inbound.workers.streams import (
     clear_cancel_flag,
     ensure_consumer_group,
     is_cancelled,
+    observe_queue_wait,
     pause_after_failed_read,
     publish_dead_letter,
     publish_result,
     reclaim_stale_entries,
+    record_queue_depth,
     release_consumer,
     release_slots,
     release_thread_lock,
@@ -358,6 +360,7 @@ async def process_request(client: redis.Redis, entry_id: str, fields: dict[str, 
     payload = json.loads(fields["payload"])
     request_id = payload["request_id"]
     kind = payload.get("kind", "turn")
+    observe_queue_wait("agent", payload)  # how long this job waited for a worker (R17)
     handler = _DISPATCH.get(kind)
     lock_token = uuid.uuid4().hex
     lock_released = False
@@ -610,6 +613,7 @@ async def _reclaim_loop(client: redis.Redis, stop_event: asyncio.Event, *, graph
                 for entry_id, fields in entries:
                     await _handle_reclaimed_job(client, entry_id, fields, graph=graph, domain=domain)
                 await trim_stale_entries(client, requests_stream_key(domain), max_age_seconds=REQUESTS_STREAM_MAX_AGE_SECONDS)
+                await record_queue_depth(client, requests_stream_key(domain), CONSUMER_GROUP, domain)  # the gauges the backlog alert reads (R17)
             except Exception as exc:  # noqa: BLE001 - one bad pass must not end reclaim for this process's whole life, nor for the other domains
                 logger.warning("agent_worker_reclaim_pass_failed", extra={"domain": domain, "error_class": type(exc).__name__})
 
