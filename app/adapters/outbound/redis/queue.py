@@ -31,6 +31,7 @@ from app.ports.outbound.jobs import (
     cancel_flag_key,
     requests_stream_key,
     results_stream_key,
+    thread_lock_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -133,6 +134,12 @@ async def set_cancel_flag(client: redis.Redis, thread_id: str) -> None:
     `cancel_check`) — a short-lived flag, not a queued job, since that
     worker is polling this key directly, not waiting on the queue."""
     await client.set(cancel_flag_key(thread_id), "1", ex=CANCEL_FLAG_TTL_SECONDS)
+
+
+async def is_thread_busy(client: redis.Redis, thread_id: str) -> bool:
+    """Whether the conversation lock (`thread_lock_key`) exists: a worker took it for a running turn and has not released it. A read, never a write: the
+    caller (a delete of the conversation) must not be the one to hold or free the lock."""
+    return bool(await client.exists(thread_lock_key(thread_id)))
 
 
 # --- A THIRD per-thread mechanism: submission dedup — closes a gap the
@@ -328,6 +335,9 @@ class RedisTurnQueue:
 
     async def set_cancel_flag(self, thread_id: str) -> None:
         await set_cancel_flag(get_client(), thread_id)
+
+    async def is_thread_busy(self, thread_id: str) -> bool:
+        return await is_thread_busy(get_client(), thread_id)
 
     async def read_results(self, request_id: str, *, first_event_deadline_seconds: float | None = None) -> AsyncGenerator[dict[str, Any], None]:
         async for event in read_results(get_client(), request_id, first_event_deadline_seconds=first_event_deadline_seconds):

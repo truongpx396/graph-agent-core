@@ -20,6 +20,7 @@ EXPECTED = {
     ("POST", "/chat/resume"),
     ("POST", "/chat/cancel"),
     ("GET", "/chat/sessions"),
+    ("DELETE", "/chat/sessions/{thread_id}"),
     ("GET", "/chat/sessions/{thread_id}/messages"),
     ("GET", "/chat/sessions/{thread_id}/pending_approval"),
     ("POST", "/ingest/upload"),

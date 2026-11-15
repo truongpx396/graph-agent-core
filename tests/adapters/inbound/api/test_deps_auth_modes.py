@@ -183,6 +183,7 @@ def test_header_mode_still_names_exactly_the_headers_that_were_absent_with_a_422
 CALLER_ROUTES = [
     ("GET", "/usage", None),
     ("GET", "/chat/sessions", None),
+    ("DELETE", "/chat/sessions/t1", None),
     ("GET", "/chat/sessions/t1/messages", None),
     ("GET", "/chat/sessions/t1/pending_approval", None),
     ("POST", "/chat/stream/queued", {"message": "hi", "thread_id": "t1"}),

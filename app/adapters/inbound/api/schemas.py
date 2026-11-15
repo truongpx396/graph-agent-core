@@ -11,6 +11,7 @@ from app.core.config import (
     CHAT_MAX_IMAGES,
     CHAT_MESSAGE_MAX_CHARS,
 )
+from app.core.errors import ErrorCode
 
 # A conversation id becomes part of several Redis keys and a checkpoint's primary key. No character pattern: a Telegram conversation id embeds a principal
 # (`telegram:<principal>:<chat>`), so only the length is bounded (PRODUCTION_REVIEW.md R14).
@@ -94,6 +95,14 @@ class IngestUploadResult(BaseModel):
             "independently; see ingest_upload's own docstring."
         ),
     )
+
+
+class ErrorResponse(BaseModel):
+    """The envelope the front door answers with, for an error the API itself reports over plain HTTP (the streaming routes report theirs as an `error` event)."""
+
+    code: ErrorCode = Field(..., description="What went wrong, as a stable code a client can switch on.")
+    message: str = Field(..., description="Written for the person; never an exception's text.")
+    details: dict[str, Any] | None = Field(None, description="Extra fields for some codes.")
 
 
 class IngestDeleteRequest(BaseModel):

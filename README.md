@@ -322,6 +322,7 @@ suspecting the app.
 | `POST /chat/stream/queued` | Start a turn; SSE stream. Needs a running `agent-worker` |
 | `POST /chat/resume` · `POST /chat/cancel` | Approve/reject a paused tool call · stop a run |
 | `GET /chat/sessions` · `…/{id}/messages` · `…/{id}/pending_approval` | Conversation history and any pending approval |
+| `DELETE /chat/sessions/{id}` | Delete one of the caller's own conversations (its saved state and its list entry). 404 for anyone else's or an unknown one; 409 `thread_busy` while a turn runs on it |
 | `GET /usage` | The tenant's cost, `budgets` (each limit with spent, remaining, `resets_at`) and `credits` (the wallet, or `null` when off or none) |
 | `POST /ingest/upload` · `GET /ingest/stream/{job_id}` | Upload PDF/DOCX/text to the ingest worker · follow its progress. Uploading a file name again **replaces** the earlier upload of that name |
 | `DELETE /ingest/documents` | Delete an uploaded document by file name: its chunks and its stored files, for the caller's tenant only |
