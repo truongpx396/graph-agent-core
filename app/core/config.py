@@ -206,6 +206,12 @@ class Settings(BillingSettings):
     # The provider's prompt cache sees the prefix change once, when a new turn starts; within a turn it is stable (PRODUCTION_REVIEW.md R31).
     stale_tool_result_max_chars: int = Field(default=2000, ge=0)
 
+    # Output checks (graph/output_checks.py) that do NOT run when a turn was routed to the `medium` or `strong` tier (the router, pattern 68), as comma-
+    # separated codes. Many checks exist to correct a 3B or 7B local model, and a false positive costs another full model round. Empty by default: nothing
+    # changes until an operator has read `agent_output_check_fired_total{check, tier}` and chosen. `build_graph` refuses an unknown code, and `leaked_prompt`
+    # and `fabricated`, which protect the person and apply to every tier. The local tier is never affected (PRODUCTION_REVIEW.md R32).
+    output_checks_off_on_routed_tiers: str = ""
+
     # Cross-session memory retention (app/core/security.py, app/adapters/outbound/qdrant/memory.py)
     # — a memory older than this is invisible at RECALL time (Policy.lower),
     # not just eventually removed by delete_memories (pattern 33).
@@ -835,6 +841,7 @@ SEMANTIC_CACHE_SIMILARITY_THRESHOLD = settings.semantic_cache_similarity_thresho
 SEMANTIC_CACHE_ENABLED = settings.semantic_cache_enabled
 FOLLOWUPS_ENABLED = settings.followups_enabled
 STALE_TOOL_RESULT_MAX_CHARS = settings.stale_tool_result_max_chars
+OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS = settings.output_checks_off_on_routed_tiers
 SEMANTIC_CACHE_TTL_SECONDS = settings.semantic_cache_ttl_seconds
 MEMORY_RETENTION_DAYS = settings.memory_retention_days
 MAX_COST_USD_PER_TURN = settings.max_cost_usd_per_turn
