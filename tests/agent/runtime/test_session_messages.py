@@ -44,8 +44,8 @@ async def test_human_and_ai_messages_become_user_and_assistant_roles(monkeypatch
         monkeypatch,
     )
     assert result == [
-        {"role": "user", "text": "What is the refund policy?"},
-        {"role": "assistant", "text": "30 days, no questions asked."},
+        {"index": 0, "role": "user", "text": "What is the refund policy?"},
+        {"index": 1, "role": "assistant", "text": "30 days, no questions asked."},
     ]
 
 
@@ -67,8 +67,8 @@ async def test_system_and_tool_messages_are_omitted(monkeypatch):
         monkeypatch,
     )
     assert result == [
-        {"role": "user", "text": "remember our refund policy"},
-        {"role": "assistant", "text": "I've saved that note for you."},
+        {"index": 0, "role": "user", "text": "remember our refund policy"},
+        {"index": 1, "role": "assistant", "text": "I've saved that note for you."},
     ]
 
 
@@ -87,8 +87,8 @@ async def test_an_ai_message_with_no_text_is_skipped_not_shown_as_an_empty_bubbl
         monkeypatch,
     )
     assert result == [
-        {"role": "user", "text": "what is 12 * 7?"},
-        {"role": "assistant", "text": "12 times 7 is 84."},
+        {"index": 0, "role": "user", "text": "what is 12 * 7?"},
+        {"index": 1, "role": "assistant", "text": "12 times 7 is 84."},
     ]
 
 
@@ -110,8 +110,8 @@ async def test_multimodal_content_list_is_flattened_to_text(monkeypatch):
         monkeypatch,
     )
     assert result == [
-        {"role": "user", "text": "what's in this image?"},
-        {"role": "assistant", "text": "A photo of a cat."},
+        {"index": 0, "role": "user", "text": "what's in this image?"},
+        {"index": 1, "role": "assistant", "text": "A photo of a cat."},
     ]
 
 
@@ -140,12 +140,68 @@ async def test_a_compaction_marker_surfaces_as_a_system_role(monkeypatch):
         monkeypatch,
     )
     assert result == [
-        {"role": "user", "text": "question 1?"},
-        {"role": "assistant", "text": "answer 1."},
+        {"index": 0, "role": "user", "text": "question 1?"},
+        {"index": 1, "role": "assistant", "text": "answer 1."},
         {
+            "index": 2,
             "role": "system",
             "text": "[1 earlier turn summarized to keep this conversation within budget.]",
         },
-        {"role": "user", "text": "question 2?"},
-        {"role": "assistant", "text": "answer 2."},
+        {"index": 3, "role": "user", "text": "question 2?"},
+        {"index": 4, "role": "assistant", "text": "answer 2."},
     ]
+
+
+# --- A page of the transcript (PRODUCTION_REVIEW.md R27) -----------------------------------------------------------------
+
+
+def _long_conversation(turns=30):
+    messages = [SystemMessage(content="You are a helpful assistant.")]
+    for i in range(turns):
+        messages += [
+            HumanMessage(content=f"question {i}"),
+            AIMessage(content="", tool_calls=[{"name": "calculator", "args": {}, "id": f"c{i}"}]),  # a stored message nobody saw: it takes no index
+            ToolMessage(content="42", tool_call_id=f"c{i}"),
+            AIMessage(content=f"answer {i}"),
+        ]
+    return messages
+
+
+async def _page(monkeypatch, **kwargs):
+    async def fake_init_graph_async():
+        return _FakeGraph(_long_conversation())
+
+    monkeypatch.setattr(agent_module, "init_graph_async", fake_init_graph_async)
+    return await stream_module.get_session_messages("t1", **kwargs)
+
+
+async def test_with_neither_limit_nor_before_the_whole_transcript_comes_back(monkeypatch):
+    page = await _page(monkeypatch)
+
+    assert len(page) == 60 and [m["index"] for m in page] == list(range(60))
+
+
+async def test_limit_returns_the_last_messages_numbered_by_their_place_in_the_whole_transcript(monkeypatch):
+    page = await _page(monkeypatch, limit=4)
+
+    assert [(m["index"], m["text"]) for m in page] == [(56, "question 28"), (57, "answer 28"), (58, "question 29"), (59, "answer 29")]
+
+
+async def test_a_page_counts_what_a_person_saw_not_what_was_stored(monkeypatch):
+    """The tool-calling AIMessage and the ToolMessage are filtered BEFORE the slice, so 50 means 50 bubbles."""
+    page = await _page(monkeypatch, limit=50)
+
+    assert len(page) == 50 and all(m["text"] for m in page)
+
+
+async def test_before_reads_the_page_that_precedes_the_last_one_and_the_pages_tile_the_transcript(monkeypatch):
+    last = await _page(monkeypatch, limit=25)
+    middle = await _page(monkeypatch, limit=25, before=last[0]["index"])
+    first = await _page(monkeypatch, limit=25, before=middle[0]["index"])
+
+    assert [m["index"] for m in first + middle + last] == list(range(60)), "no message twice, none missed"
+
+
+async def test_before_the_start_is_an_empty_page_and_a_cursor_past_the_end_is_the_whole_tail(monkeypatch):
+    assert await _page(monkeypatch, before=0) == []
+    assert [m["index"] for m in await _page(monkeypatch, limit=2, before=10_000)] == [58, 59]

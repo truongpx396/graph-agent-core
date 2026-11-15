@@ -1021,7 +1021,7 @@ async def cancel_run(thread_id: str, ctx: SecurityCtx) -> bool:
     return True
 
 
-async def get_session_messages(thread_id: str) -> list[dict[str, Any]]:
+async def get_session_messages(thread_id: str, *, limit: int | None = None, before: int | None = None) -> list[dict[str, Any]]:
     """Session-switcher transcript replay (`GET /chat/sessions/{thread_id}/messages`, app/adapters/inbound/api/routers/chat.py).
     It reads the same Postgres checkpointer every resume/cancel path uses (`chat_sessions` in
     app/agent/runtime/sessions.py holds only title and timestamps, not content).
@@ -1029,16 +1029,21 @@ async def get_session_messages(thread_id: str) -> list[dict[str, Any]]:
     No `ctx` here on purpose: a thread_id's checkpoint carries no owner. Ownership (does this thread belong to
     the caller's tenant+principal) is the CALLER's job, via `sessions.list_sessions`, before calling this.
 
-    Returns `[{"role": "user"|"assistant"|"system", "text": str}, ...]`: a replay of what the user actually
+    Returns `[{"index": int, "role": "user"|"assistant"|"system", "text": str}, ...]`: a replay of what the user actually
     saw, not a forensic trace (that's Langfuse). Omitted: `SystemMessage`s, `ToolMessage`s, a tool-calling
     `AIMessage` with no text, and retry artifacts (`messages.RETRY_ARTIFACT_KEY`: the corrective feedback
     `retry_output` wrote, the answer it rejected, or an untrusted answer a fallback replaced), since the
     person neither said nor saw them. One exception: a compact_history breadcrumb (`COMPACTION_MARKER_KEY`)
     comes back as `role: "system"`, so a replay shows older turns were cut rather than silently missing.
+
+    `index` is a message's position in the whole filtered transcript, counted from 0. `before` keeps only the messages with a smaller index and `limit`
+    the last that many of those, taken AFTER the filtering above (a page of 50 is 50 things a person saw, not 50 stored messages). With neither, it is the
+    whole transcript, as before. A page is read from the full state every time (the checkpointer cannot slice a channel), so this bounds what is sent, not
+    what is read, and a `compact_history` run between two requests renumbers the older part (PRODUCTION_REVIEW.md R27).
     """
     graph = await runtime_module.init_graph_async()
     state = await graph.aget_state({"configurable": {"thread_id": thread_id}})
-    messages = []
+    messages: list[dict[str, Any]] = []
     stored = state.values.get("messages", [])
     for m in stored:
         if is_retry_artifact(m):
@@ -1053,8 +1058,9 @@ async def get_session_messages(thread_id: str) -> list[dict[str, Any]]:
             continue
         text = _text_content(m.content)
         if text:
-            messages.append({"role": role, "text": text})
-    return messages
+            messages.append({"index": len(messages), "role": role, "text": text})
+    page = messages if before is None else messages[:before]
+    return page if limit is None else page[-limit:]
 
 
 async def get_pending_approval(thread_id: str) -> dict[str, Any] | None:
