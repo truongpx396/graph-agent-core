@@ -145,7 +145,7 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R18 | A re-uploaded document leaves its old chunks; no way to delete a document | P1 | M | read from code | R09 | done (with a version order instead of "another ingest id", see pattern 24; no list route) |
 | R19 | The dependency ladder: Langfuse 2, LangChain 0.3, LangGraph 0.2 | P1 | L | from the field | R17 | open |
 | R20 | Web fetches: rebinding window, whole body read before the size check, crawler egress | P1 | M | read from code | | done (fetcher; the crawler's host firewall rule is documented, not run) |
-| R21 | Five statements that are no longer true | P1 | S | read from code | | open |
+| R21 | Five statements that are no longer true | P1 | S | read from code | | done (four corrected; the `scope_filter` docstring became true when R09 added its integration test) |
 | R22 | A hung worker is never restarted | P2 | S | read from code | | done |
 | R23 | The answer cache ignores the domain; its expiry is set in a second call | P2 | S | read from code | | done |
 | R24 | Two error events carry no `code` | P2 | S | read from code | | done |
