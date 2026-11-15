@@ -8,12 +8,17 @@ own logic (each already has its own dedicated tests).
 import asyncio
 import contextlib
 import json
+import os
+import signal
 import threading
 import time
+
+import redis.asyncio as redis_module
 
 from app.adapters.inbound.workers import ingest_streams, ingest_worker
 from app.adapters.inbound.workers.streams import dead_letter_stream_key
 from app.adapters.outbound.minio import object_store as minio_object_store
+from app.core import metrics
 from app.ports.outbound import jobs
 from tests.adapters.outbound.redis.test_queue import FakeRedis
 from tests.conftest import metric_value as _count
@@ -44,7 +49,7 @@ def _entry(job_id="j1", filename="report.pdf", object_key="ecorp/abc-report.pdf"
             "topic": topic,
         }
     )
-    return "1-0", {"payload": payload}
+    return "0-1", {"payload": payload}  # never an id FakeRedis hands out (timestamps): an ack now removes the entry by id
 
 
 class TestProcessJob:
@@ -276,6 +281,167 @@ class TestRunLoop:
         await _run_briefly()
 
         assert captured["max_workers"] == ingest_worker._MAX_CONCURRENCY
+
+
+class _IngestRun:
+    """`ingest_worker.run()` against a FakeRedis that yields when idle (the real read blocks), with the pipeline stubbed out."""
+
+    def __init__(self, monkeypatch, client, process=None):
+        self.client = client
+
+        async def acknowledging_job(client, entry_id, fields):
+            await ingest_worker.ack_and_delete(client, jobs.INGEST_REQUESTS_STREAM, jobs.INGEST_CONSUMER_GROUP, entry_id)
+
+        async def no_reclaim(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(ingest_worker, "get_client", lambda: client)
+        monkeypatch.setattr(ingest_worker, "process_job", process or acknowledging_job)
+        monkeypatch.setattr(ingest_worker, "_reclaim_loop", no_reclaim)
+
+    async def until(self, condition, timeout=5.0):
+        deadline = asyncio.get_running_loop().time() + timeout
+        while not condition():
+            assert asyncio.get_running_loop().time() < deadline, "timed out waiting for the worker"
+            await asyncio.sleep(0.005)
+
+
+class _IdleYieldingRedis(FakeRedis):
+    def __init__(self):
+        super().__init__()
+        self.reads = []
+
+    async def aclose(self):
+        pass
+
+    async def xreadgroup(self, group, consumer, streams, count=None, block=None):
+        self.reads.append(count)
+        result = await super().xreadgroup(group, consumer, streams, count=count, block=block)
+        if not result:
+            await asyncio.sleep(0.01)
+        return result
+
+
+class TestAnIngestWorkerReadsOnlyWhatItCanStart:
+    async def test_a_worker_with_no_free_slot_does_not_claim_the_next_job(self, monkeypatch):
+        """Same reasoning as the agent worker's (PRODUCTION_REVIEW.md R05): a claimed entry's idle clock runs while it waits for a slot."""
+        monkeypatch.setattr(ingest_worker, "_MAX_CONCURRENCY", 1)
+        monkeypatch.setattr(ingest_worker, "_BLOCK_MS", 20)
+        release_first = asyncio.Event()
+        started = []
+
+        async def process(client, entry_id, fields):
+            started.append(entry_id)
+            if len(started) == 1:
+                await release_first.wait()
+            await ingest_worker.ack_and_delete(client, jobs.INGEST_REQUESTS_STREAM, jobs.INGEST_CONSUMER_GROUP, entry_id)
+
+        client = _IdleYieldingRedis()
+        first = await client.xadd(jobs.INGEST_REQUESTS_STREAM, _entry(job_id="j-first")[1])
+        second = await client.xadd(jobs.INGEST_REQUESTS_STREAM, _entry(job_id="j-second")[1])
+        run = _IngestRun(monkeypatch, client, process)
+
+        worker = asyncio.create_task(ingest_worker.run())
+        await run.until(lambda: started == [first])
+        await asyncio.sleep(0.15)
+
+        assert second not in client._delivered
+
+        release_first.set()
+        await run.until(lambda: {first, second} <= set(client.acked))
+        os.kill(os.getpid(), signal.SIGTERM)
+        await asyncio.wait_for(worker, 10)
+
+    async def test_the_read_asks_for_the_free_slots_and_an_empty_read_gives_them_back(self, monkeypatch):
+        monkeypatch.setattr(ingest_worker, "_MAX_CONCURRENCY", 3)
+        client = _IdleYieldingRedis()
+        run = _IngestRun(monkeypatch, client)
+
+        worker = asyncio.create_task(ingest_worker.run())
+        await run.until(lambda: len(client.reads) >= 5)
+        os.kill(os.getpid(), signal.SIGTERM)
+        await asyncio.wait_for(worker, 10)
+
+        assert set(client.reads) == {3}
+
+
+class _FlakyIngestReads(_IdleYieldingRedis):
+    def __init__(self, failures=1):
+        super().__init__()
+        self.failures = failures
+
+    async def xreadgroup(self, group, consumer, streams, count=None, block=None):
+        if self.failures:
+            self.failures -= 1
+            raise redis_module.ConnectionError("Connection closed by server.")
+        return await super().xreadgroup(group, consumer, streams, count=count, block=block)
+
+
+class TestARedisBlipDoesNotEndTheIngestWorker:
+    async def test_a_redis_error_while_reading_the_queue_is_survived_and_counted(self, monkeypatch):
+        monkeypatch.setattr(ingest_worker, "READ_BACKOFF_START_SECONDS", 0.001)
+        before = _count(metrics.agent_worker_queue_read_failed_total, queue="ingest")
+        client = _FlakyIngestReads(failures=2)
+        entry_id = await client.xadd(jobs.INGEST_REQUESTS_STREAM, _entry(job_id="j-blip")[1])
+        run = _IngestRun(monkeypatch, client)
+
+        worker = asyncio.create_task(ingest_worker.run())
+        await run.until(lambda: entry_id in client.acked)
+        os.kill(os.getpid(), signal.SIGTERM)
+        await asyncio.wait_for(worker, 10)
+
+        assert _count(metrics.agent_worker_queue_read_failed_total, queue="ingest") == before + 2
+
+    async def test_a_worker_told_to_stop_during_the_backoff_ends_at_once(self, monkeypatch):
+        monkeypatch.setattr(ingest_worker, "READ_BACKOFF_START_SECONDS", 60.0)
+        client = _FlakyIngestReads(failures=10**6)
+        run = _IngestRun(monkeypatch, client)
+        worker = asyncio.create_task(ingest_worker.run())
+        await run.until(lambda: client.failures < 10**6)
+
+        os.kill(os.getpid(), signal.SIGTERM)
+
+        await asyncio.wait_for(worker, 5)
+
+
+class TestAnAcknowledgedIngestJobLeavesTheStream:
+    """Same as the agent worker's (PRODUCTION_REVIEW.md R04): `XACK` leaves the entry in the stream."""
+
+    async def test_a_finished_job_is_gone_from_the_stream(self, monkeypatch):
+        monkeypatch.setattr(minio_object_store, "download_bytes", lambda key: b"pdf-bytes")
+        monkeypatch.setitem(ingest_worker.EXTRACTORS_BY_SUFFIX, ".pdf", lambda data: "text")
+        monkeypatch.setattr(ingest_worker.ingestor, "ingest_text", _async_ingest_text_returning(1))
+        client = FakeRedis()
+        entry_id = await client.xadd(jobs.INGEST_REQUESTS_STREAM, _entry(job_id="j-gone")[1])
+        response = await client.xreadgroup(jobs.INGEST_CONSUMER_GROUP, ingest_worker.CONSUMER_NAME, {jobs.INGEST_REQUESTS_STREAM: ">"})
+
+        await ingest_worker.process_job(client, entry_id, response[0][1][0][1])
+
+        assert entry_id in client.acked
+        assert client.streams[jobs.INGEST_REQUESTS_STREAM] == []
+
+    async def test_a_reclaimed_job_that_is_dead_lettered_leaves_the_stream(self, monkeypatch):
+        monkeypatch.setattr(ingest_worker, "MAX_AUTO_RECLAIM_RETRIES", 0)
+        client = FakeRedis()
+        entry_id = await client.xadd(jobs.INGEST_REQUESTS_STREAM, _entry(job_id="j-dead")[1])
+        fields = client.streams[jobs.INGEST_REQUESTS_STREAM][0][1]
+
+        await ingest_worker._handle_reclaimed_job(client, entry_id, fields)
+
+        assert client.streams[jobs.INGEST_REQUESTS_STREAM] == []
+        assert len(client.streams[dead_letter_stream_key(jobs.INGEST_REQUESTS_STREAM)]) == 1
+
+    async def test_each_reclaim_pass_trims_the_stream_once_and_a_stopping_worker_leaves_the_group(self, monkeypatch):
+        monkeypatch.setattr(ingest_worker, "WORKER_RECLAIM_INTERVAL_SECONDS", 0.01)
+        client = FakeRedis()
+
+        stop = asyncio.Event()
+        task = asyncio.create_task(ingest_worker._reclaim_loop(client, stop))
+        await asyncio.sleep(0.06)
+        stop.set()
+        await asyncio.wait_for(task, 1)
+
+        assert len(client.trims) >= 2 and {stream for stream, _minid in client.trims} == {jobs.INGEST_REQUESTS_STREAM}
 
 
 class TestConcurrentDispatch:

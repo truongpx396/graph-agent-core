@@ -42,7 +42,9 @@ three; `"turn_continue"` comes only from this module's reclaim path.
 
 ## Ack and crash reclaim
 
-A job publishes every event to the results stream, then acks. A worker that dies before the ack leaves the
+A job publishes every event to the results stream, then acks, which is `streams.py::ack_and_delete`: `XACK` alone leaves the entry in the stream for
+good (pattern 43). While a job runs its worker renews the conversation's lock (`_keep_lock_alive`), and `run()` reads from the queue only as many
+entries as it has free slots, so a claimed entry's idle clock never runs while it waits to start (pattern 99). A worker that dies before the ack leaves the
 request pending; `_reclaim_loop` (every worker runs one) sweeps those via `streams.py::reclaim_stale_entries`
 (XAUTOCLAIM) and `_handle_reclaimed_job` decides per job whether re-running is provably safe:
 - `"cancel"`: always (idempotent).
@@ -83,16 +85,24 @@ import redis.asyncio as redis
 from langgraph.graph.state import CompiledStateGraph
 
 from app.adapters.inbound.workers.streams import (
+    READ_BACKOFF_START_SECONDS,
     RECLAIM_ATTEMPTS_FIELD,
+    ack_and_delete,
     acquire_thread_lock,
+    claim_free_slots,
     clear_cancel_flag,
     ensure_consumer_group,
     is_cancelled,
+    pause_after_failed_read,
     publish_dead_letter,
     publish_result,
     reclaim_stale_entries,
+    release_consumer,
+    release_slots,
     release_thread_lock,
+    renew_thread_lock,
     republish_job,
+    trim_stale_entries,
 )
 from app.agent.runtime import reclaimed_turn
 from app.agent.runtime.core import (
@@ -115,6 +125,7 @@ from app.core.config import (
     AGENT_WORKER_MAX_CONCURRENCY,
     AGENT_WORKER_RECLAIM_IDLE_SECONDS,
     MAX_AUTO_RECLAIM_RETRIES,
+    REQUESTS_STREAM_MAX_AGE_SECONDS,
     WORKER_RECLAIM_INTERVAL_SECONDS,
 )
 from app.core.errors import (
@@ -126,12 +137,13 @@ from app.core.errors import (
 from app.platform import sql_store
 from app.platform.logging_config import bind_request_id, configure_logging
 from app.platform.profiling import start_profiling
-from app.platform.redis_client import StreamReadResponse, get_client
+from app.platform.redis_client import UNAVAILABLE_ERRORS, StreamReadResponse, get_client
 from app.platform.telemetry import configure_telemetry
 from app.ports.outbound.domains import domain_catalog
 from app.ports.outbound.jobs import (
     CONSUMER_GROUP,
     TERMINAL_EVENT_TYPES,
+    THREAD_LOCK_TTL_SECONDS,
     requests_stream_key,
 )
 
@@ -147,6 +159,8 @@ _MAX_CONCURRENCY = AGENT_WORKER_MAX_CONCURRENCY  # concurrent turns per worker
 # willing to start (unclaimed entries stay pending for the group).
 _READ_COUNT = _MAX_CONCURRENCY
 _BLOCK_MS = 5000
+# A running job renews its conversation's lock this often: three beats per lifetime, so a lost beat or two (a Redis blip) still leaves it alive.
+LOCK_RENEW_INTERVAL_SECONDS = THREAD_LOCK_TTL_SECONDS / 3
 
 
 def parse_worker_domains(spec: str, known: list[str]) -> tuple[str, ...]:
@@ -164,9 +178,26 @@ def parse_worker_domains(spec: str, known: list[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(names))
 
 
-def _read_count_per_stream(domains: int) -> int:
-    """XREADGROUP's COUNT is per stream, so the budget is split across them (at least 1 each)."""
-    return max(1, _READ_COUNT // domains)
+def _read_count_per_stream(domains: int, slots: int | None = None) -> int:
+    """XREADGROUP's COUNT is per stream, so the budget (the free slots, by default all of them) is split across them (at least 1 each)."""
+    return max(1, (_READ_COUNT if slots is None else slots) // domains)
+
+
+async def _keep_lock_alive(client: redis.Redis, thread_id: str, token: str) -> None:
+    """Renews the conversation's lock every `LOCK_RENEW_INTERVAL_SECONDS` until cancelled, so it need not outlast the longest turn: an unattended one
+    runs several streams in a row and used to outlive a lock that was never extended (pattern 99). If it finds the lock is no longer ours it counts it,
+    logs it and stops asking; it does not stop the turn, which may be nearly done."""
+    while True:
+        await asyncio.sleep(LOCK_RENEW_INTERVAL_SECONDS)
+        try:
+            still_ours = await renew_thread_lock(client, thread_id, token)
+        except Exception as exc:  # noqa: BLE001 - a blip costs one beat; the lock has two more of slack, and the next beat asks again
+            logger.warning("agent_worker_lock_renewal_failed", extra={"thread_id": thread_id, "error_class": type(exc).__name__})
+            continue
+        if not still_ours:
+            metrics.agent_thread_lock_lost_total.inc()
+            logger.warning("agent_worker_thread_lock_lost", extra={"thread_id": thread_id})
+            return
 
 
 async def _publish_events(client: redis.Redis, request_id: str, events: AsyncGenerator[dict[str, Any], None], release_lock: ReleaseLock) -> None:
@@ -329,6 +360,7 @@ async def process_request(client: redis.Redis, entry_id: str, fields: dict[str, 
     handler = _DISPATCH.get(kind)
     lock_token = uuid.uuid4().hex
     lock_released = False
+    renewal: asyncio.Task[None] | None = None  # started once the lock is ours; see `_keep_lock_alive`
 
     async def release_lock() -> None:
         """Idempotent — safe to call from the handler (the normal path,
@@ -343,6 +375,9 @@ async def process_request(client: redis.Redis, entry_id: str, fields: dict[str, 
         if lock_released:
             return
         lock_released = True
+        # Stopped first: a lock about to be released is not renewed, and a renewal that found it gone would report it lost.
+        if renewal is not None:
+            renewal.cancel()
         await release_thread_lock(client, thread_id, lock_token)
 
     with bind_request_id(request_id), bind_domain(domain):
@@ -361,6 +396,7 @@ async def process_request(client: redis.Redis, entry_id: str, fields: dict[str, 
                     {"type": "error", "content": envelope.message, **envelope.to_dict()},
                 )
                 return
+            renewal = asyncio.create_task(_keep_lock_alive(client, thread_id, lock_token))
             try:
                 await handler(client, request_id, payload, release_lock)
             finally:
@@ -384,7 +420,7 @@ async def process_request(client: redis.Redis, entry_id: str, fields: dict[str, 
                 client, request_id, {"type": "error", "content": envelope.message, **envelope.to_dict()}
             )
         finally:
-            await client.xack(requests_stream_key(domain), CONSUMER_GROUP, entry_id)
+            await ack_and_delete(client, requests_stream_key(domain), CONSUMER_GROUP, entry_id)
 
 
 async def _process_with_limit(
@@ -513,7 +549,7 @@ async def _handle_reclaimed_job(client: redis.Redis, entry_id: str, fields: dict
     if safe_to_retry and attempts < MAX_AUTO_RECLAIM_RETRIES:
         await republish_job(client, requests_stream=requests_stream_key(domain), payload=payload)
         metrics.agent_worker_job_reclaimed_total.labels(queue="agent", outcome="retried").inc()
-        await client.xack(requests_stream_key(domain), CONSUMER_GROUP, entry_id)
+        await ack_and_delete(client, requests_stream_key(domain), CONSUMER_GROUP, entry_id)  # after the republish, never before
         return
 
     # Not safe (a "turn"/"turn_continue" that already finished or is
@@ -528,11 +564,11 @@ async def _handle_reclaimed_job(client: redis.Redis, entry_id: str, fields: dict
             client, request_id, {"type": "error", "content": envelope.message, **envelope.to_dict()}
         )
     # Deliberately NOT releasing thread_id's lock here: no token to
-    # compare-and-delete against (the dead worker held it, not us), and
-    # AGENT_WORKER_RECLAIM_IDLE_SECONDS' default is chosen to already
-    # exceed THREAD_LOCK_TTL_SECONDS, so by the time a job is reclaimed
-    # its lock has already self-expired via that TTL — see both settings'
-    # own docstrings in app/core/config.py.
+    # compare-and-delete against (the dead worker held it, not us). The dead
+    # worker stopped renewing it, and Settings refuses an
+    # AGENT_WORKER_RECLAIM_IDLE_SECONDS that does not exceed
+    # THREAD_LOCK_TTL_SECONDS, so by the time a job is reclaimed its lock has
+    # already self-expired (pattern 99).
     await _dead_letter_reclaimed(client, entry_id, payload, reason="worker_lost", domain=domain)
 
 
@@ -540,7 +576,7 @@ async def _dead_letter_reclaimed(client: redis.Redis, entry_id: str, payload: di
     stream = requests_stream_key(domain)
     metrics.agent_worker_job_reclaimed_total.labels(queue="agent", outcome="dead_lettered").inc()
     await publish_dead_letter(client, requests_stream=stream, entry_id=entry_id, payload=payload, reason=reason)
-    await client.xack(stream, CONSUMER_GROUP, entry_id)
+    await ack_and_delete(client, stream, CONSUMER_GROUP, entry_id)
 
 
 async def _reclaim_loop(client: redis.Redis, stop_event: asyncio.Event, *, graphs: dict[str, CompiledStateGraph]) -> None:
@@ -571,6 +607,7 @@ async def _reclaim_loop(client: redis.Redis, stop_event: asyncio.Event, *, graph
                 )
                 for entry_id, fields in entries:
                     await _handle_reclaimed_job(client, entry_id, fields, graph=graph, domain=domain)
+                await trim_stale_entries(client, requests_stream_key(domain), max_age_seconds=REQUESTS_STREAM_MAX_AGE_SECONDS)
             except Exception as exc:  # noqa: BLE001 - one bad pass must not end reclaim for this process's whole life, nor for the other domains
                 logger.warning("agent_worker_reclaim_pass_failed", extra={"domain": domain, "error_class": type(exc).__name__})
 
@@ -606,32 +643,51 @@ async def run() -> None:
 
     reclaim_task = asyncio.create_task(_reclaim_loop(client, stop_event, graphs=graphs))
 
-    # Bounds jobs this process runs at once. Acquired BEFORE the task is
-    # created, so a full semaphore also backpressures reading: entries stay
-    # pending for the group instead of piling up unbounded in `in_flight`.
+    # Bounds jobs this process runs at once. The slots are taken BEFORE the read, and the read asks for no more entries than it holds, so a worker that
+    # is full reads nothing: entries stay pending for the group instead of being claimed and left to wait, which made their idle clock measure the queue
+    # and got healthy jobs reclaimed (pattern 99). COUNT is per stream, so with several streams a read can return more than the slots held: each entry
+    # beyond them waits for a slot as it used to.
     semaphore = asyncio.Semaphore(_MAX_CONCURRENCY)
     in_flight: set[asyncio.Task[Any]] = set()
 
-    read_count = _read_count_per_stream(len(domains))
+    read_backoff = READ_BACKOFF_START_SECONDS
     while not stop_event.is_set():
-        response = cast(
-            StreamReadResponse,
-            await client.xreadgroup(
-                CONSUMER_GROUP,
-                CONSUMER_NAME,
-                dict.fromkeys(streams, ">"),
-                count=read_count,
-                block=_BLOCK_MS,
-            ),
-        )
+        free = await claim_free_slots(semaphore, stop_event, limit=_MAX_CONCURRENCY, wait_seconds=_BLOCK_MS / 1000)
+        if not free:
+            continue  # told to stop while every slot was busy
+        try:
+            response = cast(
+                StreamReadResponse,
+                await client.xreadgroup(
+                    CONSUMER_GROUP,
+                    CONSUMER_NAME,
+                    dict.fromkeys(streams, ">"),
+                    count=_read_count_per_stream(len(domains), free),
+                    block=_BLOCK_MS,
+                ),
+            )
+        except UNAVAILABLE_ERRORS as exc:
+            # A Redis restart or a dropped connection used to end the process and, with it, every turn running in it (pattern 43). Reading is safe to
+            # repeat: an entry delivered but lost on the wire stays pending and is reclaimed. Only a read: the client is NOT set to retry every command.
+            release_slots(semaphore, free)
+            metrics.agent_worker_queue_read_failed_total.labels(queue="agent").inc()
+            logger.warning("agent_worker_queue_read_failed", extra={"queue": "agent", "error_class": type(exc).__name__})
+            read_backoff = await pause_after_failed_read(stop_event, read_backoff)
+            continue
+        read_backoff = READ_BACKOFF_START_SECONDS
+        held = free
         for stream, entries in response or []:
             for entry_id, fields in entries:
-                await semaphore.acquire()
+                if held:
+                    held -= 1
+                else:
+                    await semaphore.acquire()
                 task = asyncio.create_task(
                     _process_with_limit(client, entry_id, fields, semaphore, domain=streams[stream])
                 )
                 in_flight.add(task)
                 task.add_done_callback(in_flight.discard)
+        release_slots(semaphore, held)  # what the read did not use
 
     logger.info(
         "agent_worker_stopping", extra={"consumer": CONSUMER_NAME, "in_flight": len(in_flight)}
@@ -641,6 +697,9 @@ async def run() -> None:
     if in_flight:
         await asyncio.gather(*in_flight)
     await reclaim_task  # stop_event already set above, so this returns promptly
+    # Each start made a new consumer name; without this the group's list grows by one per restart. After the jobs above finished, so it owns nothing pending.
+    for stream in streams:
+        await release_consumer(client, stream, CONSUMER_GROUP, CONSUMER_NAME)
     await client.aclose()
     # Same reasoning as app/adapters/inbound/api/main.py's lifespan shutdown: the MCP bridge a sandbox tool started is a child process of this one.
     await close_adapters()

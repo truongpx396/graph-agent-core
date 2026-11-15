@@ -131,3 +131,78 @@ async def test_a_second_worker_in_the_same_group_never_gets_a_message_already_de
 
     assert first and first[0][1]  # worker-a got the one message
     assert second == [] or second[0][1] == []  # worker-b got nothing new
+
+
+async def test_a_processed_job_is_removed_from_the_requests_stream_on_real_redis(monkeypatch):
+    """`XACK` takes a job off the pending list and leaves it in the stream: the fake could model neither half, a real server shows both are gone
+    (PRODUCTION_REVIEW.md R04)."""
+    from app.adapters.inbound.workers import agent_worker
+
+    async def fake_turn(text, thread_id, ctx, **kwargs):
+        yield {"type": "done"}
+
+    monkeypatch.setattr(agent_worker, "astream_events_turn", fake_turn)
+    client = queue.get_client()
+    stream = jobs.requests_stream_key()
+    await streams.ensure_consumer_group(client)
+    await queue.publish_request(client, request_id="req-gone", text="hi", thread_id="thread-gone", ctx=TEST_CTX)
+    [(_, [(entry_id, fields)])] = await client.xreadgroup(jobs.CONSUMER_GROUP, agent_worker.CONSUMER_NAME, {stream: ">"}, count=1)
+    assert await client.xlen(stream) == 1
+
+    await agent_worker.process_request(client, entry_id, fields, domain="ecorp")
+
+    assert await client.xlen(stream) == 0
+    assert (await client.xpending(stream, jobs.CONSUMER_GROUP))["pending"] == 0
+
+
+async def test_reclaim_still_finds_an_unacknowledged_job_after_trimming():
+    """The age trim must never cost the reclaim path a job that could still be recovered: this one is seconds old, delivered to a worker that died."""
+    client = queue.get_client()
+    stream = jobs.requests_stream_key()
+    await streams.ensure_consumer_group(client)
+    await queue.publish_request(client, request_id="req-rescue", text="hi", thread_id="thread-rescue", ctx=TEST_CTX)
+    [(_, [(entry_id, _fields)])] = await client.xreadgroup(jobs.CONSUMER_GROUP, "dead-worker", {stream: ">"}, count=1)
+
+    await streams.trim_stale_entries(client, stream, max_age_seconds=86_400)
+    claimed = await streams.reclaim_stale_entries(client, stream=stream, group=jobs.CONSUMER_GROUP, consumer="rescuer", min_idle_ms=0)
+
+    assert [claimed_id for claimed_id, _ in claimed] == [entry_id]
+
+
+async def test_entries_older_than_the_age_are_trimmed_and_the_reclaim_pass_copes_with_their_pending_claims():
+    """A real server trims by whole internal nodes (about 100 entries each) when asked to be approximate, which bounds the work of one call on a stream
+    that grew for months; a stream of a few entries is left alone, so this one is long enough to span several nodes. Redis keeps a pending claim after
+    its entry is trimmed, and XAUTOCLAIM reports and drops it (the third element of its reply): nothing here may raise."""
+    client = queue.get_client()
+    stream = jobs.requests_stream_key()
+    await streams.ensure_consumer_group(client)
+    for sequence in range(350):
+        await client.xadd(stream, {"payload": "{}"}, id=f"1000-{sequence}")  # 1970: far older than any age
+    await client.xreadgroup(jobs.CONSUMER_GROUP, "dead-worker", {stream: ">"}, count=10)  # the oldest ten are pending, never acknowledged
+    await queue.publish_request(client, request_id="req-new", text="hi", thread_id="thread-new", ctx=TEST_CTX)
+
+    await streams.trim_stale_entries(client, stream, max_age_seconds=3_600)
+    claimed = await streams.reclaim_stale_entries(client, stream=stream, group=jobs.CONSUMER_GROUP, consumer="rescuer", min_idle_ms=0)
+
+    remaining = [entry_id for entry_id, _fields in await client.xrange(stream)]
+    assert len(remaining) < 350 - 100, "whole nodes of old entries are gone"
+    assert remaining[-1].split("-")[0] != "1000", "the recent job is still there"
+    assert claimed == []
+    assert (await client.xpending(stream, jobs.CONSUMER_GROUP))["pending"] == 0
+
+
+async def test_a_consumer_that_owns_nothing_is_removed_when_its_worker_stops_and_one_that_owns_a_job_is_not():
+    client = queue.get_client()
+    stream = jobs.requests_stream_key()
+    await streams.ensure_consumer_group(client)
+    await queue.publish_request(client, request_id="req-a", text="hi", thread_id="thread-a", ctx=TEST_CTX)
+    await queue.publish_request(client, request_id="req-b", text="hi", thread_id="thread-b", ctx=TEST_CTX)
+    [(_, [(done_id, _f)])] = await client.xreadgroup(jobs.CONSUMER_GROUP, "finished-worker", {stream: ">"}, count=1)
+    await client.xreadgroup(jobs.CONSUMER_GROUP, "busy-worker", {stream: ">"}, count=1)
+    await streams.ack_and_delete(client, stream, jobs.CONSUMER_GROUP, done_id)
+
+    await streams.release_consumer(client, stream, jobs.CONSUMER_GROUP, "finished-worker")
+    await streams.release_consumer(client, stream, jobs.CONSUMER_GROUP, "busy-worker")
+
+    names = {info["name"] for info in await client.xinfo_consumers(stream, jobs.CONSUMER_GROUP)}
+    assert names == {"busy-worker"}

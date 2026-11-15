@@ -27,9 +27,9 @@ logger = logging.getLogger(__name__)
 # without ever reaching release_budget_reservation) rather than real in-flight
 # spend — see postgres-init/16-tenant-budget-holds.sql for why each turn's hold
 # carries its own timestamp instead of one running total per tenant. Generous
-# relative to REQUEST_TIMEOUT_SECONDS (60s default) for the same reason
-# app/adapters/outbound/redis/queue.py's THREAD_LOCK_TTL_SECONDS is: a "resume" job's own
-# turn isn't wrapped in that same timeout, so a legitimate hold can outlive it.
+# relative to REQUEST_TIMEOUT_SECONDS (60s default) because an unattended turn
+# runs several streams in a row, each with its own limit (up to 240s by
+# default; see Settings.agent_worker_reclaim_idle_seconds), so a legitimate hold can outlive one.
 # A turn that really runs longer simply stops being counted — the fail-open
 # direction this module takes everywhere.
 RESERVATION_STALE_AFTER_MINUTES = 5

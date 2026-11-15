@@ -128,6 +128,9 @@ def _build_app_env(
         # real margin above that without making a genuinely stuck turn wait
         # forever.
         "REQUEST_TIMEOUT_SECONDS": "420",
+        # The reclaim idle must exceed the longest turn, REQUEST_TIMEOUT_SECONDS x (1 + UNATTENDED_MAX_DECLINE_ROUNDS) + 30 s, or the app refuses to start
+        # (pattern 99): 420 x 4 + 30 = 1710. No live test depends on how soon a dead worker's job is reclaimed.
+        "AGENT_WORKER_RECLAIM_IDLE_SECONDS": "1800",
         # CHAT_FIRST_RESPONSE_DEADLINE_SECONDS (app/core/config.py, default 30s, added in #57):
         # how long the API waits for a queued job's FIRST event before giving up with an `error`
         # event ("No response for ... is an agent-worker running for this domain?"). Same

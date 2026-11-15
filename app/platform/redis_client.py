@@ -17,6 +17,12 @@ from app.core.config import REDIS_MAX_CONNECTIONS, REDIS_URL
 StreamReadResponse = list[tuple[str, list[tuple[str, dict[str, str]]]]]
 
 
+# What a Redis restart or a dropped connection raises out of a READ. redis-py's ConnectionError and TimeoutError are RedisErrors, not OSErrors, so a
+# tuple of OSError alone would miss exactly the failure this is for; an OSError covers the socket underneath. A ResponseError (a rejected command)
+# is not here: waiting does not fix it. Only reads are retried on these: the same blip during an XADD may have been applied, and a second copy of a
+# `turn` job runs as a second turn (PRODUCTION_REVIEW.md R07, pattern 43).
+UNAVAILABLE_ERRORS: tuple[type[Exception], ...] = (redis.ConnectionError, redis.TimeoutError, OSError)
+
 _client: redis.Redis | None = None
 
 

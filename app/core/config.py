@@ -35,6 +35,12 @@ load_dotenv()
 # (app/agent/cost/usage_events_retention.py::sweep_old_events).
 USAGE_EVENT_MIN_RETENTION_DAYS = 35
 
+# How long a conversation's lock (`agent:lock:<thread>`) lives without being renewed. The worker holding it renews it every third of this while the job
+# runs (`agent_worker.py`), so it does not have to outlast the longest turn: it only bounds how long a CRASHED worker's lock keeps the conversation
+# busy. A constant, not a setting: `agent_worker_reclaim_idle_seconds` must exceed it, so a reclaimed job never meets the dead worker's live lock
+# (`Settings._the_queue_timings_stay_in_order`; PRODUCTION_REVIEW.md R05).
+THREAD_LOCK_TTL_SECONDS = 60
+
 
 class Settings(BillingSettings):
     # `hide_input_in_errors`: a ValidationError normally prints the offending raw value (`input_value='...'`). This class
@@ -461,16 +467,18 @@ class Settings(BillingSettings):
     # the reason process_request/process_job always ack instead of blindly redelivering.
     worker_reclaim_interval_seconds: int = 60
 
-    # How long an entry must sit claimed-but-unacked before its original
-    # consumer is presumed dead (not just slow) and it's reclaimed. Must
-    # stay comfortably above the longest a legitimately-alive job can hold
-    # an entry: a "turn" job is wall-clock-bounded by request_timeout_seconds
-    # (default 60s) and a "resume" job isn't bounded by that timeout at all
-    # (see runtime/stream.py::astream_events_resume) but is covered by
-    # queue.py's THREAD_LOCK_TTL_SECONDS = request_timeout_seconds * 2 as its
-    # own de facto ceiling — this default doubles THAT margin again so a
-    # slow-but-alive resume is never mistaken for a dead worker.
-    agent_worker_reclaim_idle_seconds: int = 240
+    # How old an entry on a requests stream may be before a worker's reclaim pass drops it (`workers/streams.py::trim_stale_entries`): the safety net for
+    # entries acknowledged before `ack_and_delete` existed, or by a process that died between the ack and the delete. An entry this old was never going to be
+    # served: the API stops waiting for a first event after chat_first_response_deadline_seconds (30 s). It must exceed both reclaim idles, because a trim
+    # drops pending entries too (a validator holds that). Not a stream length cap: `XADD MAXLEN` under a backlog deletes jobs nobody has run (R04).
+    requests_stream_max_age_seconds: int = Field(default=86400, ge=3600)
+
+    # How long an entry must sit claimed-but-unacked before its original consumer is presumed dead (not just slow) and it is reclaimed. It must exceed the
+    # longest a live job can hold an entry: a turn is bounded by request_timeout_seconds, and an UNATTENDED one runs up to 1 + unattended_max_decline_rounds
+    # streams, each with its own limit (runtime/stream.py::_decline_every_pause), so 60 x 4 = 240 s by default. A validator refuses a configuration where it
+    # does not, by at least 30 s (the shipped 300 clears 270): raising REQUEST_TIMEOUT_SECONDS alone made a healthy turn "reclaimed" and run twice
+    # (pattern 99). Nothing about a turn that is waiting for a free worker slot counts here: a worker reads only what it can start (agent_worker.py::run).
+    agent_worker_reclaim_idle_seconds: int = 300
 
     # Ingest jobs have no overall wall-clock timeout at all (a large
     # PDF/DOCX can legitimately run for minutes) — this default is
@@ -499,6 +507,23 @@ class Settings(BillingSettings):
     # asking is cancelled with an explicit "needs a person's approval" reply
     # rather than looping. Bounded, never unbounded (constitution Principle V).
     unattended_max_decline_rounds: int = 3
+
+    @model_validator(mode="after")
+    def _the_queue_timings_stay_in_order(self) -> "Settings":
+        # Messages name the variables, never their values (pattern 59).
+        longest_job = self.request_timeout_seconds * (1 + self.unattended_max_decline_rounds)
+        if self.agent_worker_reclaim_idle_seconds < max(longest_job, THREAD_LOCK_TTL_SECONDS) + 30:
+            raise ValueError(
+                "AGENT_WORKER_RECLAIM_IDLE_SECONDS must exceed REQUEST_TIMEOUT_SECONDS x (1 + UNATTENDED_MAX_DECLINE_ROUNDS), the longest an unattended turn "
+                "runs, and the conversation lock's lifetime, each by at least 30 s: a job still running is otherwise reclaimed and run a second time. Raise it, "
+                "or lower the others"
+            )
+        if self.requests_stream_max_age_seconds <= max(self.agent_worker_reclaim_idle_seconds, self.ingest_worker_reclaim_idle_seconds):
+            raise ValueError(
+                "REQUESTS_STREAM_MAX_AGE_SECONDS must exceed AGENT_WORKER_RECLAIM_IDLE_SECONDS and INGEST_WORKER_RECLAIM_IDLE_SECONDS: the trim drops pending "
+                "entries too, so a job that could still be reclaimed would be deleted first"
+            )
+        return self
 
     # Cap on app/adapters/outbound/redis/queue.py::get_client()'s connection pool —
     # redis-py's default (100) is easy to blow through since every
@@ -794,6 +819,7 @@ PYROSCOPE_SERVER_ADDRESS = settings.pyroscope_server_address
 PYROSCOPE_SAMPLE_RATE = settings.pyroscope_sample_rate
 INGEST_WORKER_MAX_CONCURRENCY = settings.ingest_worker_max_concurrency
 WORKER_RECLAIM_INTERVAL_SECONDS = settings.worker_reclaim_interval_seconds
+REQUESTS_STREAM_MAX_AGE_SECONDS = settings.requests_stream_max_age_seconds
 AGENT_WORKER_RECLAIM_IDLE_SECONDS = settings.agent_worker_reclaim_idle_seconds
 INGEST_WORKER_RECLAIM_IDLE_SECONDS = settings.ingest_worker_reclaim_idle_seconds
 MAX_AUTO_RECLAIM_RETRIES = settings.max_auto_reclaim_retries
