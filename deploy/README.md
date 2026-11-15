@@ -449,6 +449,23 @@ opposite drifts on adjacent days: that signature is the straddle, not a loss.
 table spend is read from. It takes no arguments; the window is the setting. It prints what it did and says when it stopped at its ceiling (run it again). Nothing schedules it: run it from cron once your retention
 policy is decided. The billing package has its own sweep for its own table (`make billing-usage-sweep`, in the billing [runbook](../packages/billing/docs/RUNBOOK.md)).
 
+## Trimming conversations
+
+**`make checkpoint-sweep`** deletes a conversation (every checkpoint of it, and its row in the session directory) `CHECKPOINT_RETENTION_DAYS` after its last message. **The default is 0, which is off**:
+nothing is deleted until you choose a number, and until you do, the checkpointer's tables grow with every step of every turn (each change to the message list stores the whole list again). Run it by hand
+with `ARGS=--dry-run` first: it prints how many conversations it would delete and changes nothing. A real run needs the checkpointer database (it opens the saver itself); it prints what it did, and says when it
+stopped at its ceiling of 50,000 conversations (run it again). Nothing schedules it; from cron once the retention policy is decided:
+
+```
+30 3 * * * cd /opt/graph-agent-core && docker compose --project-directory . -f deploy/compose/docker-compose.prod.yml run --rm --no-deps -T api python -m scripts.jobs.checkpoint_sweep
+```
+
+(`-T` because cron has no terminal, and `api` because it is the service the other one-off commands in this file run from. That line was written from the compose file and the other commands here, not run on a droplet: try it by hand with `--dry-run` before relying on it.)
+
+It does not touch the usage events (`make usage-events-sweep`), the wallet, a person's cross-session memories, the gateway's spend logs (`store_prompts_in_spend_logs` is off in production) or Langfuse, and it
+does not trim old checkpoints inside a conversation that is still in use. A conversation that gets a message while the sweep runs keeps its row, but may lose its older history. One that was paused at an
+approval is deleted with the rest, and the approval can no longer be given, which runs nothing.
+
 ## Credit billing (optional)
 
 Everything about credit billing (turning it on, changing a wallet, reconciling the wallet, selling a credit pack with Stripe or Polar, its dashboard and alerts) is the billing package's:

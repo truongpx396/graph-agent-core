@@ -11,6 +11,9 @@ followup-sweep:  ## One-shot sweep of due sales follow-ups, drafting nudges for 
 tool-call-dedup-sweep:  ## Delete stale tool_call_dedup rows past their retention window (cron it)
 	python -m scripts.jobs.tool_call_dedup_sweep
 
+checkpoint-sweep:  ## Delete conversations (checkpoints and session rows) older than CHECKPOINT_RETENTION_DAYS; 0 = off. ARGS=--dry-run first (cron it once the retention policy is decided)
+	python -m scripts.jobs.checkpoint_sweep $(ARGS)
+
 usage-events-sweep:  ## Delete usage events older than USAGE_EVENT_RETENTION_DAYS (min 35). The caps read this table: cron it only once the retention policy is decided
 	python -m scripts.jobs.usage_events_sweep
 

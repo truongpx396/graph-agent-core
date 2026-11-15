@@ -135,7 +135,7 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R08 | Three Redis round trips for every token | P1 | S, then M | read from code | | done (step 1; step 2 needs a load-test measurement first) |
 | R09 | No payload index on the fields every vector search filters by | P1 | S | read from code | R03 | done |
 | R10 | One HTTP client per ML-service call; the same question embedded up to four times a turn | P1 | M | read from code | | done |
-| R11 | Checkpoints are kept forever; no way to delete a conversation | P1 | M | read from code | | open |
+| R11 | Checkpoints are kept forever; no way to delete a conversation | P1 | M | read from code | | PR 1 done (retention sweep, off by default); PR 2 (owner delete route) open |
 | R12 | An approval approves whatever is pending, not what was shown; decisions are not recorded | P1 | L | read from code | | open |
 | R13 | A dropped connection loses the rest of the answer; no keepalive | P1 | M | read from code | | open |
 | R14 | No size limit on a message, a conversation id or attached images | P1 | S | read from code | | done |

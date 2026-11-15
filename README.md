@@ -824,6 +824,7 @@ until configured**.
 | `make authlimit-test` · `-up` · `-up-app` · `-keys` · `-smoke` · `-revoke` · `-latency` · `-mutants` · `-web-check` | The front door ([commands](#front-door-authlimit)) |
 | **⏰ One-shot jobs** (for cron; nothing schedules them) | |
 | `make ops-digest` · `make followup-sweep` · `make tool-call-dedup-sweep` | The ops digest · the sales follow-up sweep · the dedup-table sweep |
+| `make checkpoint-sweep` | Delete conversations (checkpoints and session rows) older than `CHECKPOINT_RETENTION_DAYS`; **0 is off**, `ARGS=--dry-run` first |
 | **✅ Gates and tools** | |
 | `make lint` · `make typecheck` · `make test` | The CI gates |
 | `make openapi` · `make openapi-breaking` | Rewrite the committed OpenAPI documents from the code · fail a change that breaks a client of main's (needs `oasdiff`, see the target) |
@@ -891,7 +892,7 @@ anyone who sets the right headers.
 - **The ops domain is global** (no control over which tenants may use it) and **the dedup lookup is not tenant-scoped**.
 - **A residual duplicate window for team-channel notifications** (support escalation, sales handoff, ops post).
 - **Monthly spend caps are linear in a month's model calls** (about 0.4 s at 2,000,000 events; off by default; the lever, a per-day rollup, isn't built; pattern 58 in [COST_GOVERNANCE.md](COST_GOVERNANCE.md)).
-- **Nothing alerts that the ledger carry-over was skipped, and nothing schedules `make usage-events-sweep`** (`--dry-run` printing `Would carry 0` is the check; wire the sweep to cron once your retention policy is decided).
+- **Nothing alerts that the ledger carry-over was skipped, and nothing schedules `make usage-events-sweep` or `make checkpoint-sweep`** (`--dry-run` printing `Would carry 0` is the check; wire the sweep to cron once your retention policy is decided).
 - **A pre-existing vector collection is trusted, not verified** (adopted with a warning until its first `make reembed`), and a re-embed doesn't support writes while it runs (it detects them and stops).
 - **Embedding spend isn't metered.** Chat calls are recorded per call and counted by the caps; embeddings are not, nor attributed at the gateway.
 
