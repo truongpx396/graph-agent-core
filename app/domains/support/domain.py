@@ -127,4 +127,6 @@ SUPPORT_MANIFEST = AgentManifest(
     name="support",
     system_prompt=SUPPORT_SYSTEM_PROMPT,
     allowed_tools=tuple(t.name for t in SUPPORT_DOMAIN_PLUGIN.tools()),
+    # Answers here usually end in an action, not a reading list: no second model call for follow-up chips on every cited answer (R30).
+    suggest_followups=False,
 )

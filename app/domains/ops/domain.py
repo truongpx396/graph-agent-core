@@ -168,4 +168,6 @@ OPS_MANIFEST = AgentManifest(
     name="ops",
     system_prompt=OPS_SYSTEM_PROMPT,
     allowed_tools=tuple(t.name for t in OPS_DOMAIN_PLUGIN.tools()),
+    # Answers here usually end in an action, not a reading list: no second model call for follow-up chips on every cited answer (R30).
+    suggest_followups=False,
 )
