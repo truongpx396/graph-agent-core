@@ -171,6 +171,15 @@ agent_stream_restarted_total = Counter(
     "counts output-quality retries of a stream that ended normally.",
 )
 
+agent_output_check_fired_total = Counter(
+    "agent_output_check_fired_total",
+    "An output check (graph/output_checks.py: too_short, deferred, uncited, ...) fired on a finished answer, by the model tier that wrote it (`local` when the "
+    "router is off or kept the turn local, else `medium` or `strong`). Many of those checks exist because a 3B or 7B local model drops instructions, and a "
+    "false positive costs another full model round; this says which ones still earn their place once ROUTER_MODE sends turns to a stronger model. The "
+    "per-check counters (agent_deferred_instead_of_acting_total, ...) stay: alerts and dashboards use them. PRODUCTION_REVIEW.md R32.",
+    ["check", "tier"],
+)  # check: a code in output_checks.CHECKS; tier: local | medium | strong
+
 agent_zero_citations_total = Counter(
     "agent_zero_citations_total",
     "Non-empty final answers with retrieved context available but zero "

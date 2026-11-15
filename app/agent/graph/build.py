@@ -58,6 +58,7 @@ from app.agent.graph.followups import make_suggest_followups_node
 from app.agent.graph.hitl import make_human_approval_node, route_after_approval
 from app.agent.graph.links import cannot_open_links
 from app.agent.graph.model_route import make_route_model_node
+from app.agent.graph.output_checks import parse_checks_off_on_routed_tiers
 from app.agent.graph.retrieval import make_retrieve_context_node
 from app.agent.graph.retry import (
     make_no_answer_fallback_node,
@@ -80,6 +81,7 @@ from app.core.config import (
     CHAT_MODEL,
     FOLLOWUPS_ENABLED,
     MAX_COST_USD_PER_TURN,
+    OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS,
     SEMANTIC_CACHE_ENABLED,
 )
 from app.core.security import SecurityCtx
@@ -265,6 +267,8 @@ def build_graph(
         system_prompt=manifest.system_prompt,
         enforce_citations=profile.enforce_citations,
         skill_required_tools=skill_required_tools,
+        # Validated here, at build, so a typo or a protected check stops the process at start-up instead of leaving a check running that the operator thinks is off.
+        skip_on_routed_tiers=parse_checks_off_on_routed_tiers(OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS),
     )
     domain_tool_batch_guard = functools.partial(tool_batch_guard, valid_tool_names=valid_tool_names)
 

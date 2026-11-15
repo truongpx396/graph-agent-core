@@ -298,12 +298,39 @@ def check_for(code: str) -> OutputCheck:
     return _BY_CODE[code]
 
 
-def run_checks(ctx: CheckContext) -> dict[str, Any]:
+# Checks that protect the person, not the formatting: a leaked system prompt and an invented tool result are as serious from a strong model as from a small
+# one, so a deployment may not switch them off for any tier (PRODUCTION_REVIEW.md R32).
+NEVER_SKIPPED = frozenset({"leaked_prompt", "fabricated"})
+ROUTED_TIERS = frozenset({"medium", "strong"})
+
+
+def parse_checks_off_on_routed_tiers(spec: str) -> frozenset[str]:
+    """`OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS` as a set of check codes. Raises `ValueError`, at start-up, for a code that is not in `CHECKS` (a typo would
+    otherwise leave a check running while the operator believes it is off) and for one in `NEVER_SKIPPED`. The message names the variable and the fixed
+    vocabulary, never what was typed (pattern 59)."""
+    codes = frozenset(part.strip() for part in spec.split(",") if part.strip())
+    unknown = codes - _BY_CODE.keys()
+    if unknown:
+        raise ValueError(
+            "OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS names a code that is not an output check; the codes are: " + ", ".join(check.code for check in CHECKS)
+        )
+    if codes & NEVER_SKIPPED:
+        raise ValueError(
+            "OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS may not list " + " or ".join(sorted(NEVER_SKIPPED)) + ": they protect the person, not the formatting, "
+            "and apply to every model tier"
+        )
+    return codes
+
+
+def run_checks(ctx: CheckContext, skip: frozenset[str] = frozenset()) -> dict[str, Any]:
     """Every check that fires on `ctx`, as `{code: detail}` in priority order (the first key is the
     reason). All checks run and are counted, not just the winner: the metrics measure how often each
-    failure happens, not how often it is the one reported."""
+    failure happens, not how often it is the one reported. A code in `skip` does not run at all (the
+    routed tiers' list, `parse_checks_off_on_routed_tiers`)."""
     findings: dict[str, Any] = {}
     for check in CHECKS:
+        if check.code in skip:
+            continue
         detail = check.detect(ctx)
         if detail:
             findings[check.code] = detail
