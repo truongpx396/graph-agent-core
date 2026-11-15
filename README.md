@@ -623,11 +623,12 @@ automatically once CI passes on `main`.
 
 Full runbook, scaling, backups, rollback and teardown: **[deploy/README.md](deploy/README.md)**.
 
-### 🚨 Four things that bite on a first deploy
+### 🚨 Five things that bite on a first deploy
 
 - 🔓 **Production runs in identity mode behind the same front door as the dev stack** (`docker-compose.prod.yml`: Caddy on three real names, `authlimit`, Casdoor, the MCP gateway; [deploy/README.md](deploy/README.md)). A domain is required, and `AUTH_MODE=headers` is never set there. `AUTH_MODE=headers` trusts `X-Tenant-Id`/`X-Principal-Id` as sent: use it only for local runs, or behind a gateway of your own that sets both and discards client copies.
 - 📦 **The images ship no installer.** Built in stages with uv, the prod `api`, worker and `ml-service` containers run read-only with all capabilities dropped, so a change that writes to the image filesystem at runtime fails ([ENGINEERING_PATTERNS.md](ENGINEERING_PATTERNS.md) pattern 76).
 - 🗄️ **SQL migrations aren't applied to an existing volume.** `postgres-init/*.sql` runs only on a fresh volume and the deploy only syncs the files ([Database migrations](#database-migrations)).
+- 🕵️ **The production gateway does not store prompts or answers** (`store_prompts_in_spend_logs: false`; the development file turns it on so the admin UI's log page shows bodies). Its spend log keeps the metadata the caps read. Turning bodies on in production is a deliberate choice with a retention period ([deploy/README.md](deploy/README.md#everyday-operations)).
 - 📒 **Upgrading from a release whose spend caps read `usage_ledger`:** apply `postgres-init/19`, run `make usage-events-carry-over` (`ARGS=--dry-run` first), deploy, then run it once more. Skipping the first makes every cap read fail open; skipping the second makes a monthly cap forget the month so far ([runbook](deploy/README.md#upgrading-carry-the-ledgers-history-into-the-usage-events)).
 
 ### Gateway backstop

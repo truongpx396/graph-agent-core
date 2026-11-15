@@ -235,5 +235,5 @@ general_settings:
   # metadata (model, tokens, cost, latency, status) in LiteLLM_SpendLogs —
   # the actual request/response bodies are omitted by default. This makes
   # each log row expandable to the full messages array sent and the raw
-  # completion returned.
+  # completion returned. Development only: the production file sets it false, because bodies are prompt text, kept with no retention (R16).
   store_prompts_in_spend_logs: true
