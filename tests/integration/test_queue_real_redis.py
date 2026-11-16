@@ -261,3 +261,28 @@ async def test_a_conversation_is_busy_exactly_while_a_worker_holds_its_real_lock
 
     await streams.release_thread_lock(client, thread, "worker-1")
     assert await queue.is_thread_busy(client, thread) is False
+
+
+async def test_a_dropped_reader_picks_the_turn_up_after_the_last_real_entry_id_it_saw_and_the_owner_outlives_the_events():
+    """PRODUCTION_REVIEW.md R13 against a real server: the entry ids Redis assigns are the positions `Last-Event-ID` carries, `XREAD` after one returns exactly
+    the later events, and the conversation a request id belongs to (what authorizes a re-read) lives as long as the stream, refreshed by every event."""
+    client = queue.get_client()
+    request_id = f"reread-{uuid.uuid4().hex}"
+    await queue.publish_request(client, request_id=request_id, text="hi", thread_id="t-reread", ctx=TEST_CTX)
+    assert await queue.thread_of_request(client, request_id) == "t-reread"
+    assert 0 < await client.ttl(jobs.request_thread_key(request_id)) <= jobs.RESULTS_STREAM_TTL_SECONDS
+
+    for word in ("a", "b", "c"):
+        await streams.publish_result(client, request_id, {"type": "token", "content": word})
+    await streams.publish_result(client, request_id, {"type": "done"})
+    seen = [pair async for pair in queue.read_results_from(client, request_id)]
+    assert [event.get("content") for _, event in seen if event["type"] == "token"] == ["a", "b", "c"]
+    assert all("-" in entry_id for entry_id, _ in seen), "a real server's ids, the shape the Last-Event-ID header is validated against"
+
+    later = [pair async for pair in queue.read_results_from(client, request_id, after=seen[1][0])]  # the connection dropped after "b"
+    assert [event.get("content") for _, event in later if event["type"] == "token"] == ["c"]
+    assert later[-1][1] == {"type": "done"}
+
+    await client.expire(jobs.request_thread_key(request_id), 5)  # nearly expired: the next event must extend it with the stream
+    await streams.publish_result(client, request_id, {"type": "token", "content": "late"})
+    assert await client.ttl(jobs.request_thread_key(request_id)) > 5

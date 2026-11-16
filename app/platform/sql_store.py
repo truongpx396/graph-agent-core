@@ -20,6 +20,7 @@ from psycopg.rows import TupleRow
 from psycopg_pool import AsyncConnectionPool
 
 from app.core.config import APPDATA_DATABASE_URL, APPDATA_POOL_MAX_SIZE
+from app.platform.self_healing_pool import SelfHealingPool
 
 # What every pool this app opens passes to its connections. psycopg prepares a statement once it has run `prepare_threshold` times on one
 # connection: 5 by default, and 0 means "on the first run" (only None means never). Behind a transaction pooler the next transaction runs
@@ -65,8 +66,8 @@ async def _get_pool() -> AsyncConnectionPool:
         return _pool
     async with _pool_lock:
         if _pool is None:  # re-check: another caller may have finished while this one waited for the lock
-            pool = AsyncConnectionPool(
-                APPDATA_DATABASE_URL, min_size=1, max_size=APPDATA_POOL_MAX_SIZE, kwargs=dict(POOLER_SAFE_CONNECTION_KWARGS), open=False
+            pool = SelfHealingPool(
+                APPDATA_DATABASE_URL, name="appdata", min_size=1, max_size=APPDATA_POOL_MAX_SIZE, kwargs=dict(POOLER_SAFE_CONNECTION_KWARGS), open=False
             )
             await pool.open(wait=True)
             _pool = pool

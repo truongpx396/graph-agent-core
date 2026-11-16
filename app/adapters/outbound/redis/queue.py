@@ -27,14 +27,27 @@ from app.core.security import SecurityCtx
 from app.platform.redis_client import UNAVAILABLE_ERRORS, StreamReadResponse, get_client
 from app.ports.outbound.jobs import (
     CANCEL_FLAG_TTL_SECONDS,
+    RESULTS_STREAM_TTL_SECONDS,
     TERMINAL_EVENT_TYPES,
     cancel_flag_key,
+    request_thread_key,
     requests_stream_key,
     results_stream_key,
     thread_lock_key,
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _remember_request_thread(client: redis.Redis, request_id: str, thread_id: str) -> None:
+    """Before the job is published, so a client that reads the stream the moment it has the request id finds the owner. Its lifetime is the results stream's:
+    the worker refreshes it with every event it publishes (`streams.py::publish_result`)."""
+    await client.set(request_thread_key(request_id), thread_id, ex=RESULTS_STREAM_TTL_SECONDS)
+
+
+async def thread_of_request(client: redis.Redis, request_id: str) -> str | None:
+    value = await client.get(request_thread_key(request_id))
+    return None if value is None else str(value)
 
 
 async def publish_request(
@@ -82,6 +95,7 @@ async def publish_request(
             "enqueued_at": time.time(),
         }
     )
+    await _remember_request_thread(client, request_id, thread_id)
     await client.xadd(requests_stream_key(domain), {"payload": payload})
 
 
@@ -110,6 +124,7 @@ async def publish_resume_request(
             "enqueued_at": time.time(),
         }
     )
+    await _remember_request_thread(client, request_id, thread_id)
     await client.xadd(requests_stream_key(domain), {"payload": payload})
 
 
@@ -125,6 +140,7 @@ async def publish_cancel_request(
     payload = json.dumps(
         {"kind": "cancel", "request_id": request_id, "thread_id": thread_id, "ctx": ctx, "enqueued_at": time.time()}
     )
+    await _remember_request_thread(client, request_id, thread_id)
     await client.xadd(requests_stream_key(domain), {"payload": payload})
 
 
@@ -240,6 +256,21 @@ async def read_results(
     block_ms: int = 5000,
     first_event_deadline_seconds: float | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
+    """The events of `read_results_from`, without their positions: for a caller that reads a turn once, start to end."""
+    async for _entry_id, event in read_results_from(
+        client, request_id, block_ms=block_ms, first_event_deadline_seconds=first_event_deadline_seconds
+    ):
+        yield event
+
+
+async def read_results_from(
+    client: redis.Redis,
+    request_id: str,
+    *,
+    after: str = "0",
+    block_ms: int = 5000,
+    first_event_deadline_seconds: float | None = None,
+) -> AsyncGenerator[tuple[str, dict[str, Any]], None]:
     """Producer side: yield each event published for `request_id`, in order, blocking up to `block_ms` per read,
     until a terminal event (`type` is `done`, `error` or `approval_required`). `approval_required` is terminal
     because it is the last event `_run_graph_stream` yields for a paused turn and the worker stops forwarding
@@ -256,10 +287,11 @@ async def read_results(
     failure has, and returns.
     """
     key = results_stream_key(request_id)
-    last_id = "0"
+    last_id = after
+    # Only from the start: a client resuming from a position has already seen the job run, so a quiet stretch is a tool, not a job nobody picked up.
     deadline = (
         time.monotonic() + first_event_deadline_seconds
-        if first_event_deadline_seconds is not None
+        if first_event_deadline_seconds is not None and after == "0"
         else None
     )
     while True:
@@ -276,7 +308,7 @@ async def read_results(
                     "running for this domain?"
                 ),
             )
-            yield {"type": "error", "content": envelope.message, **envelope.to_dict()}
+            yield last_id, {"type": "error", "content": envelope.message, **envelope.to_dict()}
             return
         response = await read_events(client, key, last_id, block_ms)
         if not response:
@@ -286,7 +318,7 @@ async def read_results(
         for entry_id, fields in entries:
             last_id = entry_id
             event = json.loads(fields["payload"])
-            yield event
+            yield entry_id, event
             if event.get("type") in TERMINAL_EVENT_TYPES:
                 return
 
@@ -342,6 +374,15 @@ class RedisTurnQueue:
     async def read_results(self, request_id: str, *, first_event_deadline_seconds: float | None = None) -> AsyncGenerator[dict[str, Any], None]:
         async for event in read_results(get_client(), request_id, first_event_deadline_seconds=first_event_deadline_seconds):
             yield event
+
+    async def read_results_from(
+        self, request_id: str, *, after: str = "0", first_event_deadline_seconds: float | None = None
+    ) -> AsyncGenerator[tuple[str, dict[str, Any]], None]:
+        async for entry_id, event in read_results_from(get_client(), request_id, after=after, first_event_deadline_seconds=first_event_deadline_seconds):
+            yield entry_id, event
+
+    async def thread_of_request(self, request_id: str) -> str | None:
+        return await thread_of_request(get_client(), request_id)
 
     async def ping(self) -> None:
         await get_client().ping()

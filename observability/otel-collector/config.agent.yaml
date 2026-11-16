@@ -53,6 +53,11 @@ receivers:
           scrape_interval: 15s
           static_configs:
             - targets: ["pgbouncer-exporter:9127"]
+        # The work queue's Redis (`redis-exporter`, docker-compose.prod.yml): the memory gauges `RedisQueueMemoryHigh` reads. It has `noeviction`, so a full one refuses writes.
+        - job_name: redis
+          scrape_interval: 15s
+          static_configs:
+            - targets: ["redis-exporter:9121"]
 
 processors:
   batch:

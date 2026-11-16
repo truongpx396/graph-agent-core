@@ -319,9 +319,11 @@ suspecting the app.
 |---|---|
 | `GET /` | Built-in web UI (no build step, no CDN) |
 | `GET /health` · `GET /health/ready` | Liveness · readiness (503 names whichever of Qdrant, Postgres ×2, Redis, ml-service is down) |
-| `POST /chat/stream/queued` | Start a turn; SSE stream. Needs a running `agent-worker` |
+| `POST /chat/stream/queued` | Start a turn; SSE stream. Needs a running `agent-worker`. Each frame has an `id:`, the response an `X-Request-Id`, and a silent stream gets `: keepalive` comments |
+| `GET /chat/stream/{request_id}` | Read a turn again after a dropped connection: send the last frame's `id:` as `Last-Event-ID` and only later events come. The caller's own conversations only; the events are kept five minutes after the last one |
 | `POST /chat/resume` · `POST /chat/cancel` | Approve/reject a paused tool call · stop a run |
 | `GET /chat/sessions` · `…/{id}/messages` · `…/{id}/pending_approval` | Conversation history and any pending approval |
+| `POST /chat/feedback` | Rate one answer, thumbs up or down, with an optional comment (`message_index` or `request_id` says which). Advisory: counted and stored for a reviewer; nothing the agent does depends on it. The caller's own conversations only |
 | `DELETE /chat/sessions/{id}` | Delete one of the caller's own conversations (its saved state and its list entry). 404 for anyone else's or an unknown one; 409 `thread_busy` while a turn runs on it |
 | `GET /usage` | The tenant's cost, `budgets` (each limit with spent, remaining, `resets_at`) and `credits` (the wallet, or `null` when off or none) |
 | `POST /ingest/upload` · `GET /ingest/stream/{job_id}` | Upload PDF/DOCX/text to the ingest worker · follow its progress. Uploading a file name again **replaces** the earlier upload of that name |
@@ -692,6 +694,7 @@ hand, in order (`psql -U langfuse -d appdata -f postgres-init/NN-….sql`).
 | `17-usage-ledger-indexes` | Indexes on the retired `usage_ledger` | Nothing that matters: the caps read `usage_events` |
 | `18-budget-policies` | Per-tenant and per-person limit overrides (`make budget-policy`) | Overrides are ignored (one warning); limits come from `Settings` alone |
 | `19-usage-events` | One immutable row per model call: **the spend the dollar caps and `GET /usage` sum** | Nothing is metered (`UsageEventTableMissing`) **and the caps' spend read fails**: under `BUDGET_CHECK_FAILURE_POLICY=open` every turn runs unchecked and `TenantAllowanceUnenforced` pages. Apply it **before** the change that reads the caps from it, then run `make usage-events-carry-over` |
+| `26-chat-feedback` | A person's thumbs up or down on one answer (`POST /chat/feedback`), advisory | A rating fails with a 5xx; `/health/ready` warns that the table is missing and names this script. Apply it once: `dc exec -T postgres psql -U langfuse -d postgres -f /docker-entrypoint-initdb.d/26-chat-feedback.sql` |
 | `20`, `22`, `24`, `25` | The billing package's wallet, webhook inbox, usage record and export outbox | Billing writes fail (counted, paged); the agent's own meter is unaffected |
 
 </details>
@@ -825,6 +828,8 @@ until configured**.
 | `make authlimit-test` · `-up` · `-up-app` · `-keys` · `-smoke` · `-revoke` · `-latency` · `-mutants` · `-web-check` | The front door ([commands](#front-door-authlimit)) |
 | **⏰ One-shot jobs** (for cron; nothing schedules them) | |
 | `make ops-digest` · `make followup-sweep` · `make tool-call-dedup-sweep` | The ops digest · the sales follow-up sweep · the dedup-table sweep |
+| `make restore-drill` | Restore backups of a seeded Postgres, Casdoor DB, Qdrant and Redis into fresh containers and time it (needs Docker; `ARGS="--points 50000"`). The backup job is `deploy/backup/backup.sh` (`deploy/README.md`, "Backups and restore") |
+| `make answer-sample` | Sample yesterday's conversations and count answers with an invented source number, a missing attribution or a wrong one: the graph's own grounded-claims checks, counts only, advisory (`ARGS="--date YYYY-MM-DD"`). Reads answers across tenants: leave it unscheduled if that is not allowed |
 | `make checkpoint-sweep` | Delete conversations (checkpoints and session rows) older than `CHECKPOINT_RETENTION_DAYS`; **0 is off**, `ARGS=--dry-run` first |
 | **✅ Gates and tools** | |
 | `make lint` · `make typecheck` · `make test` | The CI gates |

@@ -43,7 +43,7 @@ async def _fake_identity():
 @pytest.fixture
 def tenant(monkeypatch):
     info = ensure_redis()
-    monkeypatch.setattr(semantic_cache, "REDIS_URL", info["redis_url"])
+    monkeypatch.setattr(semantic_cache, "SEMANTIC_CACHE_REDIS_URL", info["redis_url"])
     monkeypatch.setattr(semantic_cache, "_client", None)
     monkeypatch.setattr(semantic_cache, "_ready_indexes", set())
     monkeypatch.setattr(semantic_cache, "embed_query", _fake_embed_text)

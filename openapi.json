@@ -3,7 +3,7 @@
   "info": {
     "title": "Graph Agent Core API",
     "description": "A multi-tenant, multi-domain LangGraph RAG agent. A client starts a turn, reads its events as they stream, answers an approval the\nagent asks for, and lists its own past sessions. One graph serves every domain; `X-Domain` picks which (default `ecorp`).\n\n**Who is calling.** Behind the front door (the authlimit service) a client sends `Authorization: Bearer <access token>`; the door\nverifies it and gives the API a signed identity, so the tenant and person are never taken from a header or a body. Only a deployment run\nwith `AUTH_MODE=headers` (a developer's machine, the tests) reads `X-Tenant-Id` and `X-Principal-Id` as sent. Everything a caller reads or\nchanges is scoped to its tenant and person.\n\n**Errors.** A refusal the application makes is the canonical envelope `{\"code\", \"message\", \"details\"}`; switch on `code`, not on the\ntext. A turn's own failures arrive as an `error` event on its stream, in the same shape.\n\n**Streams.** `POST /chat/stream/queued` and `GET /ingest/stream/{job_id}` answer with server-sent events, which OpenAPI describes only\nas a `text/event-stream` body; the event vocabulary is in the first route's description.\n",
-    "version": "3.2.0"
+    "version": "3.4.0"
   },
   "servers": [
     {
@@ -173,7 +173,7 @@
         },
         "responses": {
           "200": {
-            "description": "A server-sent event stream: `data: <event>` frames until one terminal event (`done`, `error` or `approval_required`). The schema is that of one event.",
+            "description": "A server-sent event stream: an `id: <position>` line and a `data: <event>` line per frame, until one terminal event (`done`, `error` or `approval_required`), with `: keepalive` comments while it is silent. The `X-Request-Id` response header names the job: if the connection drops, `GET /chat/stream/{request_id}` with `Last-Event-ID` reads on. The schema is that of one event.",
             "content": {
               "text/event-stream": {
                 "itemSchema": {
@@ -239,6 +239,195 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/stream/{request_id}": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Chat Stream Reread",
+        "description": "Read a turn's events again, from where a dropped connection stopped (PRODUCTION_REVIEW.md R13). `request_id` is the `X-Request-Id` of the response that\ndropped; `Last-Event-ID` is the `id:` of the last frame it delivered. The events stay for `RESULTS_STREAM_TTL_SECONDS` after the last one.\n\nThe results stream carries no owner, so the publisher stored the conversation each request id belongs to, and the caller must own THAT conversation\n(`session_belongs_to`, the same boundary as every other route here). An unknown, expired or someone else's id are one 404.",
+        "operationId": "chat_stream_reread_chat_stream__request_id__get",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\d+-\\d+$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The `id:` of the last frame the client received; only later events are sent. Omit to read from the start.",
+              "title": "Last-Event-Id"
+            },
+            "description": "The `id:` of the last frame the client received; only later events are sent. Omit to read from the start."
+          },
+          {
+            "name": "x-tenant-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Header mode only: the tenant, as sent. Ignored in identity mode.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Header mode only: the tenant, as sent. Ignored in identity mode."
+          },
+          {
+            "name": "x-principal-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Header mode only: the principal, as sent. Ignored in identity mode.",
+              "title": "X-Principal-Id"
+            },
+            "description": "Header mode only: the principal, as sent. Ignored in identity mode."
+          },
+          {
+            "name": "x-internal-identity",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identity mode only: the front door's signed identity. Never send it yourself; the front door overwrites it.",
+              "title": "X-Internal-Identity"
+            },
+            "description": "Identity mode only: the front door's signed identity. Never send it yourself; the front door overwrites it."
+          },
+          {
+            "name": "x-domain",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Which domain (app/domains/registry.py) this turn runs against. Read by every chat endpoint below (all of them queued).",
+              "default": "ecorp",
+              "title": "X-Domain"
+            },
+            "description": "Which domain (app/domains/registry.py) this turn runs against. Read by every chat endpoint below (all of them queued)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A server-sent event stream: an `id: <position>` line and a `data: <event>` line per frame, until one terminal event (`done`, `error` or `approval_required`), with `: keepalive` comments while it is silent. The `X-Request-Id` response header names the job: if the connection drops, `GET /chat/stream/{request_id}` with `Last-Event-ID` reads on. The schema is that of one event.",
+            "content": {
+              "text/event-stream": {
+                "itemSchema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "string",
+                      "contentMediaType": "application/json",
+                      "contentSchema": {
+                        "oneOf": [
+                          {
+                            "$ref": "#/components/schemas/TokenEvent"
+                          },
+                          {
+                            "$ref": "#/components/schemas/ToolStartEvent"
+                          },
+                          {
+                            "$ref": "#/components/schemas/ToolEndEvent"
+                          },
+                          {
+                            "$ref": "#/components/schemas/RetryEvent"
+                          },
+                          {
+                            "$ref": "#/components/schemas/CompactedEvent"
+                          },
+                          {
+                            "$ref": "#/components/schemas/CitationsEvent"
+                          },
+                          {
+                            "$ref": "#/components/schemas/FollowupsEvent"
+                          },
+                          {
+                            "$ref": "#/components/schemas/ApprovalRequiredEvent"
+                          },
+                          {
+                            "$ref": "#/components/schemas/DoneEvent"
+                          },
+                          {
+                            "$ref": "#/components/schemas/ErrorEvent"
+                          }
+                        ],
+                        "discriminator": {
+                          "propertyName": "type",
+                          "mapping": {
+                            "token": "#/components/schemas/TokenEvent",
+                            "tool_start": "#/components/schemas/ToolStartEvent",
+                            "tool_end": "#/components/schemas/ToolEndEvent",
+                            "retry": "#/components/schemas/RetryEvent",
+                            "compacted": "#/components/schemas/CompactedEvent",
+                            "citations": "#/components/schemas/CitationsEvent",
+                            "followups": "#/components/schemas/FollowupsEvent",
+                            "approval_required": "#/components/schemas/ApprovalRequiredEvent",
+                            "done": "#/components/schemas/DoneEvent",
+                            "error": "#/components/schemas/ErrorEvent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stream for the caller: the id is unknown, its results have expired, or it belongs to another person (all the same answer)."
           },
           "422": {
             "description": "Validation Error",
@@ -341,7 +530,7 @@
         },
         "responses": {
           "200": {
-            "description": "A server-sent event stream: `data: <event>` frames until one terminal event (`done`, `error` or `approval_required`). The schema is that of one event.",
+            "description": "A server-sent event stream: an `id: <position>` line and a `data: <event>` line per frame, until one terminal event (`done`, `error` or `approval_required`), with `: keepalive` comments while it is silent. The `X-Request-Id` response header names the job: if the connection drops, `GET /chat/stream/{request_id}` with `Last-Event-ID` reads on. The schema is that of one event.",
             "content": {
               "text/event-stream": {
                 "itemSchema": {
@@ -509,7 +698,7 @@
         },
         "responses": {
           "200": {
-            "description": "A server-sent event stream: `data: <event>` frames until one terminal event (`done`, `error` or `approval_required`). The schema is that of one event.",
+            "description": "A server-sent event stream: an `id: <position>` line and a `data: <event>` line per frame, until one terminal event (`done`, `error` or `approval_required`), with `: keepalive` comments while it is silent. The `X-Request-Id` response header names the job: if the connection drops, `GET /chat/stream/{request_id}` with `Last-Event-ID` reads on. The schema is that of one event.",
             "content": {
               "text/event-stream": {
                 "itemSchema": {
@@ -679,6 +868,112 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chat/feedback": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Chat Feedback",
+        "description": "Rate one answer, thumbs up or down, with an optional comment (PRODUCTION_REVIEW.md R28). Advisory: it is counted and stored for a reviewer, and nothing the agent does\ndepends on it.\n\nThe conversation must be the caller's (`session_belongs_to`, as on every route about a thread); another person's reads as not found. The answer is identified by its\n`message_index` (the transcript's own numbering) or, failing that, the `request_id` the response carried in `X-Request-Id`. Rating the same answer again replaces the\nearlier rating and is not counted twice.",
+        "operationId": "chat_feedback_chat_feedback_post",
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Header mode only: the tenant, as sent. Ignored in identity mode.",
+              "title": "X-Tenant-Id"
+            },
+            "description": "Header mode only: the tenant, as sent. Ignored in identity mode."
+          },
+          {
+            "name": "x-principal-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Header mode only: the principal, as sent. Ignored in identity mode.",
+              "title": "X-Principal-Id"
+            },
+            "description": "Header mode only: the principal, as sent. Ignored in identity mode."
+          },
+          {
+            "name": "x-internal-identity",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identity mode only: the front door's signed identity. Never send it yourself; the front door overwrites it.",
+              "title": "X-Internal-Identity"
+            },
+            "description": "Identity mode only: the front door's signed identity. Never send it yourself; the front door overwrites it."
+          },
+          {
+            "name": "x-domain",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Which domain (app/domains/registry.py) this turn runs against. Read by every chat endpoint below (all of them queued).",
+              "default": "ecorp",
+              "title": "X-Domain"
+            },
+            "description": "Which domain (app/domains/registry.py) this turn runs against. Read by every chat endpoint below (all of them queued)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "No such session for the caller (another person's session reads the same as an unknown one)."
           },
           "422": {
             "description": "Validation Error",
@@ -1871,6 +2166,72 @@
         ],
         "title": "ErrorResponse",
         "description": "The envelope the front door answers with, for an error the API itself reports over plain HTTP (the streaming routes report theirs as an `error` event)."
+      },
+      "FeedbackRequest": {
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Thread Id",
+            "description": "The conversation the answer is in. It must be the caller's own."
+          },
+          "rating": {
+            "type": "string",
+            "enum": [
+              "up",
+              "down"
+            ],
+            "title": "Rating",
+            "description": "Thumbs up or thumbs down."
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment",
+            "description": "Optional words about the answer. Stored for a reviewer to read; never shown to the agent."
+          },
+          "message_index": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Index",
+            "description": "The answer's place in the transcript (`index` in `GET /chat/sessions/{thread_id}/messages`). Give this or `request_id`."
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id",
+            "description": "The `X-Request-Id` of the response that carried the answer. Used when `message_index` is not given."
+          }
+        },
+        "type": "object",
+        "required": [
+          "thread_id",
+          "rating"
+        ],
+        "title": "FeedbackRequest"
       },
       "FollowupsEvent": {
         "properties": {

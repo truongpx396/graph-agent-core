@@ -137,9 +137,9 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R10 | One HTTP client per ML-service call; the same question embedded up to four times a turn | P1 | M | read from code | | done |
 | R11 | Checkpoints are kept forever; no way to delete a conversation | P1 | M | read from code | | done (retention sweep, off by default; the owner's delete route; no button in the web page) |
 | R12 | An approval approves whatever is pending, not what was shown; decisions are not recorded | P1 | L | read from code | | open |
-| R13 | A dropped connection loses the rest of the answer; no keepalive | P1 | M | read from code | | open |
+| R13 | A dropped connection loses the rest of the answer; no keepalive | P1 | M | read from code | | done (the server side; the web page and CLI do not reconnect yet) |
 | R14 | No size limit on a message, a conversation id or attached images | P1 | S | read from code | | done |
-| R15 | Production Redis: one instance for queue and cache, no persistence policy, floating image tags | P1 | M | read from code | R04 | open |
+| R15 | Production Redis: one instance for queue and cache, no persistence policy, floating image tags | P1 | M | read from code | R04 | done (both services on the Stack image, see pattern 100; sizes are the owner's; no password; not run on a droplet) |
 | R16 | The production gateway stores every prompt and answer | P1 | S | read from code | | done |
 | R17 | No queue depth, queue wait or first-token metric; no traces in production | P1 | M, then L | read from code | | done (part 1; part 2, traces, needs a spec) |
 | R18 | A re-uploaded document leaves its old chunks; no way to delete a document | P1 | M | read from code | R09 | done (with a version order instead of "another ingest id", see pattern 24; no list route) |
@@ -149,10 +149,10 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R22 | A hung worker is never restarted | P2 | S | read from code | | done |
 | R23 | The answer cache ignores the domain; its expiry is set in a second call | P2 | S | read from code | | done |
 | R24 | Two error events carry no `code` | P2 | S | read from code | | done |
-| R25 | A pool hands out a connection that died while idle | P2 | S | read from code | | open |
-| R26 | Backups are a paragraph, not a job; no restore drill | P2 | M | read from code | | open |
+| R25 | A pool hands out a connection that died while idle | P2 | S | read from code | | done (not with `check=`: measured, it stalls the first request 30 s after a restart; the pool's own `check()` once after the first failure instead, see pattern 102) |
+| R26 | Backups are a paragraph, not a job; no restore drill | P2 | M | read from code | | done (the job, a verified download and a performed drill; the drill found that production's Postgres could not initialise a new volume, now fixed; the end-to-end recovery time is not measured; not run on a droplet) |
 | R27 | A transcript is read whole | P2 | S | read from code | | done |
-| R28 | Nothing learns from production answers | P2 | M | from the field | R17 | open |
+| R28 | Nothing learns from production answers | P2 | M | from the field | R17 | done (ratings and the answer sample, both advisory; no thumbs in the web page or CLI yet; a rating is not attached to a trace, which waits for R17 part 2) |
 | R29 | Retrieval runs on every turn, after the router instead of beside it | P1 | M | read from code; reproduced (parallel join) | R17 | done (the parallel step and the `prefetch` switch; no domain is switched, see pattern 20) |
 | R30 | A second model call for follow-ups holds back `done` | P1 | S | read from code | | done |
 | R31 | Old tool results are re-sent to the model on every later call | P1 | S | read from code | | done |

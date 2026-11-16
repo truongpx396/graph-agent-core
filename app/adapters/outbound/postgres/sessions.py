@@ -72,6 +72,19 @@ class PgSessionStore:
                 )
             return await fetch_dicts(cur)
 
+    async def sample_active(
+        self, start: datetime, end: datetime, limit: int, tenants: tuple[str, ...] = ()
+    ) -> builtins.list[dict[str, Any]]:  # `list` is a method of this class: the builtin by name
+        sql = "SELECT thread_id, tenant, principal, domain, last_active_at FROM chat_sessions WHERE last_active_at >= %s AND last_active_at < %s"
+        params: tuple[Any, ...] = (start, end)
+        if tenants:
+            sql += " AND tenant = ANY(%s)"
+            params += (list(tenants),)
+        # random() over the window's rows: a daily off-peak job over one day's conversations, not a request-path query.
+        async with get_connection() as conn:
+            cur = await conn.execute(sql + " ORDER BY random() LIMIT %s", (*params, limit))
+            return await fetch_dicts(cur)
+
     async def delete(
         self, tenant: str, principal: str, thread_id: str, domain: str, *, inactive_before: datetime | None = None
     ) -> bool:

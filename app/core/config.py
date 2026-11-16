@@ -188,6 +188,10 @@ class Settings(BillingSettings):
     # Semantic cache (app/adapters/outbound/redis/semantic_cache.py) — Redis Stack
     # (RediSearch, for vector KNN), not plain Redis.
     redis_url: str = "redis://localhost:6379"
+    # Where the answer cache lives, when it is not the same Redis as everything else. Empty means `redis_url` (development and every deployment that predates this setting
+    # are unchanged). The production stack points it at its own Redis (`redis-cache`) because a cache wants `allkeys-lru` and the work queue, the conversation locks and the
+    # front door's revocation list must never be evicted: no one eviction policy is right for both (PRODUCTION_REVIEW.md R15).
+    semantic_cache_redis_url: str = ""
     semantic_cache_similarity_threshold: float = 0.95  # cosine; a query must
     # be nearly identical in meaning to reuse a cached answer, not just topically close
     semantic_cache_ttl_seconds: int = 3600
@@ -200,6 +204,11 @@ class Settings(BillingSettings):
     # Whether any domain suggests follow-up questions after a cited answer (a manifest's `suggest_followups` is the per-domain switch; this is the
     # operator's, for every domain at once, with no code change). `build_graph` reads it when the graph is built, once per process (R30).
     followups_enabled: bool = True
+    # How many of yesterday's conversations `scripts/jobs/answer_sample.py` reads and checks (PRODUCTION_REVIEW.md R28), and, if set, from which tenants only (comma-separated).
+    # The job reads the FINAL ANSWER and its citations of each sampled conversation, across tenants, and emits counts: it logs and stores no text. A deployment whose data
+    # policy does not allow an operator job to read answers leaves the job unscheduled, or names the tenants that agree.
+    answer_sample_size: int = Field(default=50, ge=1, le=1000)
+    answer_sample_tenants: str = ""
 
     # An earlier turn's tool result longer than this many characters reaches the chat model as a short note, in the copy it is SENT only: the stored
     # conversation and its checkpoint keep the full text (`agent_node.without_stale_tool_results`). 0 turns it off. 2,000 characters is a few paragraphs.
@@ -467,6 +476,10 @@ class Settings(BillingSettings):
     # Generous relative to a cold model's first-token latency, the same
     # margin agent_worker_reclaim_idle_seconds reasons from.
     chat_first_response_deadline_seconds: int = 30
+    # How long a chat event stream may be silent before the API sends an SSE comment (`: keepalive`). A tool runs up to 15 s (a subagent 45 s) and a job can wait up to
+    # the deadline above for a worker, and in that time the response carried no bytes at all, which some proxies and load balancers treat as a dead connection
+    # (PRODUCTION_REVIEW.md R13). It must be shorter than the shortest idle timeout in front of the API.
+    sse_keepalive_seconds: int = Field(default=15, ge=1)
 
     # Same idea as chat_first_response_deadline_seconds above, against
     # app/adapters/outbound/redis/ingest_queue.py's own results stream — but ingest jobs
@@ -842,9 +855,12 @@ SKILLS_COLLECTION = settings.skills_collection
 SKILLS_SEARCH_TOP_K = settings.skills_search_top_k
 APPDATA_DATABASE_URL = settings.appdata_database_url
 REDIS_URL = settings.redis_url
+SEMANTIC_CACHE_REDIS_URL = settings.semantic_cache_redis_url or settings.redis_url
 SEMANTIC_CACHE_SIMILARITY_THRESHOLD = settings.semantic_cache_similarity_threshold
 SEMANTIC_CACHE_ENABLED = settings.semantic_cache_enabled
 FOLLOWUPS_ENABLED = settings.followups_enabled
+ANSWER_SAMPLE_SIZE = settings.answer_sample_size
+ANSWER_SAMPLE_TENANTS = tuple(t.strip() for t in settings.answer_sample_tenants.split(",") if t.strip())
 STALE_TOOL_RESULT_MAX_CHARS = settings.stale_tool_result_max_chars
 OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS = settings.output_checks_off_on_routed_tiers
 SEMANTIC_CACHE_TTL_SECONDS = settings.semantic_cache_ttl_seconds
@@ -883,6 +899,7 @@ MINIO_BUCKET = settings.minio_bucket
 MINIO_SECURE = settings.minio_secure
 CHAT_SUBMIT_DEDUP_TTL_SECONDS = settings.chat_submit_dedup_ttl_seconds
 CHAT_FIRST_RESPONSE_DEADLINE_SECONDS = settings.chat_first_response_deadline_seconds
+SSE_KEEPALIVE_SECONDS = settings.sse_keepalive_seconds
 INGEST_FIRST_RESPONSE_DEADLINE_SECONDS = settings.ingest_first_response_deadline_seconds
 AGENT_WORKER_MAX_CONCURRENCY = settings.agent_worker_max_concurrency
 CHECKPOINTER_POOL_MAX_SIZE = settings.checkpointer_pool_max_size

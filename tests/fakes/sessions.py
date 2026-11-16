@@ -54,6 +54,12 @@ class InMemorySessionStore:
             quiet = [r for r in quiet if (r["last_active_at"], r["thread_id"]) > after]
         return [dict(r) for r in quiet[:limit]]
 
+    async def sample_active(
+        self, start: datetime, end: datetime, limit: int, tenants: tuple[str, ...] = ()
+    ) -> builtins.list[dict[str, Any]]:
+        inside = [r for r in self.rows.values() if start <= r["last_active_at"] < end and (not tenants or r["tenant"] in tenants)]
+        return [dict(r) for r in sorted(inside, key=lambda r: r["thread_id"])[:limit]]  # deterministic where the real one is random
+
     async def delete(self, tenant: str, principal: str, thread_id: str, domain: str, *, inactive_before: datetime | None = None) -> bool:
         self.log.append(f"row:{thread_id}")
         if self.fail_delete is not None:
@@ -77,10 +83,11 @@ class InMemoryCheckpointing:
         self.deleted: list[str] = []
         self.fail_for: set[str] = set()
         self.on_delete: Callable[[str], None] | None = None
+        self.saver = MemorySaver()  # one for the life of the fake, so state a test seeds is what a later `open()` reads
 
     async def open(self) -> BaseCheckpointSaver[Any]:
         self.opened, self.closed = True, False
-        return MemorySaver()
+        return self.saver
 
     async def close(self) -> None:
         self.closed = True

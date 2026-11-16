@@ -22,6 +22,7 @@
     { "method": "POST", "pattern": "/chat/resume", "class": "turn" },
     { "method": "POST", "pattern": "/ingest/upload", "class": "upload" },
     { "method": "DELETE", "pattern": "/ingest/documents", "class": "upload" },
+    { "method": "POST", "pattern": "/chat/feedback", "class": "upload" },
 
     { "method": "POST", "pattern": "/chat/cancel", "class": "cancel" },
     { "method": "GET", "pattern": "/chat/sessions", "class": "read" },
@@ -29,6 +30,7 @@
     { "method": "GET", "pattern": "/chat/sessions/{thread_id}/messages", "class": "read" },
     { "method": "GET", "pattern": "/chat/sessions/{thread_id}/pending_approval", "class": "read" },
     { "method": "GET", "pattern": "/usage", "class": "read" },
+    { "method": "GET", "pattern": "/chat/stream/{request_id}", "class": "read" },
     { "method": "GET", "pattern": "/ingest/stream/{job_id}", "class": "read" },
     { "method": "GET", "pattern": "/openapi.json", "class": "read" },
     { "method": "GET", "pattern": "/docs", "class": "read" },

@@ -42,6 +42,14 @@ class SessionStore(Protocol):
         (`scripts/jobs/checkpoint_sweep.py`). No request may reach it (`tests/core/test_session_sweep_is_not_reachable_from_requests.py`)."""
         ...
 
+    async def sample_active(
+        self, start: datetime, end: datetime, limit: int, tenants: tuple[str, ...] = ()
+    ) -> builtins.list[dict[str, Any]]:  # `list` is a method of this class: the builtin by name
+        """A random sample of at most `limit` threads whose `last_active_at` falls in `[start, end)`: `thread_id`, `tenant`, `principal`, `domain`, `last_active_at`. With
+        `tenants`, only those tenants'. Spans tenants and people like `list_inactive`, ON PURPOSE and for the same reason: it is an operator's sampling job
+        (`scripts/jobs/answer_sample.py`, PRODUCTION_REVIEW.md R28), and no request may reach it (`tests/core/test_session_sweep_is_not_reachable_from_requests.py`)."""
+        ...
+
     async def delete(
         self, tenant: str, principal: str, thread_id: str, domain: str, *, inactive_before: datetime | None = None
     ) -> bool:

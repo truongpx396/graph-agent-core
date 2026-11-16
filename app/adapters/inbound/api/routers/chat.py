@@ -9,13 +9,14 @@ the caller from `get_ctx` and the domain from `get_domain` (app/adapters/inbound
 Authorization for send, resume and cancel is `_require_conversation_owner`, checked BEFORE anything
 is enqueued or any Redis key is written; the worker does not repeat it.
 """
+import asyncio
 import hashlib
 import json
 import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.adapters.inbound.api.deps import get_ctx, get_domain
@@ -24,16 +25,18 @@ from app.adapters.inbound.api.schemas import (
     CancelRequest,
     ChatRequest,
     ErrorResponse,
+    FeedbackRequest,
     PendingApproval,
     ResumeRequest,
     SessionMessage,
     SessionSummary,
 )
-from app.agent.runtime import sessions
+from app.agent.runtime import feedback, sessions
 from app.agent.runtime.stream import get_pending_approval, get_session_messages
 from app.core.config import (
     CHAT_FIRST_RESPONSE_DEADLINE_SECONDS,
     CHAT_SUBMIT_DEDUP_TTL_SECONDS,
+    SSE_KEEPALIVE_SECONDS,
 )
 from app.core.errors import ErrorCode, ErrorEnvelope
 from app.core.security import SecurityCtx
@@ -46,18 +49,51 @@ _EVENT_STREAM: dict[str, Any] = {
     "response_class": EventStreamResponse,
     "responses": {
         200: {
-            "description": "A server-sent event stream: `data: <event>` frames until one terminal event (`done`, `error` or `approval_required`). The schema is that of one event.",
+            "description": "A server-sent event stream: an `id: <position>` line and a `data: <event>` line per frame, until one terminal event (`done`, `error` or `approval_required`), with `: keepalive` comments while it is silent. The `X-Request-Id` response header names the job: if the connection drops, `GET /chat/stream/{request_id}` with `Last-Event-ID` reads on. The schema is that of one event.",
             "model": ChatEvent,
         }
     },
 }
 
 
+async def _sse_frames(events: AsyncIterator[tuple[str, dict[str, Any]]], keepalive_seconds: float) -> AsyncIterator[str]:
+    """One SSE frame per event, `id: <results-stream entry id>` then `data: <json>`, and an SSE comment (`: keepalive`) whenever `keepalive_seconds` pass with
+    nothing to send. The id is what a client sends back as `Last-Event-ID` to read on from where it stopped. The keepalive is for proxies and load balancers
+    that close a connection that carries no bytes, while a tool runs (up to 45 s for a subagent) or a worker is slow to take the job. Standard SSE parsers
+    ignore comments and unknown fields; the two clients in this repository skip what they do not recognise too.
+
+    The pending read is never cancelled to send a keepalive: it is waited on with a timeout and picked up again, so no event is lost and none is read twice."""
+    pending = asyncio.ensure_future(anext(events))
+    try:
+        while True:
+            done, _ = await asyncio.wait({pending}, timeout=keepalive_seconds)
+            if not done:
+                yield ": keepalive\n\n"
+                continue
+            try:
+                entry_id, event = pending.result()
+            except StopAsyncIteration:
+                break
+            yield f"id: {entry_id}\ndata: {json.dumps(event)}\n\n"
+            pending = asyncio.ensure_future(anext(events))
+    finally:
+        pending.cancel()  # a client that went away: stop the read. Its exception, if any, is not ours to report
+        pending.add_done_callback(lambda task: task.cancelled() or task.exception())
+
+
 def _queued_sse_response(
-    request_id: str, *, first_event_deadline_seconds: float = CHAT_FIRST_RESPONSE_DEADLINE_SECONDS
+    request_id: str,
+    *,
+    first_event_deadline_seconds: float = CHAT_FIRST_RESPONSE_DEADLINE_SECONDS,
+    after: str = "0",
+    keepalive_seconds: float = SSE_KEEPALIVE_SECONDS,
 ) -> StreamingResponse:
-    """Shared by every queue-backed endpoint below (new turn, resume, cancel): relay one job's results stream as
+    """Shared by every queue-backed endpoint below (new turn, resume, cancel, and a re-read of a turn): relay one job's results stream as
     SSE frames.
+
+    The response carries the job's id in `X-Request-Id`, and each frame its position in `id:`. A client whose connection drops mid-answer reads the rest with
+    `GET /chat/stream/{request_id}` and `Last-Event-ID` (PRODUCTION_REVIEW.md R13): the turn runs on a worker and its events stay in Redis for
+    `RESULTS_STREAM_TTL_SECONDS`, so a dropped connection used to lose the rest of an answer that was still being computed, and paid for.
 
     It deliberately does NOT delete the results stream on a terminal event (an earlier version did). Real bug,
     found by a test of `POST /chat/stream/queued`'s submission dedup (`claim_or_get_existing_submission`): on
@@ -70,24 +106,19 @@ def _queued_sse_response(
     second reader arrives any time before the TTL.
 
     `first_event_deadline_seconds` (`queue.py::read_results`'s param) bounds only the wait for the FIRST event
-    ever published to this `request_id`'s stream. It closes a real hang when nothing will ever be published
+    ever published to this `request_id`'s stream, and only when reading from the start (`after`). It closes a real hang when nothing will ever be published
     (no agent-worker for this domain, or a dedup claim left pointing at a request_id whose publish failed, see
     `chat_stream_queued`'s compensating delete below). A slow-but-alive turn is unaffected: the bound clears
     when the worker's first event arrives.
     """
-
-    async def generate() -> AsyncIterator[str]:
-        async for event in turn_queue.get().read_results(
-            request_id, first_event_deadline_seconds=first_event_deadline_seconds
-        ):
-            yield f"data: {json.dumps(event)}\n\n"
-
+    events = turn_queue.get().read_results_from(request_id, after=after, first_event_deadline_seconds=first_event_deadline_seconds)
     return StreamingResponse(
-        generate(),
+        _sse_frames(events, keepalive_seconds),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",   # disable nginx buffering if behind a proxy
+            "X-Request-Id": request_id,
         },
     )
 
@@ -197,6 +228,35 @@ async def chat_stream_queued(
     return _queued_sse_response(request_id)
 
 
+@router.get(
+    "/chat/stream/{request_id}",
+    tags=["chat"],
+    response_class=EventStreamResponse,
+    responses={
+        200: _EVENT_STREAM["responses"][200],
+        404: {"description": "No such stream for the caller: the id is unknown, its results have expired, or it belongs to another person (all the same answer)."},
+    },
+)
+async def chat_stream_reread(
+    request_id: str,
+    last_event_id: Annotated[
+        str | None,
+        Header(alias="Last-Event-ID", pattern=r"^\d+-\d+$", description="The `id:` of the last frame the client received; only later events are sent. Omit to read from the start."),
+    ] = None,
+    ctx: SecurityCtx = Depends(get_ctx),
+    domain: str = Depends(get_domain),
+) -> StreamingResponse:
+    """Read a turn's events again, from where a dropped connection stopped (PRODUCTION_REVIEW.md R13). `request_id` is the `X-Request-Id` of the response that
+    dropped; `Last-Event-ID` is the `id:` of the last frame it delivered. The events stay for `RESULTS_STREAM_TTL_SECONDS` after the last one.
+
+    The results stream carries no owner, so the publisher stored the conversation each request id belongs to, and the caller must own THAT conversation
+    (`session_belongs_to`, the same boundary as every other route here). An unknown, expired or someone else's id are one 404."""
+    thread_id = await turn_queue.get().thread_of_request(request_id)
+    if thread_id is None or not await sessions.session_belongs_to(ctx, thread_id, domain):
+        raise HTTPException(status_code=404, detail="stream not found")
+    return _queued_sse_response(request_id, after=last_event_id or "0")
+
+
 @router.post("/chat/resume", tags=["chat"], **_EVENT_STREAM)
 async def chat_resume(
     req: ResumeRequest, ctx: SecurityCtx = Depends(get_ctx), domain: str = Depends(get_domain)
@@ -271,6 +331,28 @@ async def chat_sessions(
     as Policy.lower's memory scoping (pattern 49 added the domain part), so
     switching domains in the web UI also switches which sessions list."""
     return await sessions.list_sessions(ctx, domain)  # type: ignore[return-value]  # response_model coerces dict -> SessionSummary at the HTTP boundary; a direct Python call (see tests/adapters/inbound/api/test_api.py) intentionally gets the raw dicts back
+
+
+@router.post(
+    "/chat/feedback",
+    status_code=204,
+    response_class=Response,
+    tags=["chat"],
+    responses={404: {"description": "No such session for the caller (another person's session reads the same as an unknown one)."}},
+)
+async def chat_feedback(req: FeedbackRequest, ctx: SecurityCtx = Depends(get_ctx), domain: str = Depends(get_domain)) -> Response:
+    """Rate one answer, thumbs up or down, with an optional comment (PRODUCTION_REVIEW.md R28). Advisory: it is counted and stored for a reviewer, and nothing the agent does
+    depends on it.
+
+    The conversation must be the caller's (`session_belongs_to`, as on every route about a thread); another person's reads as not found. The answer is identified by its
+    `message_index` (the transcript's own numbering) or, failing that, the `request_id` the response carried in `X-Request-Id`. Rating the same answer again replaces the
+    earlier rating and is not counted twice."""
+    recorded = await feedback.record_answer_feedback(
+        ctx, req.thread_id, domain, rating=req.rating, comment=req.comment, request_id=req.request_id, message_index=req.message_index
+    )
+    if not recorded:
+        raise HTTPException(status_code=404, detail="session not found")
+    return Response(status_code=204)
 
 
 @router.delete(

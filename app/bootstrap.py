@@ -31,6 +31,7 @@ from app.adapters.outbound.notify.team_channel import LocalAndSlackTeamChannel
 from app.adapters.outbound.postgres.budget_holds import PgBudgetHoldStore
 from app.adapters.outbound.postgres.budget_policies import PgBudgetPolicyStore
 from app.adapters.outbound.postgres.checkpointing import PgCheckpointing
+from app.adapters.outbound.postgres.feedback import PgFeedbackStore
 from app.adapters.outbound.postgres.sessions import PgSessionStore
 from app.adapters.outbound.postgres.tool_idempotency import PgToolCallLedger
 from app.adapters.outbound.postgres.usage_events import PgUsageEventStore
@@ -62,6 +63,7 @@ from app.ports.outbound import (
     classification,
     cost,
     domains,
+    feedback,
     idempotency,
     jobs,
     llm,
@@ -86,6 +88,7 @@ def adapters() -> dict[Slot[Any], object]:
         cost.budget_policies: PgBudgetPolicyStore(),
         models.model_catalog: LiteLLMModelCatalog(),
         sessions.session_store: PgSessionStore(),
+        feedback.feedback_store: PgFeedbackStore(),
         idempotency.tool_call_ledger: PgToolCallLedger(),
         checkpointing.checkpointing: PgCheckpointing(),
         domains.domain_catalog: RegistryDomainCatalog(),

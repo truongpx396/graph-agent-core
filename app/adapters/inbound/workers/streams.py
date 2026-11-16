@@ -20,6 +20,7 @@ from app.ports.outbound.jobs import (
     RESULTS_STREAM_TTL_SECONDS,
     THREAD_LOCK_TTL_SECONDS,
     cancel_flag_key,
+    request_thread_key,
     requests_stream_key,
     results_stream_key,
     thread_lock_key,
@@ -122,6 +123,8 @@ async def publish_result(client: redis.Redis, request_id: str, event: dict[str, 
     async with client.pipeline(transaction=True) as pipe:
         pipe.xadd(key, {"payload": json.dumps(event)})
         pipe.expire(key, RESULTS_STREAM_TTL_SECONDS)
+        # The owner of the stream (`GET /chat/stream/{request_id}` checks it) lives exactly as long as the stream does; no-op when nobody recorded one.
+        pipe.expire(request_thread_key(request_id), RESULTS_STREAM_TTL_SECONDS)
         await pipe.execute()
 
 
