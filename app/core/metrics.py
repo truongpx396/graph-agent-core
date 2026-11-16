@@ -499,6 +499,23 @@ agent_worker_job_reclaimed_total = Counter(
     ["queue", "outcome"],
 )  # queue: agent | ingest; outcome: retried | dead_lettered
 
+agent_thread_lock_lost_total = Counter(
+    "agent_thread_lock_lost_total",
+    "A worker went to renew a conversation's lock while its job was still running and found it was no longer "
+    "its own: it expired (a stalled event loop, a Redis that lost the key) and another job may now hold it. "
+    "The turn is not stopped, so for the rest of it two jobs can write one conversation's checkpoints, the "
+    "fork the lock exists to prevent (pattern 99). Always zero in a healthy deployment.",
+)
+
+agent_worker_queue_read_failed_total = Counter(
+    "agent_worker_queue_read_failed_total",
+    "A blocking read of a Redis stream failed with a connection, timeout or socket error and was retried "
+    "after a short backoff instead of ending the process (pattern 43): `agent` and `ingest` are the workers' "
+    "XREADGROUP, `results` is the API's XREAD of a turn's events. A burst is a Redis restart or a network "
+    "blip; a sustained rate is a Redis the workers cannot reach.",
+    ["queue"],
+)  # queue: agent | ingest | results
+
 agent_tool_dedup_degraded_total = Counter(
     "agent_tool_dedup_degraded_total",
     "Mutating/outward tool calls where app/core/tool_idempotency.py::idempotent "

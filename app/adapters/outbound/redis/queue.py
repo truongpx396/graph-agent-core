@@ -12,6 +12,7 @@ reclaim, dead letters) is the workers' (`app/adapters/inbound/workers/streams.py
 Submission dedup (`claim_or_get_existing_submission`) closes the gap the workers' per-thread lock leaves: a retry arriving AFTER the first job finished
 would run as a second independent turn.
 """
+import asyncio
 import json
 import logging
 import time
@@ -22,7 +23,7 @@ import redis.asyncio as redis
 
 from app.core import metrics
 from app.core.security import SecurityCtx
-from app.platform.redis_client import StreamReadResponse, get_client
+from app.platform.redis_client import UNAVAILABLE_ERRORS, StreamReadResponse, get_client
 from app.ports.outbound.jobs import (
     CANCEL_FLAG_TTL_SECONDS,
     TERMINAL_EVENT_TYPES,
@@ -198,6 +199,27 @@ async def release_submission_claim(client: redis.Redis, *, thread_id: str, diges
         logger.warning("queue_submission_claim_release_failed", extra={"error_class": type(exc).__name__})
 
 
+# One read is tried this many times before its error is raised, with a growing pause between tries. Only reads: see `UNAVAILABLE_ERRORS`.
+READ_ATTEMPTS = 3
+READ_RETRY_PAUSE_SECONDS = 0.2
+
+
+async def read_events(client: redis.Redis, key: str, last_id: str, block_ms: int) -> StreamReadResponse:
+    """`XREAD` from `last_id`, asked again after a connection error. Safe to repeat: it changes nothing, and `last_id` makes a repeat return exactly what
+    the failed one would have (an `XADD` is not: a second copy of a `turn` job runs as a second turn once the first finishes, which is why redis-py's
+    client-wide retry is not turned on). A Redis blip used to end every open SSE response at once (pattern 43). Shared with `ingest_queue.py`'s reader."""
+    for attempt in range(1, READ_ATTEMPTS + 1):
+        try:
+            return cast(StreamReadResponse, await client.xread({key: last_id}, block=block_ms, count=10))
+        except UNAVAILABLE_ERRORS as exc:
+            metrics.agent_worker_queue_read_failed_total.labels(queue="results").inc()
+            if attempt == READ_ATTEMPTS:
+                raise
+            logger.warning("queue_results_read_retried", extra={"attempt": attempt, "error_class": type(exc).__name__})
+            await asyncio.sleep(READ_RETRY_PAUSE_SECONDS * attempt)
+    raise AssertionError("unreachable")  # pragma: no cover - the loop returns or raises on its last attempt
+
+
 async def read_results(
     client: redis.Redis,
     request_id: str,
@@ -242,7 +264,7 @@ async def read_results(
                 ),
             }
             return
-        response = cast(StreamReadResponse, await client.xread({key: last_id}, block=block_ms, count=10))
+        response = await read_events(client, key, last_id, block_ms)
         if not response:
             continue  # no new entries within block_ms — poll again
         deadline = None  # a real event arrived — no longer "nobody is listening"

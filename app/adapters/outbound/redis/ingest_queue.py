@@ -10,13 +10,14 @@ import json
 import logging
 import time
 from collections.abc import AsyncGenerator
-from typing import Any, cast
+from typing import Any
 
 import redis.asyncio as redis
 
+from app.adapters.outbound.redis.queue import read_events
 from app.core import metrics
 from app.core.security import SecurityCtx
-from app.platform.redis_client import StreamReadResponse, get_client
+from app.platform.redis_client import get_client
 from app.ports.outbound.jobs import INGEST_REQUESTS_STREAM, ingest_results_stream_key
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,7 @@ async def read_results(
                 ),
             }
             return
-        response = cast(StreamReadResponse, await client.xread({key: last_id}, block=block_ms, count=10))
+        response = await read_events(client, key, last_id, block_ms)  # retried after a connection error, like the chat queue's reader
         if not response:
             continue
         deadline = None  # a real event arrived — no longer "nobody is listening"

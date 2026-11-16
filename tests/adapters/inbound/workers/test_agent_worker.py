@@ -15,15 +15,17 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+import redis.asyncio as redis_module
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from app.adapters.inbound.workers import agent_worker
+from app.adapters.inbound.workers import agent_worker, streams
 from app.adapters.inbound.workers.streams import dead_letter_stream_key
 from app.agent.graph.messages import RETRY_ARTIFACT_KEY
 from app.agent.runtime.core import current_domain
 from app.core import metrics
 from app.ports.outbound.jobs import (
     CONSUMER_GROUP,
+    THREAD_LOCK_TTL_SECONDS,
     requests_stream_key,
     results_stream_key,
 )
@@ -78,7 +80,9 @@ def _entry(
         payload = {"kind": kind, "request_id": request_id, "thread_id": thread_id, "ctx": ctx}
         if unattended:
             payload["unattended"] = True
-    return "1-0", {"payload": json.dumps(payload)}
+    # A job a test hands to the reclaim code without adding it to the stream must not share an id with the entry that is republished (an ack now
+    # removes the entry by id; real Redis never repeats one). FakeRedis's own ids are millisecond timestamps, which "0-1" never is.
+    return "0-1", {"payload": json.dumps(payload)}
 
 
 class TestProcessRequestTurn:
@@ -645,6 +649,63 @@ class TestProcessRequestUnknownKind:
         assert client.acked == [entry_id]
 
 
+class TestAnAcknowledgedJobLeavesTheStream:
+    """`XACK` takes a job off the group's pending list and leaves it in the stream, so every message ever sent (text, attached
+    images as data URIs) stayed in a 256 MB Redis (PRODUCTION_REVIEW.md R04, pattern 43). Every ack removes the entry as well."""
+
+    async def _published(self, client, **entry_kwargs):
+        entry_id = await client.xadd(REQUESTS_STREAM, _entry(**entry_kwargs)[1])
+        response = await client.xreadgroup(CONSUMER_GROUP, agent_worker.CONSUMER_NAME, {REQUESTS_STREAM: ">"})
+        return entry_id, response[0][1][0][1]
+
+    async def test_a_finished_job_is_gone_from_the_requests_stream(self, monkeypatch):
+        async def fake_turn(text, thread_id, ctx, require_approval=False, images=None, cancel_check=None):
+            yield {"type": "done"}
+
+        monkeypatch.setattr(agent_worker, "astream_events_turn", fake_turn)
+        client = FakeRedis()
+        entry_id, fields = await self._published(client, request_id="r-gone")
+
+        await _process(client, entry_id, fields)
+
+        assert entry_id in client.acked
+        assert client.streams[REQUESTS_STREAM] == []
+
+    async def test_a_failed_job_is_gone_too(self, monkeypatch):
+        async def failing_turn(text, thread_id, ctx, require_approval=False, images=None, cancel_check=None):
+            raise RuntimeError("boom")
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(agent_worker, "astream_events_turn", failing_turn)
+        client = FakeRedis()
+        entry_id, fields = await self._published(client, request_id="r-failed")
+
+        await _process(client, entry_id, fields)
+
+        assert client.streams[REQUESTS_STREAM] == []
+
+    async def test_a_reclaimed_job_that_is_republished_leaves_only_its_new_entry(self):
+        client = FakeRedis()
+        entry_id, fields = await self._published(client, kind="cancel", request_id="r-retry")
+
+        await _reclaim(client, entry_id, fields, graph=FakeGraph())
+
+        remaining = client.streams[REQUESTS_STREAM]
+        assert [eid for eid, _ in remaining] != [entry_id] and len(remaining) == 1
+        assert json.loads(remaining[0][1]["payload"])[agent_worker.RECLAIM_ATTEMPTS_FIELD] == 1
+        assert client.pipeline_runs[-1] == (True, ["xack", "xdel"]), "acknowledged and removed after the republish, in that order"
+
+    async def test_a_reclaimed_job_that_is_dead_lettered_leaves_the_stream_and_stays_in_the_archive(self):
+        client = FakeRedis()
+        entry_id, fields = await self._published(client, kind="turn", request_id="r-dead", thread_id="t-dead")
+        graph = FakeGraph({"t-dead": [HumanMessage(content="hi"), AIMessage(content="done")]})
+
+        await _reclaim(client, entry_id, fields, graph=graph)
+
+        assert client.streams[REQUESTS_STREAM] == []
+        assert len(client.streams[dead_letter_stream_key(REQUESTS_STREAM)]) == 1
+
+
 class TestRunLoop:
     async def test_processes_one_request_end_to_end_via_the_consumer_group(self, monkeypatch):
         """A thin proof that run()'s xreadgroup wiring actually delivers a
@@ -734,6 +795,102 @@ class TestConcurrentDispatch:
         for i in range(num_jobs):
             events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key(f"r{i}")]]
             assert events == [{"type": "done"}]
+
+
+class TestTheThreadLockIsRenewedWhileAJobRuns:
+    """The lock lived 2 x the turn's limit and was never renewed, but an unattended turn runs up to 1 + UNATTENDED_MAX_DECLINE_ROUNDS streams, each with its
+    own limit: 240 s under a 120 s lock. After it expired a second job for the conversation could take it while the first was still writing checkpoints,
+    which is the fork the lock exists to prevent (PRODUCTION_REVIEW.md R05, pattern 99)."""
+
+    LOCK_KEY = "agent:lock:t1"
+
+    async def _run(self, monkeypatch, turn, *, interval=0.01):
+        monkeypatch.setattr(agent_worker, "astream_events_turn", turn)
+        monkeypatch.setattr(agent_worker, "LOCK_RENEW_INTERVAL_SECONDS", interval)
+        client = FakeRedis()
+        entry_id, fields = _entry(request_id="r-lock")
+        await _process(client, entry_id, fields)
+        return client
+
+    async def test_the_lock_is_renewed_for_as_long_as_the_turn_runs(self, monkeypatch):
+        async def long_turn(text, thread_id, ctx, **kwargs):
+            await asyncio.sleep(0.1)  # ten beats of the shortened interval: past any one lifetime
+            yield {"type": "done"}
+
+        client = await self._run(monkeypatch, long_turn)
+
+        assert len(client.renewals) >= 3
+        assert all(key == self.LOCK_KEY and ttl == THREAD_LOCK_TTL_SECONDS for key, ttl in client.renewals)
+        assert self.LOCK_KEY not in client.kv, "released at the end, as before"
+
+    async def test_no_renewal_task_outlives_the_job(self, monkeypatch):
+        async def turn(text, thread_id, ctx, **kwargs):
+            await asyncio.sleep(0.03)
+            yield {"type": "done"}
+
+        await self._run(monkeypatch, turn)
+        await asyncio.sleep(0)
+
+        assert [t for t in asyncio.all_tasks() if "_keep_lock_alive" in repr(t.get_coro())] == []
+
+    async def test_the_renewal_stops_when_the_handler_releases_the_lock_ahead_of_its_terminal_event(self, monkeypatch):
+        """The handler frees the lock BEFORE it publishes `done` (the ordering `process_request` measured); a renewal that outlived that would find
+        the key gone and report a lock that was released on purpose as lost."""
+        lost_before = _count(metrics.agent_thread_lock_lost_total)
+
+        async def turn(text, thread_id, ctx, **kwargs):
+            await asyncio.sleep(0.03)
+            yield {"type": "done"}
+
+        client = await self._run(monkeypatch, turn)
+        renewals_when_done = len(client.renewals)
+        await asyncio.sleep(0.05)
+
+        assert len(client.renewals) == renewals_when_done, "nothing renews after the release"
+        assert _count(metrics.agent_thread_lock_lost_total) == lost_before
+
+    async def test_a_lock_that_is_gone_when_renewed_is_counted_and_the_turn_carries_on(self, monkeypatch):
+        """Another job may now hold it. The turn is not killed (it may be nearly done, and a kill is its own mess); it is counted so a person can see it."""
+        lost_before = _count(metrics.agent_thread_lock_lost_total)
+        client = FakeRedis()
+
+        async def turn(text, thread_id, ctx, **kwargs):
+            client.kv.pop(self.LOCK_KEY, None)  # it expired, as it does under a stalled loop
+            await asyncio.sleep(0.05)
+            yield {"type": "token", "content": "still answering"}
+            yield {"type": "done"}
+
+        monkeypatch.setattr(agent_worker, "astream_events_turn", turn)
+        monkeypatch.setattr(agent_worker, "LOCK_RENEW_INTERVAL_SECONDS", 0.01)
+        entry_id, fields = _entry(request_id="r-lost")
+
+        await _process(client, entry_id, fields)
+
+        events = [json.loads(f["payload"])["type"] for _, f in client.streams[results_stream_key("r-lost")]]
+        assert events == ["token", "done"]
+        assert _count(metrics.agent_thread_lock_lost_total) == lost_before + 1, "once: a lock that is lost is not asked about again"
+
+    async def test_a_redis_error_while_renewing_does_not_end_the_turn(self, monkeypatch):
+        class _Flaky(FakeRedis):
+            async def eval(self, script, numkeys, *keys_and_args):
+                if script == streams._RENEW_LOCK_SCRIPT and not self.renewals:
+                    self.renewals.append(("blip", 0))
+                    raise ConnectionError("redis blip")
+                return await super().eval(script, numkeys, *keys_and_args)
+
+        async def turn(text, thread_id, ctx, **kwargs):
+            await asyncio.sleep(0.06)
+            yield {"type": "done"}
+
+        monkeypatch.setattr(agent_worker, "astream_events_turn", turn)
+        monkeypatch.setattr(agent_worker, "LOCK_RENEW_INTERVAL_SECONDS", 0.01)
+        client = _Flaky()
+        entry_id, fields = _entry(request_id="r-blip")
+
+        await _process(client, entry_id, fields)
+
+        assert [json.loads(f["payload"])["type"] for _, f in client.streams[results_stream_key("r-blip")]] == ["done"]
+        assert len(client.renewals) >= 3, "kept renewing after the failed one"
 
 
 class TestSameThreadJobsAreSerialized:
@@ -1275,7 +1432,11 @@ class TestReclaimLoop:
 
         stop_event = asyncio.Event()
         task = asyncio.create_task(agent_worker._reclaim_loop(client, stop_event, graphs={"ecorp": FakeGraph()}))
-        await asyncio.sleep(0.05)
+        # Wait for the behaviour, not for a fixed time: 50 ms of wall clock was enough on an idle machine and failed once in a full run on a loaded one.
+        clock = asyncio.get_running_loop().time
+        deadline = clock() + 2
+        while len(calls) < 2 and clock() < deadline:
+            await asyncio.sleep(0.005)
         stop_event.set()
         await asyncio.wait_for(task, timeout=1)
 
@@ -1472,6 +1633,223 @@ class TestRunServesEveryConfiguredDomain:
             await agent_worker.run()
 
         assert client.reads == []
+
+
+class _RunHarness:
+    """Runs `agent_worker.run()` against a `_BlockingFakeRedis` with everything outside the read loop stubbed out."""
+
+    def __init__(self, monkeypatch, client, turn=None):
+        self.client = client
+
+        async def default_turn(text, thread_id, ctx, **kwargs):
+            yield {"type": "done"}
+
+        async def init_graph(domain=None):
+            return f"graph-{domain}"
+
+        async def no_reclaim(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(agent_worker, "AGENT_WORKER_DOMAINS", "ecorp")
+        monkeypatch.setattr(agent_worker, "astream_events_turn", turn or default_turn)
+        monkeypatch.setattr(agent_worker, "init_graph_async", init_graph)
+        monkeypatch.setattr(agent_worker, "get_client", lambda: client)
+        monkeypatch.setattr(agent_worker, "_reclaim_loop", no_reclaim)
+        monkeypatch.setattr(agent_worker, "close_adapters", AsyncMock())
+        monkeypatch.setattr(agent_worker.sql_store, "close_pool", AsyncMock())
+        monkeypatch.setattr(agent_worker, "close_checkpointer_pool", AsyncMock())
+
+    async def until(self, condition, timeout=5.0):
+        deadline = asyncio.get_running_loop().time() + timeout
+        while not condition():
+            assert asyncio.get_running_loop().time() < deadline, "timed out waiting for the worker"
+            await asyncio.sleep(0.005)
+
+    async def run_until(self, condition):
+        worker = asyncio.create_task(agent_worker.run())
+        try:
+            await self.until(condition)
+        finally:
+            os.kill(os.getpid(), signal.SIGTERM)
+            await asyncio.wait_for(worker, 10)
+
+
+class TestAWorkerReadsOnlyWhatItCanStart:
+    async def test_a_worker_with_no_free_slot_does_not_read_from_the_queue(self, monkeypatch):
+        """It used to claim up to its whole concurrency at once and wait on the semaphore for each entry: the claimed entry's idle clock ran while it
+        waited, so under saturation 'idle' measured the queue, and a healthy job was reclaimed and run a second time (PRODUCTION_REVIEW.md R05)."""
+        monkeypatch.setattr(agent_worker, "_MAX_CONCURRENCY", 1)
+        monkeypatch.setattr(agent_worker, "_BLOCK_MS", 20)
+        first_may_finish = asyncio.Event()
+        started = []
+
+        async def turn(text, thread_id, ctx, **kwargs):
+            started.append(thread_id)
+            if thread_id == "t-first":
+                await first_may_finish.wait()
+            yield {"type": "done"}
+
+        client = _BlockingFakeRedis()
+        first = await client.xadd(REQUESTS_STREAM, _entry(request_id="r-first", thread_id="t-first")[1])
+        second = await client.xadd(REQUESTS_STREAM, _entry(request_id="r-second", thread_id="t-second")[1])
+        harness = _RunHarness(monkeypatch, client, turn)
+
+        worker = asyncio.create_task(agent_worker.run())
+        await harness.until(lambda: started == ["t-first"])
+        await asyncio.sleep(0.15)  # several block periods with the only slot busy
+        reads_while_saturated = len(client.reads)
+        await asyncio.sleep(0.1)
+
+        assert second not in client._delivered, "claimed while no slot was free to start it"
+        assert len(client.reads) == reads_while_saturated, "no read at all while saturated"
+
+        first_may_finish.set()
+        await harness.until(lambda: {first, second} <= set(client.acked))
+        os.kill(os.getpid(), signal.SIGTERM)
+        await asyncio.wait_for(worker, 10)
+        assert started == ["t-first", "t-second"]
+
+    async def test_the_read_asks_for_no_more_entries_than_there_are_free_slots(self, monkeypatch):
+        monkeypatch.setattr(agent_worker, "_MAX_CONCURRENCY", 3)
+        monkeypatch.setattr(agent_worker, "_BLOCK_MS", 20)
+        release = asyncio.Event()
+
+        async def turn(text, thread_id, ctx, **kwargs):
+            await release.wait()
+            yield {"type": "done"}
+
+        client = _BlockingFakeRedis()
+        await client.xadd(REQUESTS_STREAM, _entry(request_id="r1", thread_id="t1")[1])
+        harness = _RunHarness(monkeypatch, client, turn)
+
+        async def after_the_second_read():
+            await harness.until(lambda: len(client.reads) >= 2)
+            release.set()
+
+        asker = asyncio.create_task(after_the_second_read())
+        await harness.run_until(lambda: len(client.acked) == 1)
+        await asker
+
+        assert [count for _streams, count in client.reads[:2]] == [3, 2], "all three free, then two once one is busy"
+
+    async def test_slots_a_read_did_not_use_are_given_back(self, monkeypatch):
+        monkeypatch.setattr(agent_worker, "_MAX_CONCURRENCY", 2)
+        client = _BlockingFakeRedis()
+        harness = _RunHarness(monkeypatch, client)
+
+        await harness.run_until(lambda: len(client.reads) >= 6)
+
+        assert {count for _streams, count in client.reads} == {2}, "an empty read leaked a slot, so the next one could ask for fewer"
+
+    async def test_a_worker_told_to_stop_while_every_slot_is_busy_is_not_held_up_by_the_wait_for_a_slot(self, monkeypatch):
+        monkeypatch.setattr(agent_worker, "_MAX_CONCURRENCY", 1)
+        monkeypatch.setattr(agent_worker, "_BLOCK_MS", 20)
+        never = asyncio.Event()
+        started = []
+
+        async def turn(text, thread_id, ctx, **kwargs):
+            started.append(thread_id)
+            await never.wait()
+            yield {"type": "done"}  # pragma: no cover
+
+        client = _BlockingFakeRedis()
+        await client.xadd(REQUESTS_STREAM, _entry(request_id="r1", thread_id="t1")[1])
+        harness = _RunHarness(monkeypatch, client, turn)
+        worker = asyncio.create_task(agent_worker.run())
+        await harness.until(lambda: started == ["t1"])
+
+        os.kill(os.getpid(), signal.SIGTERM)
+        await asyncio.sleep(0.1)  # the loop is waiting for a slot that never comes; it must still notice
+
+        assert not worker.done(), "the claimed job is still running, so the worker waits for it (graceful stop)"
+        never.set()
+        await asyncio.wait_for(worker, 10)
+
+
+class _FlakyReads(_BlockingFakeRedis):
+    """The first `failures` reads raise what a dropped connection raises."""
+
+    def __init__(self, failures=1, error=None):
+        super().__init__()
+        self.failures = failures
+        self.error = error or redis_module.ConnectionError("Connection closed by server.")
+
+    async def xreadgroup(self, group, consumer, streams, count=None, block=None):
+        if self.failures:
+            self.failures -= 1
+            raise self.error
+        return await super().xreadgroup(group, consumer, streams, count=count, block=block)
+
+
+class TestARedisBlipDoesNotEndTheWorker:
+    """A Redis restart or a dropped connection raised out of `run()`, `asyncio.run` cancelled every turn in flight, the container restarted, and each of
+    those turns waited out the reclaim idle (minutes) before it was continued (PRODUCTION_REVIEW.md R07, pattern 43)."""
+
+    async def test_a_redis_error_while_reading_the_queue_is_survived_and_counted(self, monkeypatch):
+        monkeypatch.setattr(agent_worker, "READ_BACKOFF_START_SECONDS", 0.001)
+        before = _count(metrics.agent_worker_queue_read_failed_total, queue="agent")
+        client = _FlakyReads(failures=2)
+        entry_id = await client.xadd(REQUESTS_STREAM, _entry(request_id="r-blip", thread_id="t-blip")[1])
+        harness = _RunHarness(monkeypatch, client)
+
+        await harness.run_until(lambda: entry_id in client.acked)
+
+        assert [json.loads(f["payload"])["type"] for _, f in client.streams[results_stream_key("r-blip")]] == ["done"]
+        assert _count(metrics.agent_worker_queue_read_failed_total, queue="agent") == before + 2
+
+    @pytest.mark.parametrize("error", [redis_module.TimeoutError("timed out"), ConnectionResetError("reset"), TimeoutError("socket")], ids=lambda e: type(e).__name__)
+    async def test_a_timeout_or_a_socket_error_is_survived_the_same_way(self, monkeypatch, error):
+        monkeypatch.setattr(agent_worker, "READ_BACKOFF_START_SECONDS", 0.001)
+        client = _FlakyReads(failures=1, error=error)
+        entry_id = await client.xadd(REQUESTS_STREAM, _entry(request_id="r-t", thread_id="t-t")[1])
+        harness = _RunHarness(monkeypatch, client)
+
+        await harness.run_until(lambda: entry_id in client.acked)
+
+    async def test_a_command_redis_rejects_still_ends_the_process(self, monkeypatch):
+        """Waiting does not fix a WRONGTYPE or a NOAUTH; hiding it behind a retry loop would make it silent."""
+        client = _FlakyReads(failures=1, error=redis_module.ResponseError("WRONGTYPE"))
+        _RunHarness(monkeypatch, client)
+
+        with pytest.raises(redis_module.ResponseError):
+            await asyncio.wait_for(agent_worker.run(), 5)
+
+    async def test_a_worker_told_to_stop_during_the_backoff_ends_at_once(self, monkeypatch):
+        monkeypatch.setattr(agent_worker, "READ_BACKOFF_START_SECONDS", 60.0)
+        client = _FlakyReads(failures=10**6)
+        harness = _RunHarness(monkeypatch, client)
+        worker = asyncio.create_task(agent_worker.run())
+        await harness.until(lambda: client.failures < 10**6)  # the first read failed: it is now in its 60 s backoff
+
+        os.kill(os.getpid(), signal.SIGTERM)
+
+        await asyncio.wait_for(worker, 5)
+
+    async def test_the_backoff_starts_over_after_a_read_that_worked(self, monkeypatch):
+        waits = []
+
+        async def recorded_pause(stop_event, delay):
+            waits.append(delay)
+            return min(delay * 2, 5.0)
+
+        monkeypatch.setattr(agent_worker, "pause_after_failed_read", recorded_pause)
+
+        class _FailsTwiceThenReadsOnceThenFailsAgain(_FlakyReads):
+            good_reads = 0
+
+            async def xreadgroup(self, *a, **kw):
+                if not self.failures:
+                    self.good_reads += 1
+                    if self.good_reads == 2:  # one read worked since the first two failures
+                        self.failures = 1
+                return await super().xreadgroup(*a, **kw)
+
+        client = _FailsTwiceThenReadsOnceThenFailsAgain(failures=2)
+        harness = _RunHarness(monkeypatch, client)
+
+        await harness.run_until(lambda: len(waits) >= 3)
+
+        assert waits[:3] == [agent_worker.READ_BACKOFF_START_SECONDS, agent_worker.READ_BACKOFF_START_SECONDS * 2, agent_worker.READ_BACKOFF_START_SECONDS]
 
 
 class TestReclaimSweepsEveryDomain:

@@ -630,6 +630,41 @@ groups:
             the API this is an outage of everything behind the door. This is the end of a story whose beginning is
             ApiIdentityKeysRefreshFailing. specs/018.
 
+      - alert: AgentQueueReadFailing
+        expr: increase(agent_worker_queue_read_failed_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A worker or the API could not read from Redis and is retrying"
+          description: >-
+            agent_worker_queue_read_failed_total{queue} increased: a blocking read of a
+            Redis stream failed with a connection, timeout or socket error and was
+            retried after a short backoff (agent and ingest are the workers' XREADGROUP,
+            results is the API's XREAD of a turn's events). One burst is a Redis restart
+            or a network blip, which the workers now survive instead of exiting and
+            abandoning every turn in flight. A sustained rate is a Redis they cannot
+            reach: nothing is being served. Check `docker compose ps redis`, its memory
+            against its limit (the container is killed, not throttled, past it) and the
+            workers' logs.
+
+      - alert: AgentThreadLockLost
+        expr: increase(agent_thread_lock_lost_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A running turn lost its conversation lock"
+          description: >-
+            agent_thread_lock_lost_total increased: a worker went to renew a
+            conversation's lock while its job was still running and found it was no
+            longer its own. The lock expired (a stalled event loop, or a Redis that lost
+            the key) and another job may now hold it, so for the rest of that turn two
+            jobs can write one conversation's checkpoints: the fork the lock exists to
+            prevent. The turn is not stopped. Always zero in a healthy deployment; look
+            for a worker whose loop was blocked for more than a minute (a CPU-bound call
+            on the loop) and for a Redis restart at the same time.
+
       - alert: WorkerUnreachable
         expr: increase(agent_worker_unreachable_total[10m]) > 0
         for: 5m

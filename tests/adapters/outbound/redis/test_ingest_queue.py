@@ -85,6 +85,19 @@ class TestPublishResultAndReadResults:
         events = await _run()
         assert events == [{"type": "started"}, {"type": "done", "chunks": 12}]
 
+    async def test_read_results_survives_one_failed_read(self, monkeypatch):
+        """An upload's progress stream ended on a Redis blip the same way a turn's did (PRODUCTION_REVIEW.md R07)."""
+        from app.adapters.outbound.redis import queue
+        from tests.adapters.outbound.redis.test_queue import _FlakyXRead
+
+        monkeypatch.setattr(queue, "READ_RETRY_PAUSE_SECONDS", 0.001)
+        client = _FlakyXRead(failures=1)
+        await client.xadd(jobs.ingest_results_stream_key("j-blip"), {"payload": json.dumps({"type": "done", "chunks": 3})})
+
+        events = [event async for event in ingest_queue.read_results(client, "j-blip")]
+
+        assert events == [{"type": "done", "chunks": 3}]
+
     async def test_read_results_stops_at_an_error_event_too(self):
         client = FakeRedis()
 

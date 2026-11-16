@@ -222,6 +222,9 @@ def scaled_stack(qdrant_collection: str) -> Iterator[str]:
         # tests/live/conftest.py's own real_stack widens it for real
         # (Ollama) latency.
         "REQUEST_TIMEOUT_SECONDS": str(_CLIENT_TIMEOUT_SECONDS),
+        # A configuration where the reclaim idle does not exceed the longest turn (REQUEST_TIMEOUT_SECONDS x (1 + UNATTENDED_MAX_DECLINE_ROUNDS) + 30 s) is
+        # refused at start-up (pattern 99), so a widened turn limit names its own: 120 x 4 + 30 = 510.
+        "AGENT_WORKER_RECLAIM_IDLE_SECONDS": str(_CLIENT_TIMEOUT_SECONDS * 4 + 30),
         # Same headroom, same reason, for the wait for a job's FIRST event
         # (app/core/config.py::chat_first_response_deadline_seconds, default 30s, added in
         # #57 to turn "nobody is listening" into an error instead of a silent hang). This

@@ -60,6 +60,9 @@ session; `GRAPH_PATTERNS.md` has the full story under the pattern number given.
   job landed on, never from its payload; an unknown `X-Domain` is a 422.
 - A blocking `XREAD` needs `socket_timeout=None` on the redis-py async client (its 5s default
   races the server-side `BLOCK`).
+- An ack is `streams.py::ack_and_delete` (`XACK` and `XDEL` in one MULTI), never a bare `xack`: `XACK` leaves the entry in the stream for good. Never bound a requests stream with `XADD ... MAXLEN` (under a backlog it deletes jobs nobody has run); the age trim is by `MINID` (pattern 43).
+- Retry a failed READ of a stream (`redis_client.UNAVAILABLE_ERRORS`), never a write, and never turn on redis-py's client-wide `retry=`: it would re-send an `XADD` the server already applied, and a second `turn` job runs as a second turn (pattern 43).
+- Three numbers must stay in order: the turn's limit, the conversation lock's lifetime, and the reclaim idle. `Settings` refuses a reclaim idle at or below the longest turn plus 30 s; a deployment that widens `REQUEST_TIMEOUT_SECONDS` sets `AGENT_WORKER_RECLAIM_IDLE_SECONDS` with it. A worker takes its free slots before it reads and asks for that many, so a claimed entry never waits for a slot (pattern 99).
 - Every wait for a counterparty has a deadline (`read_results(first_event_deadline_seconds=...)`),
   and a claim that wins but whose publish fails is compensated (`release_submission_claim`).
 

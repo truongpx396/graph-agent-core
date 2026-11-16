@@ -4,7 +4,11 @@ This is the worker's own technology, so it is here and not behind a port: nothin
 (`app/ports/outbound/jobs.py`) are plain data there. Crash recovery's policy (what to retry, what to dead-letter) is `agent_worker.py`'s; this module
 owns only the Streams mechanics.
 """
+import asyncio
+import contextlib
 import json
+import logging
+import time
 from typing import Any, cast
 
 import redis.asyncio as redis
@@ -18,6 +22,12 @@ from app.ports.outbound.jobs import (
     results_stream_key,
     thread_lock_key,
 )
+
+logger = logging.getLogger(__name__)
+
+# How long a worker waits after a read failed before it asks again: doubles from the first to the cap, and starts over after a read that worked.
+READ_BACKOFF_START_SECONDS = 0.5
+READ_BACKOFF_MAX_SECONDS = 5.0
 
 
 async def ensure_consumer_group(client: redis.Redis, domain: str = "ecorp") -> None:
@@ -61,6 +71,16 @@ return 0
 """
 
 
+# Compare-and-extend, for the same reason RELEASE is compare-and-delete: a bare EXPIRE on a lock that already expired and was taken by another job would
+# keep THEIR lock alive for us. The check and the extension must be one atomic step, so it is a script.
+_RENEW_LOCK_SCRIPT = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("expire", KEYS[1], ARGV[2])
+end
+return 0
+"""
+
+
 async def acquire_thread_lock(client: redis.Redis, thread_id: str, token: str) -> bool:
     """Mutual exclusion across every job kind (`"turn"`/`"resume"`/
     `"cancel"`) touching one thread_id's checkpoint, across every worker
@@ -73,6 +93,11 @@ async def acquire_thread_lock(client: redis.Redis, thread_id: str, token: str) -
     return bool(
         await client.set(thread_lock_key(thread_id), token, nx=True, ex=THREAD_LOCK_TTL_SECONDS)
     )
+
+
+async def renew_thread_lock(client: redis.Redis, thread_id: str, token: str) -> bool:
+    """Restarts the lock's lifetime, only if `token` still holds it. False means it does not: the lock expired and may belong to another job now."""
+    return bool(await client.eval(_RENEW_LOCK_SCRIPT, 1, thread_lock_key(thread_id), token, THREAD_LOCK_TTL_SECONDS))
 
 
 async def release_thread_lock(client: redis.Redis, thread_id: str, token: str) -> None:
@@ -194,3 +219,75 @@ async def republish_job(client: redis.Redis, *, requests_stream: str, payload: d
     # wider than that (see StreamReadResponse's own comment on the same
     # gap).
     return cast(str, await client.xadd(requests_stream, {"payload": json.dumps(payload)}))
+
+
+async def ack_and_delete(client: redis.Redis, stream: str, group: str, entry_id: str) -> None:
+    """Acknowledges a finished job and removes it from the stream, as one MULTI/EXEC. `XACK` alone takes it off the group's pending list and leaves it
+    in the stream for good: every message ever sent, with its text and any attached images as data URIs, stayed in Redis (PRODUCTION_REVIEW.md R04,
+    pattern 43). A reclaim re-adds a job as a NEW entry (`republish_job`) before it acknowledges the old one, so deleting here loses nothing."""
+    async with client.pipeline(transaction=True) as pipe:
+        pipe.xack(stream, group, entry_id)
+        pipe.xdel(stream, entry_id)
+        await pipe.execute()
+
+
+async def trim_stale_entries(client: redis.Redis, stream: str, *, max_age_seconds: int) -> None:
+    """The safety net for `ack_and_delete`: drops every entry older than `max_age_seconds`, for what was acknowledged before it existed or by a
+    process that died between the two commands. By MINID, never `XADD ... MAXLEN`: a length cap under a backlog deletes jobs nobody has run yet.
+    Pending entries older than that go too, which is why the age must exceed every reclaim idle (a `Settings` validator holds it).
+
+    Approximate (`~`), which Redis answers by dropping whole internal nodes (about 100 entries each, and an entry too large for a node has one of its own),
+    at most about 10,000 entries per call (checked on a real server): it bounds the work of one call, so the first pass over a stream that grew for months
+    drains it over several passes instead of stalling the single-threaded Redis the queue and the locks share, and a stream of a few entries is left alone."""
+    minid = f"{int((time.time() - max_age_seconds) * 1000)}-0"
+    await client.xtrim(stream, minid=minid, approximate=True)
+
+
+async def release_consumer(client: redis.Redis, stream: str, group: str, consumer: str) -> None:
+    """On a graceful stop: removes this worker's consumer name from the group, so names do not pile up one per restart (each start makes a new one).
+    Only when it owns no pending entry: `XGROUP DELCONSUMER` discards them, and an entry nobody owns is never read or reclaimed again. Never raises:
+    it runs while the process is stopping and must not keep the pools from closing."""
+    try:
+        for info in await client.xinfo_consumers(stream, group):
+            if info["name"] == consumer:
+                if info["pending"] == 0:
+                    await client.xgroup_delconsumer(stream, group, consumer)
+                return
+    except Exception as exc:  # noqa: BLE001 - housekeeping at shutdown, never a reason to leave the rest of it undone
+        logger.warning("worker_consumer_release_failed", extra={"stream": stream, "error_class": type(exc).__name__})
+
+
+async def pause_after_failed_read(stop_event: asyncio.Event, delay: float) -> float:
+    """Waits `delay` seconds, or until the worker is told to stop, and returns the next delay (doubled, capped). Waits on the stop event instead of
+    sleeping, so a SIGTERM during a Redis outage still ends the loop at once."""
+    with contextlib.suppress(TimeoutError):  # the delay elapsed: the normal case
+        await asyncio.wait_for(stop_event.wait(), timeout=delay)
+    return min(delay * 2, READ_BACKOFF_MAX_SECONDS)
+
+
+async def claim_free_slots(semaphore: asyncio.Semaphore, stop_event: asyncio.Event, *, limit: int, wait_seconds: float) -> int:
+    """Waits for one free concurrency slot, then takes every other free one without waiting, up to `limit`, and returns how many the caller now holds: the
+    number of jobs it may start, so the number it may ask the queue for. 0 means the worker was told to stop first, and nothing is held.
+
+    A worker used to ask `XREADGROUP` for its whole concurrency and then wait on the semaphore for each entry. A claimed entry's idle clock runs while
+    it waits, so under saturation "idle" measured the queue and not a dead worker, and a healthy job was reclaimed and run a second time (pattern 99).
+    The wait wakes every `wait_seconds` to look at the stop flag, as a blocking read does; the caller gives back what a read did not use."""
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(semaphore.acquire(), timeout=wait_seconds)
+        except TimeoutError:
+            continue
+        held = 1
+        while held < limit and not semaphore.locked():
+            await semaphore.acquire()  # does not wait: a slot is free
+            held += 1
+        if stop_event.is_set():
+            release_slots(semaphore, held)
+            return 0
+        return held
+    return 0
+
+
+def release_slots(semaphore: asyncio.Semaphore, count: int) -> None:
+    for _ in range(count):
+        semaphore.release()

@@ -44,10 +44,17 @@ from app.adapters.inbound.workers.ingest_streams import (
     publish_result,
 )
 from app.adapters.inbound.workers.streams import (
+    READ_BACKOFF_START_SECONDS,
     RECLAIM_ATTEMPTS_FIELD,
+    ack_and_delete,
+    claim_free_slots,
+    pause_after_failed_read,
     publish_dead_letter,
     reclaim_stale_entries,
+    release_consumer,
+    release_slots,
     republish_job,
+    trim_stale_entries,
 )
 from app.bootstrap import close_adapters, verify_wired, wire
 from app.core import metrics
@@ -55,13 +62,14 @@ from app.core.config import (
     INGEST_WORKER_MAX_CONCURRENCY,
     INGEST_WORKER_RECLAIM_IDLE_SECONDS,
     MAX_AUTO_RECLAIM_RETRIES,
+    REQUESTS_STREAM_MAX_AGE_SECONDS,
     WORKER_RECLAIM_INTERVAL_SECONDS,
 )
 from app.ingestion import ingestor
 from app.ingestion.extractors import EXTRACTORS_BY_SUFFIX, ExtractionFailedError
 from app.platform.logging_config import bind_request_id, configure_logging
 from app.platform.profiling import start_profiling
-from app.platform.redis_client import StreamReadResponse, get_client
+from app.platform.redis_client import UNAVAILABLE_ERRORS, StreamReadResponse, get_client
 from app.platform.telemetry import configure_telemetry
 from app.ports.outbound.jobs import INGEST_CONSUMER_GROUP, INGEST_REQUESTS_STREAM
 from app.ports.outbound.storage import object_store
@@ -69,10 +77,7 @@ from app.ports.outbound.storage import object_store
 logger = logging.getLogger(__name__)
 
 CONSUMER_NAME = f"{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
-_MAX_CONCURRENCY = INGEST_WORKER_MAX_CONCURRENCY  # concurrent jobs per worker
-# process (see module docstring) — also bounds how many entries one
-# xreadgroup call pulls, same shape as agent_worker.py::_READ_COUNT.
-_READ_COUNT = _MAX_CONCURRENCY
+_MAX_CONCURRENCY = INGEST_WORKER_MAX_CONCURRENCY  # concurrent jobs per worker process (see module docstring)
 _BLOCK_MS = 5000
 
 
@@ -148,7 +153,7 @@ async def process_job(client: redis.Redis, entry_id: str, fields: dict[str, Any]
             )
             await publish_result(client, job_id, {"type": "error", "content": str(exc)})
         finally:
-            await client.xack(INGEST_REQUESTS_STREAM, INGEST_CONSUMER_GROUP, entry_id)
+            await ack_and_delete(client, INGEST_REQUESTS_STREAM, INGEST_CONSUMER_GROUP, entry_id)
 
 
 async def _process_with_limit(
@@ -209,7 +214,7 @@ async def _handle_reclaimed_job(client: redis.Redis, entry_id: str, fields: dict
     if attempts < MAX_AUTO_RECLAIM_RETRIES:
         await republish_job(client, requests_stream=INGEST_REQUESTS_STREAM, payload=payload)
         metrics.agent_worker_job_reclaimed_total.labels(queue="ingest", outcome="retried").inc()
-        await client.xack(INGEST_REQUESTS_STREAM, INGEST_CONSUMER_GROUP, entry_id)
+        await ack_and_delete(client, INGEST_REQUESTS_STREAM, INGEST_CONSUMER_GROUP, entry_id)
         return
 
     if job_id:
@@ -232,7 +237,7 @@ async def _dead_letter_reclaimed_ingest_job(client: redis.Redis, entry_id: str, 
     await publish_dead_letter(
         client, requests_stream=INGEST_REQUESTS_STREAM, entry_id=entry_id, payload=payload, reason=reason
     )
-    await client.xack(INGEST_REQUESTS_STREAM, INGEST_CONSUMER_GROUP, entry_id)
+    await ack_and_delete(client, INGEST_REQUESTS_STREAM, INGEST_CONSUMER_GROUP, entry_id)
 
 
 async def _reclaim_loop(client: redis.Redis, stop_event: asyncio.Event) -> None:
@@ -257,6 +262,7 @@ async def _reclaim_loop(client: redis.Redis, stop_event: asyncio.Event) -> None:
             )
             for entry_id, fields in entries:
                 await _handle_reclaimed_job(client, entry_id, fields)
+            await trim_stale_entries(client, INGEST_REQUESTS_STREAM, max_age_seconds=REQUESTS_STREAM_MAX_AGE_SECONDS)
         except Exception as exc:  # noqa: BLE001 - one bad pass must not end reclaim for this process's whole life
             logger.warning("ingest_worker_reclaim_pass_failed", extra={"error_class": type(exc).__name__})
 
@@ -299,32 +305,41 @@ async def run() -> None:
 
     reclaim_task = asyncio.create_task(_reclaim_loop(client, stop_event))
 
-    # Bounds jobs this process runs at once. Acquired BEFORE the task is
-    # created, so a full semaphore also backpressures reading: entries stay
-    # pending for the group instead of piling up unbounded in `in_flight`.
-    # Same shape as agent_worker.py::run().
+    # Bounds jobs this process runs at once. The slots are taken BEFORE the read and the read asks for no more entries than it holds, so a full worker
+    # reads nothing: entries stay pending for the group instead of piling up unbounded in `in_flight`, and a claimed entry's idle clock never runs while
+    # it waits for a slot (pattern 99). Same shape as agent_worker.py::run(), which also says why a failed read is retried.
     semaphore = asyncio.Semaphore(_MAX_CONCURRENCY)
     in_flight: set[asyncio.Task[Any]] = set()
 
+    read_backoff = READ_BACKOFF_START_SECONDS
     while not stop_event.is_set():
-        response = cast(
-            StreamReadResponse,
-            await client.xreadgroup(
-                INGEST_CONSUMER_GROUP,
-                CONSUMER_NAME,
-                {INGEST_REQUESTS_STREAM: ">"},
-                count=_READ_COUNT,
-                block=_BLOCK_MS,
-            ),
-        )
-        if not response:
+        free = await claim_free_slots(semaphore, stop_event, limit=_MAX_CONCURRENCY, wait_seconds=_BLOCK_MS / 1000)
+        if not free:
+            continue  # told to stop while every slot was busy
+        try:
+            response = cast(
+                StreamReadResponse,
+                await client.xreadgroup(
+                    INGEST_CONSUMER_GROUP,
+                    CONSUMER_NAME,
+                    {INGEST_REQUESTS_STREAM: ">"},
+                    count=free,
+                    block=_BLOCK_MS,
+                ),
+            )
+        except UNAVAILABLE_ERRORS as exc:
+            release_slots(semaphore, free)
+            metrics.agent_worker_queue_read_failed_total.labels(queue="ingest").inc()
+            logger.warning("ingest_worker_queue_read_failed", extra={"queue": "ingest", "error_class": type(exc).__name__})
+            read_backoff = await pause_after_failed_read(stop_event, read_backoff)
             continue
-        _, entries = response[0]
+        read_backoff = READ_BACKOFF_START_SECONDS
+        entries = response[0][1] if response else []
         for entry_id, fields in entries:
-            await semaphore.acquire()
-            task = asyncio.create_task(_process_with_limit(client, entry_id, fields, semaphore))
+            task = asyncio.create_task(_process_with_limit(client, entry_id, fields, semaphore))  # the slot it holds is its own to release
             in_flight.add(task)
             task.add_done_callback(in_flight.discard)
+        release_slots(semaphore, free - len(entries))  # what the read did not use
 
     logger.info(
         "ingest_worker_stopping", extra={"consumer": CONSUMER_NAME, "in_flight": len(in_flight)}
@@ -334,6 +349,7 @@ async def run() -> None:
     if in_flight:
         await asyncio.gather(*in_flight)
     await reclaim_task  # stop_event already set above, so this returns promptly
+    await release_consumer(client, INGEST_REQUESTS_STREAM, INGEST_CONSUMER_GROUP, CONSUMER_NAME)  # see agent_worker.py's shutdown
     await client.aclose()
     # The Qdrant client the ingestor wrote through (same reasoning as agent_worker.py's shutdown).
     await close_adapters()

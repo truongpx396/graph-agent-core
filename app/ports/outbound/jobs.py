@@ -13,7 +13,9 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
-from app.core.config import REQUEST_TIMEOUT_SECONDS
+from app.core.config import (
+    THREAD_LOCK_TTL_SECONDS as THREAD_LOCK_TTL_SECONDS,  # re-exported: the API and the workers read the names they share from here
+)
 from app.core.security import SecurityCtx
 from app.ports.slot import Slot
 
@@ -22,8 +24,8 @@ CONSUMER_GROUP = "agent-workers"
 TERMINAL_EVENT_TYPES = frozenset({"done", "error", "approval_required"})
 RESULTS_STREAM_TTL_SECONDS = 300  # an abandoned results stream, chat or ingest, expires after 5 minutes
 CANCEL_FLAG_TTL_SECONDS = 60  # outlasts the gap between a worker's cancel checks; short, so a flag nobody consumed cannot cancel a later turn
-# A safety net, not the release path (the worker always releases): outlives the longest turn, so a worker that dies mid-turn cannot wedge its thread.
-THREAD_LOCK_TTL_SECONDS = REQUEST_TIMEOUT_SECONDS * 2
+# THREAD_LOCK_TTL_SECONDS (imported above, defined in app/core/config.py beside the validator that needs it): how long a conversation's lock lives
+# without being renewed. The worker renews it while the job runs, so it only bounds how long a CRASHED worker's lock keeps the conversation busy.
 
 INGEST_REQUESTS_STREAM = "ingest:requests"
 INGEST_CONSUMER_GROUP = "ingest-workers"

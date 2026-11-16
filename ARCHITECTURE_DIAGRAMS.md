@@ -395,7 +395,7 @@ sequenceDiagram
     end
     W->>R: release the thread lock, then publish done
     A-->>C: done
-    W->>R: XACK, always, even after a failure
+    W->>R: XACK and XDEL (one MULTI), always, even after a failure
 ```
 
 - **The lock is released before the terminal event is published**, not after. A client that sees `done` or `approval_required` may fire the next request at once: releasing only after the handler returned rejected about a third of resumes as `THREAD_BUSY`, and releasing right after the publish still rejected about one in eight (`app/adapters/inbound/workers/agent_worker.py::process_request`).
@@ -485,7 +485,7 @@ sequenceDiagram
     G->>G: should_continue sends any non-read_only call to human_approval
     G->>K: interrupt() saves the paused state
     G-->>W: approval_required with the tool and its arguments
-    W->>R: release the lock, publish approval_required (terminal), XACK
+    W->>R: release the lock, publish approval_required (terminal), XACK and XDEL
     R-->>A: event
     A-->>C: SSE approval_required, the stream ends
 
@@ -590,7 +590,7 @@ sequenceDiagram
         W2->>R: republish it, the tool ledger makes a resume safe to repeat
     else a turn that cannot be continued safely
         Note over W2,K: unreadable, already answered, or paused at a real approval
-        W2->>R: WORKER_LOST error on the results stream, copy to the dead-letter stream, XACK
+        W2->>R: WORKER_LOST error on the results stream, copy to the dead-letter stream, XACK and XDEL
         R-->>C: error event, the caller is told to retry
     else a turn with nothing checkpointed yet
         W2->>R: republish as turn, same request_id
@@ -768,7 +768,7 @@ sequenceDiagram
         W->>R: progress: chunks embedded of total
     end
     W->>Q: upsert points tagged tenant, kind document and topic, ids derived from content
-    W->>R: done with the chunk count, then XACK
+    W->>R: done with the chunk count, then XACK and XDEL
     R-->>A: progress events
     A-->>C: SSE progress, then done
     Note over W,Q: content-derived ids make a re-run an overwrite, so a crashed ingest job is safely retried

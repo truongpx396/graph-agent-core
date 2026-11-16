@@ -9,18 +9,46 @@ Every test that drives async queue calls is `async def` (pytest-asyncio's
 each wrapping its own call in `asyncio.run(...)`.
 """
 import json
+import time
 
 import pytest
+from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import ResponseError
 
 from app.adapters.inbound.workers import streams
 from app.adapters.outbound.redis import queue
+from app.core import metrics
 from app.platform import redis_client
 from app.ports.outbound import jobs
+from tests.conftest import metric_value
 
 
 def _id_gt(a: str, b: str) -> bool:
     return tuple(int(x) for x in a.split("-")) > tuple(int(x) for x in b.split("-"))
+
+
+class _FakePipeline:
+    """redis-py's async pipeline: commands queue synchronously (they return the pipeline) and `execute()` runs them as one unit."""
+
+    def __init__(self, client, transaction):
+        self._client, self._transaction, self._queued = client, transaction, []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    def __getattr__(self, command):
+        def queue(*args, **kwargs):
+            self._queued.append((command, args, kwargs))
+            return self
+
+        return queue
+
+    async def execute(self):
+        self._client.pipeline_runs.append((self._transaction, [command for command, _args, _kwargs in self._queued]))
+        return [await getattr(self._client, command)(*args, **kwargs) for command, args, kwargs in self._queued]
 
 
 class FakeRedis:
@@ -36,15 +64,53 @@ class FakeRedis:
         self.deleted: list[str] = []
         self.kv: dict[str, str] = {}  # plain SET/GET/DELETE keys — the cancel flag
         self._counter = 0
+        self._start_ms = int(time.time() * 1000)
         # entry_id -> simulated idle time in ms since last delivery/claim.
         # Real Redis derives this from a wall clock; tests instead set it
         # directly (e.g. `client._delivered[entry_id] = 999_999`) to
         # simulate "abandoned long enough to reclaim" without a fake clock.
         self._delivered: dict[str, int] = {}
+        self._owner: dict[str, str] = {}  # entry_id -> the consumer it was last delivered or claimed to
+        self.renewals: list[tuple[str, int]] = []  # (lock key, new lifetime in seconds) of each successful renewal
+        self.pipeline_runs: list[tuple[bool, list[str]]] = []  # (transaction, commands) of each execute()
+        self.trims: list[tuple[str, str | None]] = []  # (stream, minid) of each XTRIM
+        self.deleted_consumers: list[tuple[str, str, str]] = []  # (stream, group, consumer)
+
+    def pipeline(self, transaction=True):
+        return _FakePipeline(self, transaction)
+
+    async def xdel(self, stream, *entry_ids):
+        gone = set(entry_ids)
+        before = len(self.streams.get(stream, []))
+        self.streams[stream] = [(eid, f) for eid, f in self.streams.get(stream, []) if eid not in gone]
+        return before - len(self.streams[stream])
+
+    async def xtrim(self, name, maxlen=None, approximate=True, minid=None, limit=None):
+        """Only MINID, the one form the workers use: drops every entry with an id below `minid`, pending or not, as the server does."""
+        self.trims.append((name, minid))
+        if minid is None:
+            return 0
+        before = len(self.streams.get(name, []))
+        self.streams[name] = [(eid, f) for eid, f in self.streams.get(name, []) if not _id_gt(minid, eid)]
+        return before - len(self.streams[name])
+
+    async def xinfo_consumers(self, stream, group):
+        """One row per consumer that was ever delivered an entry, with the entries it still owns unacknowledged."""
+        live = {eid for eid, _fields in self.streams.get(stream, [])}
+        names = set(self._owner.values())
+        return [
+            {"name": name, "idle": 0, "pending": len([e for e, owner in self._owner.items() if owner == name and e in live and e not in self.acked])}
+            for name in sorted(names)
+        ]
+
+    async def xgroup_delconsumer(self, stream, group, consumer):
+        self.deleted_consumers.append((stream, group, consumer))
+        return 0
 
     def _next_id(self) -> str:
+        # Like a real server's: a millisecond timestamp, so a worker's age-based XTRIM treats these entries as the recent ones they are.
         self._counter += 1
-        return f"{self._counter}-0"
+        return f"{self._start_ms + self._counter}-0"
 
     async def xadd(self, stream, fields, maxlen=None, approximate=True):
         entry_id = self._next_id()
@@ -81,6 +147,7 @@ class FakeRedis:
             if entries:
                 for eid, _ in entries:
                     self._delivered[eid] = 0
+                    self._owner[eid] = consumer
                 result.append((key, entries))
         return result
 
@@ -98,6 +165,7 @@ class FakeRedis:
             claimed = claimed[:count]
         for eid, _ in claimed:
             self._delivered[eid] = 0  # claimed entries reset to freshly-delivered
+            self._owner[eid] = consumer
         return ["0-0", claimed, []]
 
     async def xack(self, stream, group, entry_id):
@@ -127,14 +195,17 @@ class FakeRedis:
         return self.kv.get(key)
 
     async def eval(self, script, numkeys, *keys_and_args):
-        """Only ever called with queue.py's own `_RELEASE_LOCK_SCRIPT`
-        (compare-and-delete) — reimplements just that, not a real Lua
-        interpreter, same "just enough" scope as every other method here."""
+        """Only ever called with streams.py's own two lock scripts: `_RELEASE_LOCK_SCRIPT` (compare-and-delete) and `_RENEW_LOCK_SCRIPT` (compare-and-
+        extend). Reimplements just those, not a real Lua interpreter, same "just enough" scope as every other method here."""
         key, token = keys_and_args[0], keys_and_args[1]
-        if self.kv.get(key) == token:
-            del self.kv[key]
+        if self.kv.get(key) != token:
+            return 0
+        if script == streams._RENEW_LOCK_SCRIPT:
+            self.renewals.append((key, int(keys_and_args[2])))
+            self.expiries[key] = int(keys_and_args[2])
             return 1
-        return 0
+        del self.kv[key]
+        return 1
 
 
 class TestGetClient:
@@ -470,6 +541,73 @@ class TestPublishResultAndReadResults:
         await streams.publish_result(client, "r1", {"type": "done"})
         events = [event async for event in queue.read_results(client, "r1")]
         assert events == [{"type": "done"}]
+
+
+class _FlakyXRead(FakeRedis):
+    """The first `failures` XREADs raise what a dropped connection raises; the rest read normally."""
+
+    def __init__(self, failures, error=None):
+        super().__init__()
+        self.failures, self.attempts = failures, 0
+        self.error = error or RedisConnectionError("Connection closed by server.")
+
+    async def xread(self, streams, block=None, count=None):
+        self.attempts += 1
+        if self.failures:
+            self.failures -= 1
+            raise self.error
+        return await super().xread(streams, block=block, count=count)
+
+
+class TestReadResultsSurvivesABlip:
+    """A Redis blip ended every open SSE response at once: `read_results` did a bare XREAD (PRODUCTION_REVIEW.md R07). The read is by `last_id` and
+    changes nothing, so asking again is safe; the client-wide retry that would also re-send an XADD is deliberately NOT turned on."""
+
+    async def test_read_results_survives_one_failed_read(self, monkeypatch):
+        monkeypatch.setattr(queue, "READ_RETRY_PAUSE_SECONDS", 0.001)
+        before = metric_value(metrics.agent_worker_queue_read_failed_total, queue="results")
+        client = _FlakyXRead(failures=1)
+        await streams.publish_result(client, "r1", {"type": "token", "content": "a"})
+        await streams.publish_result(client, "r1", {"type": "done"})
+
+        events = [event async for event in queue.read_results(client, "r1")]
+
+        assert events == [{"type": "token", "content": "a"}, {"type": "done"}]
+        assert metric_value(metrics.agent_worker_queue_read_failed_total, queue="results") == before + 1
+
+    async def test_it_resumes_from_the_last_event_it_delivered_not_from_the_start(self, monkeypatch):
+        monkeypatch.setattr(queue, "READ_RETRY_PAUSE_SECONDS", 0.001)
+
+        class _FailsAfterTheFirstBatch(_FlakyXRead):
+            async def xread(self, streams, block=None, count=None):
+                if self.attempts == 1:  # the second read, after one event was delivered
+                    self.failures = 1
+                return await super().xread(streams, block=block, count=1)
+
+        client = _FailsAfterTheFirstBatch(failures=0)
+        for event in ({"type": "token", "content": "a"}, {"type": "token", "content": "b"}, {"type": "done"}):
+            await streams.publish_result(client, "r1", event)
+
+        events = [event async for event in queue.read_results(client, "r1")]
+
+        assert [e.get("content") for e in events if e["type"] == "token"] == ["a", "b"], "no event twice, none missed"
+
+    async def test_it_gives_up_after_three_failed_reads_in_a_row_and_raises_what_redis_raised(self, monkeypatch):
+        monkeypatch.setattr(queue, "READ_RETRY_PAUSE_SECONDS", 0.001)
+        client = _FlakyXRead(failures=10)
+
+        with pytest.raises(RedisConnectionError):
+            [event async for event in queue.read_results(client, "r1")]
+
+        assert client.attempts == 3
+
+    async def test_a_rejected_command_is_not_retried(self, monkeypatch):
+        client = _FlakyXRead(failures=10, error=ResponseError("WRONGTYPE"))
+
+        with pytest.raises(ResponseError):
+            [event async for event in queue.read_results(client, "r1")]
+
+        assert client.attempts == 1
 
 
 class TestDeleteResultsStream:
