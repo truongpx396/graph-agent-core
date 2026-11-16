@@ -1432,7 +1432,11 @@ class TestReclaimLoop:
 
         stop_event = asyncio.Event()
         task = asyncio.create_task(agent_worker._reclaim_loop(client, stop_event, graphs={"ecorp": FakeGraph()}))
-        await asyncio.sleep(0.05)
+        # Wait for the behaviour, not for a fixed time: 50 ms of wall clock was enough on an idle machine and failed once in a full run on a loaded one.
+        clock = asyncio.get_running_loop().time
+        deadline = clock() + 2
+        while len(calls) < 2 and clock() < deadline:
+            await asyncio.sleep(0.005)
         stop_event.set()
         await asyncio.wait_for(task, timeout=1)
 
