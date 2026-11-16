@@ -31,8 +31,9 @@ The HTTP status has changed between versions (429, 400), so the `type` is recogn
 alone it would be a generic internal error and nobody would learn the backstop fired; it means the app-level
 ceilings didn't stop the spend first, so it has its own error code, counter and a critical alert.
 
-It is never retried (`app/agent/graph/core.py::_retry_agent_on`). The openai SDK still retries a 429 twice
-inside one call, harmlessly: the gateway refuses at authentication, before any money is spent.
+It is never retried (`app/agent/graph/core.py::_retry_agent_on`). The openai SDK's own retries are off
+(`LLM_SDK_MAX_RETRIES`, 0); were they on, a 429 retried inside one call would be harmless: the gateway refuses at
+authentication, before any money is spent.
 
 ## Reading "refused"
 

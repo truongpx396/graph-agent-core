@@ -1,4 +1,5 @@
-"""The API and the agent worker end their MCP connections on the way out (app/adapters/outbound/mcp/connection.py).
+"""The API and the workers end what their adapters hold open on the way out: the MCP connections (app/adapters/outbound/mcp/connection.py)
+and the Qdrant client (`close_adapters`).
 
 Each connection is a child process (the sandbox bridge). Left to the event loop's teardown it would still be cancelled, but closing
 on the loop that served the requests is the orderly path, and it is the one a SIGTERM'd worker takes. Neither entry point's shutdown
@@ -11,7 +12,7 @@ import signal
 from unittest.mock import AsyncMock, MagicMock
 
 from app.adapters.inbound.api import main as api_main
-from app.adapters.inbound.workers import agent_worker
+from app.adapters.inbound.workers import agent_worker, ingest_worker
 
 
 async def test_the_api_closes_its_mcp_connections_when_the_lifespan_ends(monkeypatch):
@@ -57,3 +58,29 @@ async def test_a_worker_told_to_stop_closes_its_mcp_connections_after_its_in_fli
 
     assert calls == ["mcp", "sql", "checkpointer"]
     client.aclose.assert_awaited_once()
+
+
+async def test_the_ingest_worker_closes_its_adapters_when_told_to_stop(monkeypatch):
+    """It writes through the Qdrant client, which `close_adapters` closes; it never called it."""
+    calls = []
+    client = MagicMock()
+    client.aclose = AsyncMock(side_effect=lambda: calls.append("redis"))
+
+    async def read_then_ask_to_stop(*args, **kwargs):
+        os.kill(os.getpid(), signal.SIGTERM)
+        await asyncio.sleep(0.05)
+        return []
+
+    client.xreadgroup = read_then_ask_to_stop
+
+    async def no_reclaim(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(ingest_worker, "get_client", lambda: client)
+    monkeypatch.setattr(ingest_worker, "ensure_consumer_group", AsyncMock())
+    monkeypatch.setattr(ingest_worker, "_reclaim_loop", no_reclaim)
+    monkeypatch.setattr(ingest_worker, "close_adapters", AsyncMock(side_effect=lambda: calls.append("adapters")))
+
+    await asyncio.wait_for(ingest_worker.run(), 30)
+
+    assert calls == ["redis", "adapters"]

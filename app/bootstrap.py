@@ -37,6 +37,9 @@ from app.adapters.outbound.qdrant.qdrant_store import (
     QdrantDocumentIndex,
     QdrantDocumentWriter,
 )
+from app.adapters.outbound.qdrant.qdrant_store import (
+    close_client as close_qdrant_client,
+)
 from app.adapters.outbound.redis.ingest_queue import RedisIngestQueue
 from app.adapters.outbound.redis.queue import RedisTurnQueue
 from app.adapters.outbound.redis.semantic_cache import RedisAnswerCache
@@ -127,6 +130,8 @@ def verify_wired() -> None:
 
 
 async def close_adapters() -> None:
-    """Ends what the adapters hold open on the running loop: the MCP connections, each a child process (the sandbox bridge). Call it where a
-    process stops, on the loop that served the requests, before it closes the pools the application opened. A no-op if nothing was opened."""
+    """Ends what the adapters hold open on the running loop: the MCP connections, each a child process (the sandbox bridge), and the Qdrant
+    client. Call it where a process stops, on the loop that served the requests, before it closes the pools the application opened. A no-op if
+    nothing was opened."""
     await close_all_connections()
+    await close_qdrant_client()

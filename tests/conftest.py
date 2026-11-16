@@ -47,6 +47,7 @@ from app import bootstrap
 from app.adapters.inbound.api import identity
 from app.adapters.outbound.embeddings.embedding_identity import EmbeddingIdentity
 from app.adapters.outbound.mlservice import classification as ml_classification
+from app.adapters.outbound.qdrant import qdrant_store as _qdrant_store
 from app.agent.graph import build as graph_build
 from app.core.config import settings
 from app.ports.outbound import classification as classification_ports
@@ -179,6 +180,8 @@ def mock_ml_moderation():
 
 # Kept so the tests of the ML-service ADAPTER (tests/adapters/outbound/mlservice/) can call the real function the suite's guard keeps off the turn path.
 REAL_CHOOSE = ml_classification.choose
+# Likewise for the Qdrant client getter `no_real_qdrant` replaces: the tests of the getter itself need the real one (with the client class stubbed).
+REAL_QDRANT_GET_CLIENT = _qdrant_store.get_client
 
 
 @pytest.fixture(autouse=True)

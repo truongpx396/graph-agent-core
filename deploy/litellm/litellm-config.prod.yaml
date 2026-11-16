@@ -60,8 +60,12 @@ model_list:
 
 litellm_settings:
   drop_params: true
+  # Three layers retry a failed call, and they multiply: the OpenAI SDK in the app (LLM_SDK_MAX_RETRIES, 0), the graph's retry policy (3 attempts,
+  # app/agent/graph/core.py) and this proxy (num_retries). During an outage 3 x 3 x 3 = 27 calls reached the provider for one logical call. The proxy
+  # keeps its 2: it is closest to the provider and sees Retry-After. request_timeout was 600, so the proxy went on working ten minutes for an app
+  # that had given up at 60 s; keep it above the app's LLM_READ_TIMEOUT_SECONDS (a stall bound, not an answer bound). PRODUCTION_REVIEW.md R06.
   num_retries: 2
-  request_timeout: 600
+  request_timeout: 120
   # No Langfuse callback here — this lean stack ships no Langfuse
   # container (see docker-compose.prod.yml's own header). Prometheus stays
   # since it's just an exposed /metrics endpoint, no extra service needed.

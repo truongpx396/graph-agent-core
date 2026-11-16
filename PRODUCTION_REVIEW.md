@@ -125,12 +125,12 @@ pick silently. If the owner has not answered, implement the recommended default 
 
 | ID | What | Priority | Size | Established | Depends on | Status |
 |---|---|---|---|---|---|---|
-| R01 | A retried model stream leaves its first attempt's tokens on screen | P0 | S | reproduced | | open |
-| R02 | The subagent graph's in-memory checkpointer keeps every run | P0 | S | reproduced | | open |
-| R03 | A new Qdrant client, connection and thread per call | P0 | S | verified in the installed source | | open |
+| R01 | A retried model stream leaves its first attempt's tokens on screen | P0 | S | reproduced | | done |
+| R02 | The subagent graph's in-memory checkpointer keeps every run | P0 | S | reproduced | | done |
+| R03 | A new Qdrant client, connection and thread per call | P0 | S | verified in the installed source | | done |
 | R04 | Request streams are never trimmed; consumer names accumulate | P0 | M | read from code | | open |
 | R05 | Request timeout, lock lifetime and reclaim idle are related only by comment | P0 | M | read from code | | open |
-| R06 | The chat client has no HTTP timeout; three layers each retry | P0 | S | verified in the installed source | | open |
+| R06 | The chat client has no HTTP timeout; three layers each retry | P0 | S | verified in the installed source | | done |
 | R07 | A Redis error in the worker's read loop ends the process | P0 | S | read from code | | open |
 | R08 | Three Redis round trips for every token | P1 | S, then M | read from code | | open |
 | R09 | No payload index on the fields every vector search filters by | P1 | S | read from code | R03 | open |

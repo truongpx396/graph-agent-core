@@ -37,6 +37,7 @@ import asyncio
 import logging
 import re
 import time
+import weakref
 from collections.abc import Sequence
 from typing import Any, cast
 from uuid import UUID
@@ -88,8 +89,28 @@ DENSE_VECTOR_NAME = "dense"
 SPARSE_VECTOR_NAME = "sparse"
 
 
+# One client per event loop. A new AsyncQdrantClient starts a daemon thread that makes a blocking version-check
+# request (qdrant-client 1.19.0, `check_compatibility`) and builds a connection pool, so building one per call cost
+# every search a thread, a request and a TCP handshake, for a client nobody closed (pattern 20). Keyed by loop
+# because a connection belongs to the loop that opened it, and the one-shot scripts and the test suite run more
+# than one loop per process; weakly, so a loop that ends takes its client with it.
+_clients: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, AsyncQdrantClient]" = weakref.WeakKeyDictionary()
+
+
 def get_client() -> AsyncQdrantClient:
-    return AsyncQdrantClient(url=QDRANT_URL)
+    """The running loop's client, built on first use. Needs a running loop: every caller is already `async def`."""
+    loop = asyncio.get_running_loop()
+    client = _clients.get(loop)
+    if client is None:
+        client = _clients[loop] = AsyncQdrantClient(url=QDRANT_URL)
+    return client
+
+
+async def close_client() -> None:
+    """Closes and forgets the running loop's client (`app/bootstrap.py::close_adapters`, where a process stops). A no-op if none was opened."""
+    client = _clients.pop(asyncio.get_running_loop(), None)
+    if client is not None:
+        await client.close()
 
 
 LIVE_SUFFIX = "-live"

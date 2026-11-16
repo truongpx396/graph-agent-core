@@ -27,9 +27,12 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
+from langchain_core.outputs import ChatGenerationChunk
+from langgraph.types import RetryPolicy
 
 from app.agent.graph.build import GraphDeps
 from app.agent.graph.compaction import _estimate_tokens
+from app.agent.graph.core import AGENT_RETRY_POLICY
 from app.agent.runtime import core as agent_module
 from app.agent.runtime import stream as stream_module
 from app.core import metrics, moderation
@@ -1016,3 +1019,116 @@ async def test_the_same_chain_ends_still_act_when_they_are_the_parents_own():
     assert await _event_types([_chain_end("check_output")]) == ["retry", "token", "done"]
     assert await _event_types([_chain_end("retry_exhausted")]) == ["retry", "token", "done"]
     assert await _event_types([_chain_end("compact_history")]) == ["compacted", "token", "done"]
+
+
+
+# --- A model stream that fails part-way and is retried (PRODUCTION_REVIEW.md R01, pattern 7) -------------
+
+
+class _StreamsThenFailsOnce(GenericFakeChatModel):
+    """The first stream sends two chunks and then drops, as a connection reset or a gateway 5xx does
+    mid-answer; the second stream is the whole answer."""
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+        first = not _FAILED_ONCE
+        _FAILED_ONCE.append(True)
+        for piece in ["The ", "answer "] if first else ["The ", "answer ", "is ", "42."]:
+            yield ChatGenerationChunk(message=AIMessageChunk(content=piece))
+        if first:
+            raise ConnectionError("connection reset by peer")
+
+
+_FAILED_ONCE: list[bool] = []
+
+
+async def test_a_model_stream_that_fails_midway_and_is_retried_does_not_show_its_first_attempt(monkeypatch):
+    """Real bug (reproduced on langgraph 0.2.76): the `agent` node's retry policy runs the node again after a
+    broken stream, and every `on_chat_model_stream` chunk had already been forwarded, so the person read
+    'The answer The answer is 42.' while the stored message was right."""
+    _FAILED_ONCE.clear()
+    # The policy's own backoff (0.5 s and growing) is not what is under test.
+    monkeypatch.setattr(
+        "app.agent.graph.build.AGENT_RETRY_POLICY",
+        RetryPolicy(max_attempts=3, initial_interval=0.001, jitter=False, retry_on=AGENT_RETRY_POLICY.retry_on),
+    )
+    graph_obj = build_graph(GraphDeps(llm=_StreamsThenFailsOnce(messages=iter([]))))
+    retries_before = metric_value(metrics.agent_stream_restarted_total)
+
+    events = await _events_for(graph_obj, "what is the answer?", monkeypatch=monkeypatch)
+
+    assert [e["type"] for e in events].count("retry") == 1
+    last_retry = max(i for i, e in enumerate(events) if e["type"] == "retry")
+    shown = "".join(e["content"] for e in events[last_retry + 1 :] if e["type"] == "token")
+    assert shown == "The answer is 42."
+    assert events[-1] == {"type": "done"}
+    assert metric_value(metrics.agent_stream_restarted_total) == retries_before + 1
+
+
+def _model_event(kind, *, node="agent", subagent=None, content=""):
+    metadata = {"langgraph_node": node}
+    if subagent:
+        metadata["subagent_name"] = subagent
+    data = {"chunk": AIMessageChunk(content=content)} if kind == "on_chat_model_stream" else {}
+    return {"event": kind, "name": "ChatOpenAI", "metadata": metadata, "data": data}
+
+
+def _call(*pieces, ends=True, **kwargs):
+    """The events of one model call: start, one stream event per piece, and an end unless it failed."""
+    events = [_model_event("on_chat_model_start", **kwargs)]
+    events += [_model_event("on_chat_model_stream", content=piece, **kwargs) for piece in pieces]
+    if ends:
+        events.append(_model_event("on_chat_model_end", **kwargs))
+    return events
+
+
+async def _types_and_text(events):
+    graph = _ScriptedEventsGraph(events)
+    out = [e async for e in stream_module._run_graph_stream(graph, {}, {}, None)]
+    return [e["type"] for e in out], "".join(e.get("content", "") for e in out if e["type"] == "token")
+
+
+async def test_an_ordinary_tool_loop_emits_no_retry():
+    """The control: two model calls on `agent` that both end (a tool round, then the answer) are not a
+    restart, even though the second starts after tokens were streamed."""
+    events = _call("Let me check. ") + _call("It is ", "42.")
+
+    types, text = await _types_and_text(events)
+
+    assert "retry" not in types
+    assert text == "Let me check. It is 42."
+
+
+async def test_a_failed_call_that_had_sent_nothing_is_not_announced_as_a_retry():
+    """Nothing was shown, so there is nothing to discard."""
+    types, text = await _types_and_text(_call(ends=False) + _call("It is ", "42."))
+
+    assert "retry" not in types
+    assert text == "It is 42."
+
+
+async def test_two_failures_in_a_row_each_discard_what_the_person_was_shown():
+    events = _call("A ", ends=False) + _call("B ", ends=False) + _call("C")
+
+    types, text = await _types_and_text(events)
+
+    assert types.count("retry") == 2
+    assert text == "A B C"  # the stream carries all of it; the client drops its screen at each `retry`
+
+
+async def test_a_subagents_or_another_nodes_model_calls_never_count_as_the_answer_restarting():
+    """A nested run shares the node name `agent` (`metadata.subagent_name` tells them apart), and
+    suggest_followups and compact_history call the model on their own nodes."""
+    events = (
+        _call("The answer. ")
+        + _call("thinking ", subagent="researcher", ends=False)
+        + _call("more thinking ", subagent="researcher", ends=False)
+        + _call("a follow-up?", node="suggest_followups", ends=False)
+        + _call("a summary", node="compact_history", ends=False)
+    )
+
+    types, _ = await _types_and_text(events)
+
+    assert "retry" not in types

@@ -39,7 +39,8 @@ THIRD = EmbeddingIdentity("embed", "test/a-third-model", 3, "", "", "")
 
 
 @pytest.fixture
-def qdrant(monkeypatch, record_property):
+async def qdrant(monkeypatch, record_property):
+    # `async` so it runs on the test's own loop: `get_client()` is one client per loop and needs one running.
     info = ensure_qdrant()
     monkeypatch.setattr(qdrant_store, "QDRANT_URL", info["qdrant_url"])
     try:

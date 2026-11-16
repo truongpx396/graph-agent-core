@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import SettingsConfigDict
 
 from app.core.routing_policy import DEFAULT_LONG_PROMPT_CHARS
@@ -314,6 +314,37 @@ class Settings(BillingSettings):
     # widen it. `tests/live/conftest.py` overrides this since a small
     # model's inference time on shared CI can exceed the 60s local default.
     request_timeout_seconds: int = 60
+
+    # How long the chat client waits for the gateway to send ANYTHING: the longest silence between bytes (on a streamed answer
+    # between chunks), not the length of the answer. Unset means request_timeout_seconds, so nothing changes for a turn until an
+    # operator lowers it; the cron jobs that call the model outside a turn get a bound for the first time. A hosted model is
+    # better served by about 30, which leaves room for one retry inside a 60 s turn; a cold local model can take longer than that
+    # to send its first token, which is why the default is not 30. Never above request_timeout_seconds (PRODUCTION_REVIEW.md R06).
+    llm_read_timeout_seconds: float | None = Field(default=None, gt=0)
+    # Retries the OpenAI SDK makes inside one call. Off: the graph's AGENT_RETRY_POLICY (three attempts, and it knows what must
+    # not be repeated) and the gateway's num_retries (it sees Retry-After) were already retrying, and a third layer multiplies
+    # them: 3 x 3 x 3 = 27 calls to the provider for one logical call during an outage (pattern 7).
+    llm_sdk_max_retries: int = Field(default=0, ge=0, le=5)
+
+    @field_validator("llm_read_timeout_seconds", mode="before")
+    @classmethod
+    def _a_blank_read_timeout_is_unset(cls, value: object) -> object:
+        # `LLM_READ_TIMEOUT_SECONDS=` in an env file, or compose's `${LLM_READ_TIMEOUT_SECONDS:-}`, is "not set", as for every other optional line.
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @model_validator(mode="after")
+    def _the_llm_read_timeout_fits_inside_a_turn(self) -> "Settings":
+        # Messages name the variables, never their values (pattern 59).
+        if self.llm_read_timeout_seconds is not None and self.llm_read_timeout_seconds > self.request_timeout_seconds:
+            raise ValueError(
+                "LLM_READ_TIMEOUT_SECONDS must not exceed REQUEST_TIMEOUT_SECONDS: a call that may stay silent longer than the whole turn "
+                "is never the one that times out. Lower it, or leave it unset to follow the turn's limit"
+            )
+        return self
+
+    @property
+    def effective_llm_read_timeout_seconds(self) -> float:
+        return float(self.llm_read_timeout_seconds if self.llm_read_timeout_seconds is not None else self.request_timeout_seconds)
 
     # Wall-clock cap on ONE nested subagent run (app/agent/tools/run_subagent.py,
     # GRAPH_PATTERNS.md pattern 46) — same operational-timeout category as
@@ -773,6 +804,8 @@ USAGE_RECONCILE_INTERVAL_SECONDS = settings.usage_reconcile_interval_seconds
 USAGE_RECONCILE_GATEWAY_MAX_PAGES = settings.usage_reconcile_gateway_max_pages
 BUDGET_POLICY_REFRESH_SECONDS = settings.budget_policy_refresh_seconds
 REQUEST_TIMEOUT_SECONDS = settings.request_timeout_seconds
+LLM_READ_TIMEOUT_SECONDS = settings.effective_llm_read_timeout_seconds
+LLM_SDK_MAX_RETRIES = settings.llm_sdk_max_retries
 SUBAGENT_TIMEOUT_SECONDS = settings.subagent_timeout_seconds
 TELEGRAM_BOT_TOKEN = settings.telegram_bot_token
 AGENT_DOMAIN = settings.agent_domain

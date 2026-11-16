@@ -90,15 +90,19 @@ def test_verify_wired_names_what_is_missing():
         slot._adapter = original
 
 
-async def test_close_adapters_ends_the_mcp_connections_a_process_opened(monkeypatch):
-    """The API and the agent worker call this where they stop, instead of importing the MCP module themselves."""
+async def test_close_adapters_ends_the_mcp_connections_and_the_qdrant_client_a_process_opened(monkeypatch):
+    """The API and the workers call this where they stop, instead of importing the adapters themselves."""
     closed = []
 
     async def close_all():
         closed.append("mcp")
 
+    async def close_qdrant():
+        closed.append("qdrant")
+
     monkeypatch.setattr(bootstrap, "close_all_connections", close_all)
+    monkeypatch.setattr(bootstrap, "close_qdrant_client", close_qdrant)
 
     await bootstrap.close_adapters()
 
-    assert closed == ["mcp"]
+    assert sorted(closed) == ["mcp", "qdrant"]
