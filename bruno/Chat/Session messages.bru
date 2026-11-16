@@ -10,6 +10,11 @@ get {
   auth: inherit
 }
 
+params:query {
+  limit: 50
+  ~before:
+}
+
 assert {
   res.status: eq 200
   res.body: isArray
@@ -17,4 +22,7 @@ assert {
 
 docs {
   The transcript of one thread. A thread that is not the caller's is a 404, the same as an unknown one.
+
+  `limit` returns only the last that many messages (1 to 500; leave it out for the whole transcript). Each message carries its `index`, its place in the whole
+  transcript: pass the smallest one of a page as `before` to read the page that precedes it. The web page reads the last 50 and offers "Load earlier messages".
 }

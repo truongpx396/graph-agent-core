@@ -191,6 +191,26 @@ class Settings(BillingSettings):
     semantic_cache_similarity_threshold: float = 0.95  # cosine; a query must
     # be nearly identical in meaning to reuse a cached answer, not just topically close
     semantic_cache_ttl_seconds: int = 3600
+    # Whether the answer cache is consulted and written at all (the two nodes stay in the graph either way, so the topology does not depend on it). It is only
+    # ever used for a conversation's FIRST question (graph/cache.py): the lookup is by meaning, and "yes" or "and for March?" means nothing on its own. Each
+    # lookup adds an embedding and a vector search to a first turn and each finished turn an embedding and a write, so turn it off when
+    # `agent_semantic_cache_total` shows hits are a small share of lookups (PRODUCTION_REVIEW.md R33).
+    semantic_cache_enabled: bool = True
+
+    # Whether any domain suggests follow-up questions after a cited answer (a manifest's `suggest_followups` is the per-domain switch; this is the
+    # operator's, for every domain at once, with no code change). `build_graph` reads it when the graph is built, once per process (R30).
+    followups_enabled: bool = True
+
+    # An earlier turn's tool result longer than this many characters reaches the chat model as a short note, in the copy it is SENT only: the stored
+    # conversation and its checkpoint keep the full text (`agent_node.without_stale_tool_results`). 0 turns it off. 2,000 characters is a few paragraphs.
+    # The provider's prompt cache sees the prefix change once, when a new turn starts; within a turn it is stable (PRODUCTION_REVIEW.md R31).
+    stale_tool_result_max_chars: int = Field(default=2000, ge=0)
+
+    # Output checks (graph/output_checks.py) that do NOT run when a turn was routed to the `medium` or `strong` tier (the router, pattern 68), as comma-
+    # separated codes. Many checks exist to correct a 3B or 7B local model, and a false positive costs another full model round. Empty by default: nothing
+    # changes until an operator has read `agent_output_check_fired_total{check, tier}` and chosen. `build_graph` refuses an unknown code, and `leaked_prompt`
+    # and `fabricated`, which protect the person and apply to every tier. The local tier is never affected (PRODUCTION_REVIEW.md R32).
+    output_checks_off_on_routed_tiers: str = ""
 
     # Cross-session memory retention (app/core/security.py, app/adapters/outbound/qdrant/memory.py)
     # — a memory older than this is invisible at RECALL time (Policy.lower),
@@ -659,6 +679,15 @@ class Settings(BillingSettings):
     # just changes how many files one submission may batch.
     max_upload_files_per_request: int = 5
 
+    # What one chat request may carry (`ChatRequest`, app/adapters/inbound/api/schemas.py). A body is parsed whole, copied into a Redis stream entry
+    # and then into the checkpoint, so one large request cost memory in four places; the front door's own ceiling (deploy/caddy/gateway.caddy) is the
+    # outer bound and these are the reason a person is told which field was too large. A message of 32,000 characters is about 8,000 tokens, well
+    # past a question; an image is a data URI, so 7,000,000 characters is about 5 MB of picture. The page attaches one image, so the default of 4 is
+    # above it (PRODUCTION_REVIEW.md R14).
+    chat_message_max_chars: int = Field(default=32000, ge=1)
+    chat_max_images: int = Field(default=4, ge=0)
+    chat_image_max_chars: int = Field(default=7_000_000, ge=1)
+
     # OpenSandbox MCP bridge (app/adapters/outbound/mcp/sandbox_tools.py, pattern 50) —
     # `--domain` passed to the `opensandbox-mcp` stdio bridge process
     # (mcp/client.py::load_remote_tools spawns it), i.e. the host:port
@@ -809,6 +838,10 @@ SKILLS_SEARCH_TOP_K = settings.skills_search_top_k
 APPDATA_DATABASE_URL = settings.appdata_database_url
 REDIS_URL = settings.redis_url
 SEMANTIC_CACHE_SIMILARITY_THRESHOLD = settings.semantic_cache_similarity_threshold
+SEMANTIC_CACHE_ENABLED = settings.semantic_cache_enabled
+FOLLOWUPS_ENABLED = settings.followups_enabled
+STALE_TOOL_RESULT_MAX_CHARS = settings.stale_tool_result_max_chars
+OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS = settings.output_checks_off_on_routed_tiers
 SEMANTIC_CACHE_TTL_SECONDS = settings.semantic_cache_ttl_seconds
 MEMORY_RETENTION_DAYS = settings.memory_retention_days
 MAX_COST_USD_PER_TURN = settings.max_cost_usd_per_turn
@@ -861,6 +894,9 @@ REDIS_MAX_CONNECTIONS = settings.redis_max_connections
 CORS_ALLOWED_ORIGINS = settings.cors_allowed_origins
 MAX_UPLOAD_SIZE_MB = settings.max_upload_size_mb
 MAX_UPLOAD_FILES_PER_REQUEST = settings.max_upload_files_per_request
+CHAT_MESSAGE_MAX_CHARS = settings.chat_message_max_chars
+CHAT_MAX_IMAGES = settings.chat_max_images
+CHAT_IMAGE_MAX_CHARS = settings.chat_image_max_chars
 OPENSANDBOX_MCP_DOMAIN = settings.opensandbox_mcp_domain
 OPENSANDBOX_API_KEY = settings.opensandbox_api_key
 MCP_TOOL_OUTPUT_MAX_CHARS = settings.mcp_tool_output_max_chars

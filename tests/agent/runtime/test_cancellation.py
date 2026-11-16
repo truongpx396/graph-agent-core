@@ -14,6 +14,7 @@ monkeypatched `init_graph_async`, bypassing the real durable checkpointer
 """
 import asyncio
 import uuid
+from itertools import pairwise
 
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -103,6 +104,82 @@ class TestIterateWithTimeoutCancelCheck:
         assert await _run() == ["a", "b"]
 
 
+class TestTheCancelCheckIsPolledOncePerInterval:
+    """The check is a Redis GET and a 500-token answer is 500 events: asking on every one was 500 round trips awaited one after another on the model's own
+    stream (PRODUCTION_REVIEW.md R08, step 1). A stop now takes effect within a quarter of a second, at an event boundary, as before."""
+
+    def _clock(self, monkeypatch):
+        """A clock this test moves by hand, installed for the wrapper only (patching `time.monotonic` itself would stop the event loop)."""
+        from types import SimpleNamespace
+
+        now = [0.0]
+        monkeypatch.setattr(stream_module, "time", SimpleNamespace(monotonic=lambda: now[0]))
+        return now
+
+    async def test_it_asks_once_per_interval_not_once_per_event(self, monkeypatch):
+        now, asked = self._clock(monkeypatch), []
+
+        async def events():
+            for i in range(20):
+                yield i
+                now[0] += 0.1  # an event every 100 ms: 2 seconds in all
+
+        async def cancel_check():
+            asked.append(now[0])
+            return False
+
+        assert [e async for e in stream_module._iterate_with_timeout(events(), 60, cancel_check=cancel_check)] == list(range(20))
+
+        assert 2 <= len(asked) <= 9, f"asked {len(asked)} times for 20 events"
+        assert all(later - earlier >= stream_module._CANCEL_POLL_INTERVAL_SECONDS for earlier, later in pairwise(asked))
+
+    async def test_it_always_asks_before_the_first_event(self, monkeypatch):
+        """`astream_events_resume`'s docstring relies on it: a stop that was already pressed is seen before anything runs."""
+        self._clock(monkeypatch)
+        order = []
+
+        async def events():
+            order.append("event")
+            yield 1
+
+        async def cancel_check():
+            order.append("check")
+            return False
+
+        [e async for e in stream_module._iterate_with_timeout(events(), 60, cancel_check=cancel_check)]
+
+        assert order[:2] == ["check", "event"]
+
+    async def test_a_stop_pressed_mid_stream_takes_effect_at_the_first_event_boundary_after_the_interval(self, monkeypatch):
+        now = self._clock(monkeypatch)
+        seen, raised = [], None
+
+        async def events():
+            for i in range(20):
+                yield i
+                now[0] += 0.1
+
+        async def cancel_check():
+            return now[0] >= 0.5  # pressed at 0.5 s
+
+        try:
+            async for event in stream_module._iterate_with_timeout(events(), 60, cancel_check=cancel_check):
+                seen.append(event)
+        except stream_module.TurnCancelledError as exc:
+            raised = exc
+
+        assert raised is not None
+        assert seen and seen[-1] * 0.1 < 0.5 + stream_module._CANCEL_POLL_INTERVAL_SECONDS + 0.2, "within about a quarter of a second of the press"
+
+    async def test_with_no_cancel_check_nothing_is_polled_and_nothing_changes(self, monkeypatch):
+        self._clock(monkeypatch)
+
+        async def events():
+            yield 1
+
+        assert [e async for e in stream_module._iterate_with_timeout(events(), 60)] == [1]
+
+
 def _fake_llm_multi_token_answer():
     return GenericFakeChatModel(
         messages=iter([AIMessage(content="a longer answer with several tokens in it")])
@@ -117,6 +194,9 @@ class TestAstreamEventsTurnCancellation:
     SSE event type — and never reach a normal "done"."""
 
     async def test_cancel_mid_stream_yields_a_cancelled_error_event_not_done(self, monkeypatch):
+        # This test is about what a cancellation DOES, not how often it is polled: with the default quarter-second interval the short fake answer
+        # would finish before a second check, so it asks on every event, as the wrapper used to.
+        monkeypatch.setattr(stream_module, "_CANCEL_POLL_INTERVAL_SECONDS", 0)
         graph = build_graph(GraphDeps(llm=_fake_llm_multi_token_answer()))
 
         async def fake_init_graph_async():

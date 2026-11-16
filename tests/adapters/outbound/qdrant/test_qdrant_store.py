@@ -382,3 +382,42 @@ async def test_close_client_with_nothing_open_is_a_no_op(monkeypatch):
     await qdrant_store.close_client()
 
     assert _CountingClient.built == []
+
+
+# --- Payload indexes (PRODUCTION_REVIEW.md R09) ----------------------------------------------------------------------------
+
+
+async def test_create_physical_requests_every_index_the_filters_use(monkeypatch):
+    """Every tenant search filters on `tenant` and `kind`, a memory search also on `owner` and a `created_at` range, a topic search on `topic`. Without a
+    payload index Qdrant evaluates the filter by reading payloads and its filtered search degrades as the collection grows."""
+    fake = FakeQdrant()
+    monkeypatch.setattr(qdrant_store, "get_client", lambda: fake)
+
+    await qdrant_store.create_physical("docs-abc", 3)
+
+    requested = {call[2]: call[3] for call in fake.calls if call[0] == "create_payload_index" and call[1] == "docs-abc"}
+    assert set(requested) == {"tenant", "kind", "owner", "topic", "source", "created_at"}
+    assert requested["tenant"].is_tenant is True, "the tenant index is marked as the tenant key, which also groups each tenant's data on disk"
+    assert [str(requested[f]) for f in ("kind", "owner", "topic", "source")] == ["keyword"] * 4
+    assert str(requested["created_at"]) == "datetime"
+
+
+async def test_the_indexes_are_created_after_the_collection_exists(monkeypatch):
+    fake = FakeQdrant()
+    monkeypatch.setattr(qdrant_store, "get_client", lambda: fake)
+
+    await qdrant_store.create_physical("docs-abc", 3)
+
+    kinds = [call[0] for call in fake.calls]
+    assert kinds.index("recreate_collection") < kinds.index("create_payload_index")
+
+
+async def test_ensure_payload_indexes_is_safe_to_repeat(monkeypatch):
+    fake = FakeQdrant()
+    fake.seed("docs-abc")
+    monkeypatch.setattr(qdrant_store, "get_client", lambda: fake)
+
+    await qdrant_store.ensure_payload_indexes("docs-abc")
+    await qdrant_store.ensure_payload_indexes("docs-abc")
+
+    assert set(fake.collections["docs-abc"]["indexes"]) == {"tenant", "kind", "owner", "topic", "source", "created_at"}

@@ -39,6 +39,11 @@ class FakeQdrant:
         self.calls.append(("recreate_collection", collection_name))
         self.collections[collection_name] = {"points": {}, "config": kwargs}
 
+    async def create_payload_index(self, collection_name, field_name, field_schema=None, **_):
+        """Records each index request (a real server treats a repeat as a no-op, so does this)."""
+        self.calls.append(("create_payload_index", collection_name, field_name, field_schema))
+        self.collections.setdefault(collection_name, {"points": {}, "config": {}}).setdefault("indexes", {})[field_name] = field_schema
+
     async def collection_exists(self, collection_name):
         return collection_name in self.collections
 

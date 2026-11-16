@@ -192,6 +192,16 @@ def mock_classification():
 
 
 @pytest.fixture(autouse=True)
+def fresh_embed_query_cache():
+    """`embed_query` remembers what it embedded for a few minutes (PRODUCTION_REVIEW.md R10): a vector one test cached must never answer another's call."""
+    from app.adapters.outbound.embeddings import embeddings as embeddings_module
+
+    embeddings_module.reset_embed_query_cache()
+    yield
+    embeddings_module.reset_embed_query_cache()
+
+
+@pytest.fixture(autouse=True)
 def mock_semantic_cache(monkeypatch):
     # Always a miss, and writes are a no-op — a live embedding/Redis call
     # per graph turn would defeat this suite's "no live services" guarantee
@@ -203,10 +213,10 @@ def mock_semantic_cache(monkeypatch):
     # plain sync lambda here would raise "NoneType can't be used in
     # 'await' expression" the instant any graph test actually reached
     # either node.
-    async def fake_cache_get(ctx, query):
+    async def fake_cache_get(ctx, query, domain=None):
         return None
 
-    async def fake_cache_set(ctx, query, answer, citations):
+    async def fake_cache_set(ctx, query, answer, citations, domain=None):
         return None
 
     monkeypatch.setattr(graph_build, "default_cache_get", fake_cache_get)

@@ -29,25 +29,52 @@ class _Index:
 
 
 class _JSON:
+    """`pipe.json().set(...)`: queued on the pipeline, applied when it executes."""
+
     def __init__(self, owner):
         self.owner = owner
 
-    async def set(self, key, path, value):
-        self.owner.keys.append(key)
+    def set(self, key, path, value):
+        self.owner.queued.append(("json.set", key, value))
+
+
+class _Pipeline:
+    def __init__(self, owner, transaction):
+        self.owner, self.transaction = owner, transaction
+
+    async def __aenter__(self):
+        self.owner.queued = []
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    def json(self):
+        return _JSON(self.owner)
+
+    def expire(self, key, seconds):
+        self.owner.queued.append(("expire", key, seconds))
+
+    async def execute(self):
+        self.owner.executions.append((self.transaction, [name for name, *_ in self.owner.queued]))
+        for name, key, value in self.owner.queued:
+            if name == "json.set":
+                self.owner.keys.append(key)
+                self.owner.documents.append(value)
+            else:
+                self.owner.expired.append(key)
 
 
 class _Client:
     def __init__(self):
         self.created, self.searched, self.keys, self.expired = [], [], [], []
+        self.documents, self.executions, self.queued = [], [], []
 
     def ft(self, name):
         return _Index(self, name)
 
-    def json(self):
-        return _JSON(self)
-
-    async def expire(self, key, seconds):
-        self.expired.append(key)
+    def pipeline(self, transaction=True):
+        return _Pipeline(self, transaction)
 
 
 @pytest.fixture
@@ -74,42 +101,65 @@ CTX = {"tenant": "acme", "principal": "alice", "claims": {}}
 
 
 async def test_the_index_and_key_prefix_carry_the_identity_and_the_dimension_comes_from_it(cache):
-    await semantic_cache.set(CTX, "q?", "a", [])
+    await semantic_cache.set(CTX, "q?", "a", [], domain="ecorp")
 
     h = TEST_EMBEDDING_IDENTITY.hash8()
     (created,) = cache.created
-    assert created["index"] == f"idx:semantic_cache:{h}"
-    assert f"cache:{h}:" in created["definition"]
+    assert created["index"] == f"idx:semantic_cache:v2:{h}"
+    assert f"cache:v2:{h}:" in created["definition"]
     assert "DIM" in created["args"] and created["args"][created["args"].index("DIM") + 1] == "3"  # TEST identity's dimension
-    assert cache.keys[0].startswith(f"cache:{h}:")
+    assert cache.keys[0].startswith(f"cache:v2:{h}:")
 
 
 async def test_the_index_is_created_once_per_identity(cache):
-    await semantic_cache.set(CTX, "q1", "a", [])
-    await semantic_cache.set(CTX, "q2", "a", [])
-    await semantic_cache.get(CTX, "q1")
+    await semantic_cache.set(CTX, "q1", "a", [], domain="ecorp")
+    await semantic_cache.set(CTX, "q2", "a", [], domain="ecorp")
+    await semantic_cache.get(CTX, "q1", domain="ecorp")
 
     assert len(cache.created) == 1
 
 
 async def test_a_new_identity_gets_a_new_index_and_prefix_and_never_reads_the_old_one(cache, monkeypatch):
-    await semantic_cache.get(CTX, "q")
+    await semantic_cache.get(CTX, "q", domain="ecorp")
     new = EmbeddingIdentity("embed", "test/another-model", 5, "", "", "")
     _use(monkeypatch, new)
-    await semantic_cache.set(CTX, "q", "a", [])
-    await semantic_cache.get(CTX, "q")
+    await semantic_cache.set(CTX, "q", "a", [], domain="ecorp")
+    await semantic_cache.get(CTX, "q", domain="ecorp")
 
-    old_index, new_index = f"idx:semantic_cache:{TEST_EMBEDDING_IDENTITY.hash8()}", f"idx:semantic_cache:{new.hash8()}"
+    old_index, new_index = f"idx:semantic_cache:v2:{TEST_EMBEDDING_IDENTITY.hash8()}", f"idx:semantic_cache:v2:{new.hash8()}"
     assert [c["index"] for c in cache.created] == [old_index, new_index]
     assert cache.created[1]["args"][cache.created[1]["args"].index("DIM") + 1] == "5"  # a different dimension is a different index, not a broken one
     assert cache.searched == [old_index, new_index]  # the lookup under the new identity searched only the new index
-    assert cache.keys[0].startswith(f"cache:{new.hash8()}:")
+    assert cache.keys[0].startswith(f"cache:v2:{new.hash8()}:")
 
 
 async def test_a_prefix_change_alone_is_a_new_namespace(cache, monkeypatch):
     plain = TEST_EMBEDDING_IDENTITY
     prefixed = EmbeddingIdentity(**{**plain.__dict__, "query_prefix": "search_query: "})
     _use(monkeypatch, prefixed)
-    await semantic_cache.set(CTX, "q", "a", [])
+    await semantic_cache.set(CTX, "q", "a", [], domain="ecorp")
 
     assert cache.created[0]["index"].endswith(prefixed.hash8()) and prefixed.hash8() != plain.hash8()
+
+
+async def test_the_entry_and_its_expiry_are_written_in_one_transaction(cache):
+    """A failure between a separate JSON.SET and EXPIRE left an entry that never expired, and a cached answer that never stops being served."""
+    await semantic_cache.set(CTX, "q?", "a", [], domain="support")
+
+    assert cache.executions == [(True, ["json.set", "expire"])]
+    assert cache.expired == cache.keys and len(cache.keys) == 1
+
+
+async def test_the_entry_records_the_domain_it_was_written_for(cache):
+    await semantic_cache.set(CTX, "q?", "a", [], domain="support")
+
+    assert cache.documents[0]["domain"] == "support"
+    assert {"tenant": "acme", "principal": "alice"}.items() <= cache.documents[0].items()
+
+
+async def test_the_schema_indexes_the_domain_as_a_tag_and_carries_a_version_so_an_old_index_is_never_reused(cache):
+    await semantic_cache.set(CTX, "q?", "a", [], domain="support")
+
+    (created,) = cache.created
+    assert "$.domain" in created["args"] and "domain" in created["args"]
+    assert created["index"].startswith("idx:semantic_cache:v2:")

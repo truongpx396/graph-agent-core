@@ -80,4 +80,9 @@ litellm_settings:
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
-  store_prompts_in_spend_logs: true
+  # OFF in production, unlike the development file. On, every message a person sends, every retrieved passage and memory placed in a prompt, and every
+  # answer is written to this gateway's Postgres, with no retention, readable with its admin credentials: a second copy of what the application goes to
+  # some length not to keep (it logs metadata only; constitution Principle V). The spend log keeps the metadata the dollar caps and the reconciliation
+  # read (model, tokens, cost, end user). To see bodies for a period, turn it on deliberately and set `maximum_spend_logs_retention_period` beside it
+  # (a string such as "7d"; checked in litellm 1.94.1's source, `proxy/_types.py`), then turn both back off. PRODUCTION_REVIEW.md R16.
+  store_prompts_in_spend_logs: false

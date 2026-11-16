@@ -991,13 +991,10 @@ class _ScriptedEventsGraph:
         return SimpleNamespace(next=(), tasks=(), values=values)
 
 
-def _chain_end(name, *, subagent=None, output=None):
-    return {
-        "event": "on_chain_end",
-        "name": name,
-        "metadata": {"subagent_name": subagent} if subagent else {},
-        "data": {"output": output or {"messages": [AIMessage(content="replacement text")]}},
-    }
+def _announce(event, *, subagent=None):
+    """What a node's `adispatch_custom_event("agent_stream", ...)` looks like on the stream (`graph/stream_events.py`, PRODUCTION_REVIEW.md R35 part A):
+    the runtime forwards the announcement and no longer knows which node made it."""
+    return {"event": "on_custom_event", "name": "agent_stream", "metadata": {"subagent_name": subagent} if subagent else {}, "data": event}
 
 
 async def _event_types(events):
@@ -1005,21 +1002,44 @@ async def _event_types(events):
     return [e["type"] async for e in stream_module._run_graph_stream(graph, {}, {}, None)]
 
 
-async def test_a_nested_subagents_chain_ends_never_reach_the_parents_stream():
-    """The nested graph shares the node names below with the parent's, and its events arrive on
-    the parent's stream: acting on them cleared the parent's answer and replaced it."""
-    for name in ("retry_output", "check_output", "retry_exhausted", "compact_history"):
-        assert await _event_types([_chain_end(name, subagent="researcher")]) == ["token", "done"]
+async def test_a_nested_subagents_announcements_never_reach_the_parents_stream():
+    """The nested graph has the same nodes as the parent's, and its announcements arrive on the parent's stream: acting on them cleared the parent's answer
+    and replaced it with the subagent's text."""
+    for event in ({"type": "retry"}, {"type": "token", "content": "subagent text"}, {"type": "compacted"}):
+        assert await _event_types([_announce(event, subagent="researcher")]) == ["token", "done"]
 
 
-async def test_the_same_chain_ends_still_act_when_they_are_the_parents_own():
-    """The control for the test above: it proves the guard is on `subagent_name`, not that these
-    branches stopped working."""
-    assert await _event_types([_chain_end("retry_output")]) == ["retry", "token", "done"]
-    assert await _event_types([_chain_end("check_output")]) == ["retry", "token", "done"]
-    assert await _event_types([_chain_end("retry_exhausted")]) == ["retry", "token", "done"]
-    assert await _event_types([_chain_end("compact_history")]) == ["compacted", "token", "done"]
+async def test_the_same_announcements_are_forwarded_when_they_are_the_parents_own():
+    """The control for the test above: the guard is on `subagent_name`, not a branch that stopped working."""
+    assert await _event_types([_announce({"type": "retry"})]) == ["retry", "token", "done"]
+    # a retry followed by its replacement text: that text IS the answer, so no synthetic token follows it
+    assert await _event_types([_announce({"type": "retry"}), _announce({"type": "token", "content": "replacement text"})]) == ["retry", "token", "done"]
+    assert await _event_types([_announce({"type": "compacted"})]) == ["compacted", "token", "done"]
 
+
+async def test_the_runtime_forwards_an_announcement_without_knowing_which_node_made_it():
+    """The point of R35 part A: the node's name is not in the event the runtime reads, so renaming a node cannot change what the client sees."""
+    event = _announce({"type": "retry"})
+    event["metadata"]["langgraph_node"] = "a_node_that_does_not_exist"
+
+    assert (await _event_types([event]))[0] == "retry"
+
+
+async def test_a_replacement_announced_after_a_retry_is_the_answer_the_trace_and_the_fallback_see():
+    """`final_answer` is what the trace records and what the no-token fallback reads: the replacement text must land in it."""
+    graph = _ScriptedEventsGraph([_announce({"type": "retry"}), _announce({"type": "token", "content": "corrected text"})], final_text="corrected text")
+    trace = _FakeTrace()
+
+    [e async for e in stream_module._run_graph_stream(graph, {}, {}, trace)]
+
+    assert any(update.get("output") == "corrected text" for update in trace.updates)
+
+
+async def test_other_custom_events_are_not_forwarded():
+    """A custom event of another name (a tool's, a library's) is not the client's business."""
+    other = {"event": "on_custom_event", "name": "something_else", "metadata": {}, "data": {"type": "retry"}}
+
+    assert await _event_types([other]) == ["token", "done"]
 
 
 # --- A model stream that fails part-way and is retried (PRODUCTION_REVIEW.md R01, pattern 7) -------------
@@ -1132,3 +1152,128 @@ async def test_a_subagents_or_another_nodes_model_calls_never_count_as_the_answe
     types, _ = await _types_and_text(events)
 
     assert "retry" not in types
+
+
+# --- Both refusals that used to carry no `code` now do (PRODUCTION_REVIEW.md R24) -------------------------------------
+
+
+async def test_a_resume_with_nothing_paused_is_refused_with_a_checkpoint_lost_code(monkeypatch):
+    """It sent `{"type": "error", "content": "checkpoint_lost: ..."}` outside the envelope, so a client could not switch on the reason."""
+    graph = _ScriptedEventsGraph([])  # its state has no pending node: nothing paused
+
+    async def init_graph():
+        return graph
+
+    monkeypatch.setattr(agent_module, "init_graph_async", init_graph)
+
+    events = [e async for e in stream_module.astream_events_resume("t-nothing", approved=True, ctx=TEST_CTX)]
+
+    assert [e["type"] for e in events] == ["error", "done"]
+    assert events[0]["code"] == "checkpoint_lost"
+    assert events[0]["message"] == events[0]["content"].strip() and "no paused run" in events[0]["message"]
+
+
+async def test_a_resume_into_a_build_with_another_state_schema_is_refused_with_a_checkpoint_incompatible_code(monkeypatch):
+    class _Paused(_ScriptedEventsGraph):
+        async def aget_state(self, cfg):
+            task = SimpleNamespace(interrupts=("approval",))
+            return SimpleNamespace(next=("human_approval",), tasks=(task,), values={"state_schema_version": -1})
+
+    async def init_graph():
+        return _Paused([])
+
+    monkeypatch.setattr(agent_module, "init_graph_async", init_graph)
+
+    events = [e async for e in stream_module.astream_events_resume("t-old", approved=True, ctx=TEST_CTX)]
+
+    assert events[0]["code"] == "checkpoint_incompatible"
+
+
+# --- Closing the stream early reaches the trace from EVERY entry point (PRODUCTION_REVIEW.md R35, part B) ----------------
+#
+# The three entry points share `_run_turn`, an extra generator between each of them and `_run_graph_stream`. A bare `async for` over it would not close it
+# when the outer generator is closed, and the trace's cleanup would run late: the first draft of that extraction did exactly that, and the tests above (which
+# only close `astream_events_turn`) caught it. These close the other two.
+
+
+class _PausedGraph(_ScriptedEventsGraph):
+    """Paused at an approval gate, or mid-flight, whichever the entry point under test needs to see."""
+
+    def __init__(self, events, *, paused):
+        super().__init__(events)
+        self._paused = paused
+
+    async def aget_state(self, cfg):
+        from app.agent.graph.state import STATE_SCHEMA_VERSION
+
+        values = {"messages": [AIMessage(content="so far")], "iterations": 1, "state_schema_version": STATE_SCHEMA_VERSION}
+        tasks = (SimpleNamespace(interrupts=("approve?",)),) if self._paused else ()
+        return SimpleNamespace(next=("human_approval",) if self._paused else ("agent",), tasks=tasks, values=values)
+
+
+def _many_tokens():
+    return [
+        {"event": "on_chat_model_stream", "name": "ChatOpenAI", "metadata": {"langgraph_node": "agent"}, "data": {"chunk": AIMessageChunk(content=f"word{i} ")}}
+        for i in range(40)
+    ]
+
+
+@pytest.mark.parametrize("entry", ["resume", "continue"])
+async def test_closing_a_resumed_or_continued_stream_early_still_finishes_the_trace_and_counts_it_abandoned(monkeypatch, entry):
+    fake_trace = _FakeTrace()
+    monkeypatch.setattr(stream_module, "_open_trace", lambda *a, **k: (fake_trace, []))
+
+    async def init_graph():
+        return _PausedGraph(_many_tokens(), paused=entry == "resume")
+
+    monkeypatch.setattr(agent_module, "init_graph_async", init_graph)
+    abandoned = metric_value(metrics.agent_requests_total, outcome="abandoned")
+    stream = (
+        stream_module.astream_events_resume("t-close", approved=True, ctx=TEST_CTX)
+        if entry == "resume"
+        else stream_module.astream_events_continue_turn("t-close", TEST_CTX)
+    )
+
+    async for event in stream:
+        if event["type"] == "token":
+            break
+    await stream.aclose()
+
+    assert len(fake_trace.updates) == 1, "the trace was left open: its cleanup ran late, or never"
+    assert fake_trace.updates[0]["level"] == "WARNING"
+    assert "[abandoned: stream closed before the turn finished]" in fake_trace.updates[0]["output"]
+    assert metric_value(metrics.agent_requests_total, outcome="abandoned") == abandoned + 1
+
+
+@pytest.mark.parametrize("entry", ["turn", "resume", "continue"])
+async def test_the_budget_hold_is_released_when_the_stream_is_closed_early_from_every_entry_point(monkeypatch, entry):
+    """`_BudgetHold.__aexit__` runs on a close, not only on a normal end."""
+    monkeypatch.setattr(stream_module, "_open_trace", lambda *a, **k: (_FakeTrace(), []))
+    held, released = [], []
+
+    async def reserve(ctx):
+        held.append(ctx)
+        return "hold-1"
+
+    async def release(ctx, hold):
+        released.append(hold)
+
+    async def init_graph():
+        return _PausedGraph(_many_tokens(), paused=entry == "resume")
+
+    monkeypatch.setattr(agent_module, "init_graph_async", init_graph)
+    monkeypatch.setattr(agent_module, "reserve_turn_budget", reserve)
+    monkeypatch.setattr(agent_module, "release_turn_budget", release)
+    stream = {
+        "turn": lambda: stream_module.astream_events_turn("hi", "t-hold", TEST_CTX),
+        "resume": lambda: stream_module.astream_events_resume("t-hold", approved=True, ctx=TEST_CTX),
+        "continue": lambda: stream_module.astream_events_continue_turn("t-hold", TEST_CTX),
+    }[entry]()
+
+    async for event in stream:
+        if event["type"] == "token":
+            break
+    await stream.aclose()
+    await asyncio.sleep(0)  # the release is detached (fire-and-forget): let it run
+
+    assert held == [TEST_CTX] and released == ["hold-1"]

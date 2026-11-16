@@ -24,7 +24,7 @@ from app.agent.graph.loop_guards import (
     mandatory_gate_reason,
 )
 from app.agent.graph.messages import GATEWAY_REFUSAL_KEY
-from app.agent.graph.output_checks import CheckContext, run_checks
+from app.agent.graph.output_checks import ROUTED_TIERS, CheckContext, run_checks
 from app.agent.graph.output_guardrails import (
     strip_closing_offer,
     strip_fabricated_reference_footer,
@@ -140,6 +140,7 @@ def check_output(
     *,
     enforce_citations: bool = True,
     skill_required_tools: tuple[str, ...] = (),
+    skip_on_routed_tiers: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Judge the final answer: strip a fabricated reference footer, cut a closing offer off a complete answer,
     repair a missing citation marker, then run every check in `graph/output_checks.py`'s registry. Returns
@@ -154,7 +155,11 @@ def check_output(
     name its own sources, meaningless to the parent), so judging or "repairing" by them contradicted its
     prompt and put a stray `[1]` in the text handed back. Every other check still applies.
     `skill_required_tools` is the subset of `SKILL_REQUIRED_TOOL_MARKERS` this domain has.
+    `skip_on_routed_tiers` (`OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS`, validated at build) are checks that do not run when the turn was routed to the `medium`
+    or `strong` tier: they exist to correct small local models, and a false positive costs a full retry round. The `local` tier is unchanged, and every
+    finding is counted by tier (`agent_output_check_fired_total`) so the list can be chosen from numbers.
     """
+    tier = state.get("model_route") or "local"
     last = state["messages"][-1]
     content = getattr(last, "content", "") or ""
     citations = state.get("citations") or []
@@ -214,8 +219,11 @@ def check_output(
             system_prompt=system_prompt,
             enforce_citations=enforce_citations,
             skill_required_tools=skill_required_tools,
-        )
+        ),
+        skip=skip_on_routed_tiers if tier in ROUTED_TIERS else frozenset(),
     )
+    for code in findings:
+        metrics.agent_output_check_fired_total.labels(check=code, tier=tier).inc()
     reason = next(iter(findings), None)
     prior_reason = state.get("last_retry_reason")
     if reason is None:

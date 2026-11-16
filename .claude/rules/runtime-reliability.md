@@ -47,7 +47,7 @@ session; `GRAPH_PATTERNS.md` has the full story under the pattern number given.
 
 ## Streaming turns (`runtime/stream.py`)
 
-- A loop over `astream_events_*` or `_run_graph_stream` that can leave early (an exception, a `return`, a `break`) uses `contextlib.aclosing`. A bare `async for` does not close the generator when it is left, so the turn's own cleanup (the trace, the abandoned-turn metrics, the budget hold) runs a loop turn late, after the failure was handled. A close mid-turn is `GeneratorExit` in `_run_graph_stream` and is recorded as the `abandoned` outcome (pattern 36).
+- A loop over `astream_events_*` or `_run_graph_stream` that can leave early (an exception, a `return`, a `break`) uses `contextlib.aclosing`. A bare `async for` does not close the generator when it is left, so the turn's own cleanup (the trace, the abandoned-turn metrics, the budget hold) runs a loop turn late, after the failure was handled. A close mid-turn is `GeneratorExit` in `_run_graph_stream` and is recorded as the `abandoned` outcome (pattern 36). The three entry points share `_run_turn` and `_BudgetHold` (the hold is released on every exit): that puts one more generator between an entry point and `_run_graph_stream`, so **each entry point iterates `_run_turn` under `aclosing` too**, which the first draft of the extraction forgot and the early-close tests caught. `_run_turn` calls its input builder INSIDE the trace, so a failure while building a turn's input still finishes the trace as an error.
 
 ## Queue and workers (`outbound/redis/`, `inbound/workers/`)
 

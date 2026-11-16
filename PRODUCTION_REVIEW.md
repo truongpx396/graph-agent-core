@@ -132,34 +132,34 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R05 | Request timeout, lock lifetime and reclaim idle are related only by comment | P0 | M | read from code | | done |
 | R06 | The chat client has no HTTP timeout; three layers each retry | P0 | S | verified in the installed source | | done |
 | R07 | A Redis error in the worker's read loop ends the process | P0 | S | read from code | | done |
-| R08 | Three Redis round trips for every token | P1 | S, then M | read from code | | open |
-| R09 | No payload index on the fields every vector search filters by | P1 | S | read from code | R03 | open |
-| R10 | One HTTP client per ML-service call; the same question embedded up to four times a turn | P1 | M | read from code | | open |
+| R08 | Three Redis round trips for every token | P1 | S, then M | read from code | | done (step 1; step 2 needs a load-test measurement first) |
+| R09 | No payload index on the fields every vector search filters by | P1 | S | read from code | R03 | done |
+| R10 | One HTTP client per ML-service call; the same question embedded up to four times a turn | P1 | M | read from code | | done |
 | R11 | Checkpoints are kept forever; no way to delete a conversation | P1 | M | read from code | | open |
 | R12 | An approval approves whatever is pending, not what was shown; decisions are not recorded | P1 | L | read from code | | open |
 | R13 | A dropped connection loses the rest of the answer; no keepalive | P1 | M | read from code | | open |
-| R14 | No size limit on a message, a conversation id or attached images | P1 | S | read from code | | open |
+| R14 | No size limit on a message, a conversation id or attached images | P1 | S | read from code | | done |
 | R15 | Production Redis: one instance for queue and cache, no persistence policy, floating image tags | P1 | M | read from code | R04 | open |
-| R16 | The production gateway stores every prompt and answer | P1 | S | read from code | | open |
-| R17 | No queue depth, queue wait or first-token metric; no traces in production | P1 | M, then L | read from code | | open |
+| R16 | The production gateway stores every prompt and answer | P1 | S | read from code | | done |
+| R17 | No queue depth, queue wait or first-token metric; no traces in production | P1 | M, then L | read from code | | done (part 1; part 2, traces, needs a spec) |
 | R18 | A re-uploaded document leaves its old chunks; no way to delete a document | P1 | M | read from code | R09 | open |
 | R19 | The dependency ladder: Langfuse 2, LangChain 0.3, LangGraph 0.2 | P1 | L | from the field | R17 | open |
 | R20 | Web fetches: rebinding window, whole body read before the size check, crawler egress | P1 | M | read from code | | open |
-| R21 | Five statements that are no longer true | P1 | S | read from code | | open |
-| R22 | A hung worker is never restarted | P2 | S | read from code | | open |
-| R23 | The answer cache ignores the domain; its expiry is set in a second call | P2 | S | read from code | | open |
-| R24 | Two error events carry no `code` | P2 | S | read from code | | open |
+| R21 | Five statements that are no longer true | P1 | S | read from code | | done (four corrected; the `scope_filter` docstring became true when R09 added its integration test) |
+| R22 | A hung worker is never restarted | P2 | S | read from code | | done |
+| R23 | The answer cache ignores the domain; its expiry is set in a second call | P2 | S | read from code | | done |
+| R24 | Two error events carry no `code` | P2 | S | read from code | | done |
 | R25 | A pool hands out a connection that died while idle | P2 | S | read from code | | open |
 | R26 | Backups are a paragraph, not a job; no restore drill | P2 | M | read from code | | open |
-| R27 | A transcript is read whole | P2 | S | read from code | | open |
+| R27 | A transcript is read whole | P2 | S | read from code | | done |
 | R28 | Nothing learns from production answers | P2 | M | from the field | R17 | open |
-| R29 | Retrieval runs on every turn, after the router instead of beside it | P1 | M | read from code; reproduced (parallel join) | R17 | open |
-| R30 | A second model call for follow-ups holds back `done` | P1 | S | read from code | | open |
-| R31 | Old tool results are re-sent to the model on every later call | P1 | S | read from code | | open |
-| R32 | Output checks built for small models also run on strong ones | P2 | M | read from code | R17 | open |
-| R33 | The answer cache can answer a follow-up from another conversation | P1 | S | read from code | | open |
+| R29 | Retrieval runs on every turn, after the router instead of beside it | P1 | M | read from code; reproduced (parallel join) | R17 | done (the parallel step and the `prefetch` switch; no domain is switched, see pattern 20) |
+| R30 | A second model call for follow-ups holds back `done` | P1 | S | read from code | | done |
+| R31 | Old tool results are re-sent to the model on every later call | P1 | S | read from code | | done |
+| R32 | Output checks built for small models also run on strong ones | P2 | M | read from code | R17 | done (the mechanism; which codes to list is the owner's, from the numbers) |
+| R33 | The answer cache can answer a follow-up from another conversation | P1 | S | read from code | | done |
 | R34 | Every change to the history stores the whole history again | P2 | M | reproduced | R19 | open |
-| R35 | Code structure: node names in the runtime, repeated entry points, patch-shaped modules | P2 | S to L | read from code; reproduced (custom events) | | open |
+| R35 | Code structure: node names in the runtime, repeated entry points, patch-shaped modules | P2 | S to L | read from code; reproduced (custom events) | | done (A, B and C; D and E are gradual and optional, not done) |
 
 Suggested order: R01, R02, R03, R06, R07 (five small, independent fixes), then R04 and R05 (the queue), then R16 and
 R21 (two small ones), then R17 part 1 (the measurements), then R33 and R30 and R31 (small, and each cuts work from every

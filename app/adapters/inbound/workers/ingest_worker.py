@@ -48,9 +48,11 @@ from app.adapters.inbound.workers.streams import (
     RECLAIM_ATTEMPTS_FIELD,
     ack_and_delete,
     claim_free_slots,
+    observe_queue_wait,
     pause_after_failed_read,
     publish_dead_letter,
     reclaim_stale_entries,
+    record_queue_depth,
     release_consumer,
     release_slots,
     republish_job,
@@ -71,6 +73,7 @@ from app.platform.logging_config import bind_request_id, configure_logging
 from app.platform.profiling import start_profiling
 from app.platform.redis_client import UNAVAILABLE_ERRORS, StreamReadResponse, get_client
 from app.platform.telemetry import configure_telemetry
+from app.platform.worker_heartbeat import beat
 from app.ports.outbound.jobs import INGEST_CONSUMER_GROUP, INGEST_REQUESTS_STREAM
 from app.ports.outbound.storage import object_store
 
@@ -112,6 +115,7 @@ async def process_job(client: redis.Redis, entry_id: str, fields: dict[str, Any]
     the caller decide whether to re-upload is the more useful behavior."""
     payload = json.loads(fields["payload"])
     job_id = payload["job_id"]
+    observe_queue_wait("ingest", payload)  # how long this job waited for a worker (R17)
     with bind_request_id(job_id):
         try:
             await publish_result(client, job_id, {"type": "started"})
@@ -247,6 +251,7 @@ async def _reclaim_loop(client: redis.Redis, stop_event: asyncio.Event) -> None:
     than ending the loop."""
     min_idle_ms = INGEST_WORKER_RECLAIM_IDLE_SECONDS * 1000
     while not stop_event.is_set():
+        beat("ingest", "reclaim")  # proof of life for the container's health check (app/platform/worker_heartbeat.py)
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=WORKER_RECLAIM_INTERVAL_SECONDS)
             return  # stop_event was set during the wait — shutting down
@@ -263,6 +268,7 @@ async def _reclaim_loop(client: redis.Redis, stop_event: asyncio.Event) -> None:
             for entry_id, fields in entries:
                 await _handle_reclaimed_job(client, entry_id, fields)
             await trim_stale_entries(client, INGEST_REQUESTS_STREAM, max_age_seconds=REQUESTS_STREAM_MAX_AGE_SECONDS)
+            await record_queue_depth(client, INGEST_REQUESTS_STREAM, INGEST_CONSUMER_GROUP, "ingest")
         except Exception as exc:  # noqa: BLE001 - one bad pass must not end reclaim for this process's whole life
             logger.warning("ingest_worker_reclaim_pass_failed", extra={"error_class": type(exc).__name__})
 
@@ -313,7 +319,10 @@ async def run() -> None:
 
     read_backoff = READ_BACKOFF_START_SECONDS
     while not stop_event.is_set():
-        free = await claim_free_slots(semaphore, stop_event, limit=_MAX_CONCURRENCY, wait_seconds=_BLOCK_MS / 1000)
+        beat("ingest", "read")
+        free = await claim_free_slots(
+            semaphore, stop_event, limit=_MAX_CONCURRENCY, wait_seconds=_BLOCK_MS / 1000, on_wait=lambda: beat("ingest", "read")
+        )
         if not free:
             continue  # told to stop while every slot was busy
         try:

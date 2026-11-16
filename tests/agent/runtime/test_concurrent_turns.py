@@ -33,6 +33,7 @@ filtering, HITL routing and delegation, never embedding QUALITY, so a determinis
 more correct, not just CI-safe.
 """
 import asyncio
+import functools
 import hashlib
 import itertools
 import time
@@ -225,8 +226,9 @@ def _install_fake_graph(monkeypatch, llm, *, search_docs=_no_op_search) -> None:
             GraphDeps(
                 llm=llm,
                 search_docs=search_docs,
-                cache_get=semantic_cache.get,
-                cache_set=semantic_cache.set,
+                # The cache is scoped to the domain (R23), which `build_graph` binds for its own default; an injected one is used as given.
+                cache_get=functools.partial(semantic_cache.get, domain=manifest.name),
+                cache_set=functools.partial(semantic_cache.set, domain=manifest.name),
             ),
             checkpointer=checkpointer,
         ),

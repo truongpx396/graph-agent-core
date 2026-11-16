@@ -7,7 +7,8 @@ stages that graph includes:
   `build_graph` with that profile.
 
 Topology: `validate_input -> moderate_input -> [check_semantic_cache -> (miss) [compact_history ->]]
-[route_model ->] retrieve_context -> agent <-> tools`, then `check_output`, which retries, gives up, or ends
+[route_model || retrieve_context] -> agent <-> tools` (the router and retrieval are one parallel step, `agent` waits for both, and
+a domain whose manifest says `prefetch="never"` has no `retrieve_context`), then `check_output`, which retries, gives up, or ends
 (through `[suggest_followups] || [write_semantic_cache]`, in parallel). Moderation precedes anything that
 spends: a refused or cache-hit turn pays for no compaction (pattern 25) and asks no model router (pattern 68).
 GRAPH_PATTERNS.md "Graph Flow" draws it.
@@ -58,6 +59,7 @@ from app.agent.graph.followups import make_suggest_followups_node
 from app.agent.graph.hitl import make_human_approval_node, route_after_approval
 from app.agent.graph.links import cannot_open_links
 from app.agent.graph.model_route import make_route_model_node
+from app.agent.graph.output_checks import parse_checks_off_on_routed_tiers
 from app.agent.graph.retrieval import make_retrieve_context_node
 from app.agent.graph.retry import (
     make_no_answer_fallback_node,
@@ -73,10 +75,22 @@ from app.agent.graph.state import (
     MAX_TOKENS_PER_TURN,
     State,
 )
+from app.agent.graph.stream_events import (
+    announcing,
+    rejected_the_answer,
+    replaced_the_answer,
+    trimmed_the_history,
+)
 from app.agent.graph.tool_guards import tool_batch_guard
 from app.agent.graph.utils import NodeFn, friendly_tool_error, instrumented, make_llm
 from app.agent.tools import builtin
-from app.core.config import CHAT_MODEL, MAX_COST_USD_PER_TURN
+from app.core.config import (
+    CHAT_MODEL,
+    FOLLOWUPS_ENABLED,
+    MAX_COST_USD_PER_TURN,
+    OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS,
+    SEMANTIC_CACHE_ENABLED,
+)
 from app.core.security import SecurityCtx
 from app.ports.outbound.retrieval import answer_cache
 
@@ -84,12 +98,12 @@ if TYPE_CHECKING:
     from app.ports.outbound.domains import AgentManifest, DomainPlugin
 
 
-async def default_cache_get(ctx: SecurityCtx | None, query: str) -> tuple[str, list[dict[str, Any]]] | None:
-    return await answer_cache.get().get(ctx, query)
+async def default_cache_get(ctx: SecurityCtx | None, query: str, *, domain: str) -> tuple[str, list[dict[str, Any]]] | None:
+    return await answer_cache.get().get(ctx, query, domain=domain)
 
 
-async def default_cache_set(ctx: SecurityCtx | None, query: str, answer: str, citations: list[dict[str, Any]]) -> None:
-    await answer_cache.get().set(ctx, query, answer, citations)
+async def default_cache_set(ctx: SecurityCtx | None, query: str, answer: str, citations: list[dict[str, Any]], *, domain: str) -> None:
+    await answer_cache.get().set(ctx, query, answer, citations, domain=domain)
 
 
 async def default_search(query: str, ctx: SecurityCtx | None) -> tuple[str, list[dict[str, Any]]]:
@@ -260,6 +274,8 @@ def build_graph(
         system_prompt=manifest.system_prompt,
         enforce_citations=profile.enforce_citations,
         skill_required_tools=skill_required_tools,
+        # Validated here, at build, so a typo or a protected check stops the process at start-up instead of leaving a check running that the operator thinks is off.
+        skip_on_routed_tiers=parse_checks_off_on_routed_tiers(OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS),
     )
     domain_tool_batch_guard = functools.partial(tool_batch_guard, valid_tool_names=valid_tool_names)
 
@@ -298,7 +314,9 @@ def build_graph(
     add("reject_context", reject_context)
     add("moderate_input", moderate_input)
     add("reject_moderation", reject_moderation)
-    add("retrieve_context", retrieve_context)
+    prefetches = manifest.prefetch == "always"  # "never": the node is not in the graph at all (R29)
+    if prefetches:
+        add("retrieve_context", retrieve_context)
     # Reliability policy: retry a transient LLM-endpoint failure a few times before giving up —
     # see AGENT_RETRY_POLICY. Nothing else here gets one: `tools` recovers via handle_tool_errors
     # above, and every other node is a pure function of state where a retry would just repeat the
@@ -307,9 +325,10 @@ def build_graph(
     add("tools", run_tools)
     add("human_approval", make_human_approval_node(deps.interrupt or interrupt))
     add("tool_batch_guard", domain_tool_batch_guard)
-    add("check_output", domain_check_output)
-    add("retry_output", retry_output)
-    add("retry_exhausted", make_retry_exhausted_node(emit_message=emit_no_answer_message))
+    # These four announce what the client should see (`stream_events.py`) instead of the runtime recognising them by name.
+    add("check_output", announcing(domain_check_output, replaced_the_answer))
+    add("retry_output", announcing(retry_output, rejected_the_answer))
+    add("retry_exhausted", announcing(make_retry_exhausted_node(emit_message=emit_no_answer_message), replaced_the_answer))
     add(
         "no_answer",
         make_no_answer_fallback_node(
@@ -323,34 +342,52 @@ def build_graph(
     if profile.include_cache:
         # Read as bare module globals, resolved when build_graph runs: tests/conftest.py's autouse
         # fixtures replace default_cache_get/default_cache_set on THIS module.
-        add("check_semantic_cache", make_check_semantic_cache_node(deps.cache_get or default_cache_get))
+        # The default cache is bound to THIS graph's domain (`manifest.name`) here, in the one place that knows it: `app/agent/runtime/core.py` knows it too,
+        # but imports this module. A test's injected `cache_get`/`cache_set` is used as given.
+        # SEMANTIC_CACHE_ENABLED false makes both nodes return at once; they stay in the graph so the topology does not depend on a setting.
+        add(
+            "check_semantic_cache",
+            make_check_semantic_cache_node(deps.cache_get or functools.partial(default_cache_get, domain=manifest.name), enabled=SEMANTIC_CACHE_ENABLED),
+        )
         add(
             "write_semantic_cache",
-            make_write_semantic_cache_node(deps.cache_set or default_cache_set, tool_capabilities),
+            make_write_semantic_cache_node(
+                deps.cache_set or functools.partial(default_cache_set, domain=manifest.name), tool_capabilities, enabled=SEMANTIC_CACHE_ENABLED
+            ),
         )
     if profile.include_compaction:
         # Reuses the SAME llm client as `agent` (a summarization call doesn't need tools bound; a
         # tool-bound client asked a plain prompt just answers it).
         add(
             "compact_history",
-            make_compact_history_node(
-                llm_client,
-                ceiling=history_token_ceiling if history_token_ceiling is not None else HISTORY_TOKEN_CEILING,
-                floor=history_token_floor if history_token_floor is not None else HISTORY_TOKEN_FLOOR,
-                model_alias=model_alias,
+            announcing(
+                make_compact_history_node(
+                    llm_client,
+                    ceiling=history_token_ceiling if history_token_ceiling is not None else HISTORY_TOKEN_CEILING,
+                    floor=history_token_floor if history_token_floor is not None else HISTORY_TOKEN_FLOOR,
+                    model_alias=model_alias,
+                ),
+                trimmed_the_history,
             ),
         )
         add("context_window_exceeded", context_window_exceeded)
-    if profile.include_followups:
+    # The profile says whether this KIND of graph has the step; the manifest and the setting say whether this domain, in this deployment, wants it.
+    suggests_followups = profile.include_followups and manifest.suggest_followups and FOLLOWUPS_ENABLED
+    if suggests_followups:
         # Same: a tool-bound client asked a plain question just answers it.
         add("suggest_followups", make_suggest_followups_node(llm_client, model_alias=model_alias))
     if profile.include_router:
         add("route_model", make_route_model_node())
 
+    # The stage before `agent` is the model router and retrieval, side by side: neither reads what the other writes (`route_model` reads the person's message
+    # and writes `model_route`; `retrieve_context` writes `context`, `citations` and `context_anchor_index`), so they are one superstep and `agent` waits for
+    # both, where the router's latency (up to ROUTER_TIMEOUT_SECONDS) used to be added to every routed turn before retrieval began. Either may be absent
+    # (no router in a subagent's graph; no pre-fetch for a domain that chose "never"), and with both absent a turn goes straight to `agent`.
+    before_agent = [name for name, present in (("route_model", profile.include_router), ("retrieve_context", prefetches)) if present]
+    retrieval_stage: str | list[str] = before_agent if len(before_agent) > 1 else (before_agent[0] if before_agent else "agent")
     # Where each stage hands off when the optional ones after it are absent.
-    before_retrieval = "route_model" if profile.include_router else "retrieve_context"
-    after_cache_miss = "compact_history" if profile.include_compaction else before_retrieval
-    after_moderation = "check_semantic_cache" if profile.include_cache else after_cache_miss
+    after_cache_miss: str | list[str] = "compact_history" if profile.include_compaction else retrieval_stage
+    after_moderation: str | list[str] = "check_semantic_cache" if profile.include_cache else after_cache_miss
     # What runs once an answer stands. Neither step needs the other (the cache write reads the
     # answer and its citations; the follow-ups only add `followups`), so they are one parallel
     # superstep: `done` no longer waits for the follow-up LLM call and THEN the cache write's
@@ -358,7 +395,7 @@ def build_graph(
     finish_steps = [
         name
         for name, present in (
-            ("suggest_followups", profile.include_followups),
+            ("suggest_followups", suggests_followups),
             ("write_semantic_cache", profile.include_cache),
         )
         if present
@@ -375,30 +412,33 @@ def build_graph(
     builder.add_edge("reject_input", END)
     builder.add_edge("reject_context", END)
 
-    builder.add_conditional_edges(
-        "moderate_input",
-        route_after_moderation,
-        {"reject_moderation": "reject_moderation", "check_semantic_cache": after_moderation},
-    )
+    def then(router: Callable[[State], str], targets: dict[str, str | list[str]]) -> Callable[[State], Hashable | list[Hashable]]:
+        """A conditional edge whose answer may be a PAIR of nodes. LangGraph's path map takes a node name for each key and cannot take a list, so this
+        returns the target itself (a name, or the router and retrieval together); `identity` below is the map of every name it can return."""
+
+        def route(state: State) -> Hashable | list[Hashable]:
+            target = targets[router(state)]
+            return [*target] if isinstance(target, list) else target
+
+        return route
+
+    def identity(*targets: str | list[str]) -> dict[Hashable, str]:
+        return {name: name for target in targets for name in ([target] if isinstance(target, str) else target)}
+
+    moderation_targets: dict[str, str | list[str]] = {"reject_moderation": "reject_moderation", "check_semantic_cache": after_moderation}
+    builder.add_conditional_edges("moderate_input", then(route_after_moderation, moderation_targets), identity(*moderation_targets.values()))
     builder.add_edge("reject_moderation", END)
 
     if profile.include_cache:
-        builder.add_conditional_edges(
-            "check_semantic_cache",
-            route_after_cache,
-            {"check_output": "check_output", "compact_history": after_cache_miss},
-        )
+        cache_targets: dict[str, str | list[str]] = {"check_output": "check_output", "compact_history": after_cache_miss}
+        builder.add_conditional_edges("check_semantic_cache", then(route_after_cache, cache_targets), identity(*cache_targets.values()))
     if profile.include_compaction:
-        builder.add_conditional_edges(
-            "compact_history",
-            route_after_compaction,
-            {"retrieve_context": before_retrieval, "context_window_exceeded": "context_window_exceeded"},
-        )
+        compaction_targets: dict[str, str | list[str]] = {"retrieve_context": retrieval_stage, "context_window_exceeded": "context_window_exceeded"}
+        builder.add_conditional_edges("compact_history", then(route_after_compaction, compaction_targets), identity(*compaction_targets.values()))
         builder.add_edge("context_window_exceeded", END)
-    if profile.include_router:
-        builder.add_edge("route_model", "retrieve_context")
-
-    builder.add_edge("retrieve_context", "agent")
+    # `agent` waits for every node of the stage (a barrier: checked on the pinned LangGraph, which waits for ALL the listed nodes).
+    if before_agent:
+        builder.add_edge(before_agent if len(before_agent) > 1 else before_agent[0], "agent")
     builder.add_conditional_edges("agent", domain_should_continue)
     builder.add_conditional_edges("human_approval", route_after_approval)
     builder.add_edge("tools", "agent")

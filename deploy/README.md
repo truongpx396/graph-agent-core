@@ -340,6 +340,26 @@ snapshot. The observability droplet is never backed up — it holds metrics/
 logs with their own bounded retention (Loki 7d, Prometheus 15d), not data
 worth restoring.
 
+**Vector payload indexes (once per existing deployment)**: every search filters by `tenant`, `kind`, `owner`, `topic` and `created_at`, and a collection
+built before the payload indexes existed has none, so its filtered search slows as it grows. `make ingest` and `make reembed` build indexed collections;
+for the one you already have, run `make qdrant-indexes` once (`ssh` in, then `dc run --rm api python -m scripts.tools.qdrant_indexes`, or from a checkout
+that reaches Qdrant). It is online, safe to repeat, and reads and writes no point.
+
+**A hung worker**: the agent and ingest workers bind no port, so each touches a heartbeat file from its read loop and its reclaim loop
+(`app/platform/worker_heartbeat.py`) and the compose health check fails when one is more than two minutes old (a stuck event loop, a
+deadlock). `dc ps` then shows the worker `unhealthy` and the alert `AgentWorkerLoopStalled` fires when no replica of that queue has
+looped for three minutes. **Docker Compose does not restart an unhealthy container**, and neither does `restart: unless-stopped` (it
+restarts one that *exits*). What does: an orchestrator that acts on health, or a sidecar such as `willfarrell/autoheal` (it needs the
+Docker socket, which is a trade-off this repo has not made for you), or `dc restart agent-worker` by hand when the alert fires. A worker
+that is merely busy is not stale: it beats while it waits for a free slot.
+
+**Prompts in the gateway's spend log**: off in production (`store_prompts_in_spend_logs: false` in
+`deploy/litellm/litellm-config.prod.yaml`), so the gateway's database holds metadata (model, tokens, cost, end user) and not what a person
+asked or what was answered. To see request and response bodies for a period (debugging a guardrail, say), set it to `true` **and** add
+`maximum_spend_logs_retention_period: "7d"` under `general_settings` beside it, restart the proxy, and turn both back off afterwards. The key
+is the one in litellm 1.94.1's `proxy/_types.py`; check it against the image you have pinned before relying on it. Rows written while it was
+on are not removed by turning it off.
+
 **Rollback**: re-run `deploy.yml` against an earlier commit
 (`workflow_dispatch` isn't wired up for this file today — re-push/revert the
 commit on `main`, or SSH in and `IMAGE_TAG=<older-sha> dc up -d` directly using an older GHCR tag). The

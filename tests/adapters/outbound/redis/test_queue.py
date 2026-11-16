@@ -23,6 +23,12 @@ from app.ports.outbound import jobs
 from tests.conftest import metric_value
 
 
+def _assert_stamped_just_now(stamp):
+    """Every job the API publishes carries `enqueued_at` (epoch seconds): the worker's `agent_queue_wait_seconds` is measured from it (PRODUCTION_REVIEW.md R17)."""
+    assert isinstance(stamp, float) and abs(time.time() - stamp) < 30
+
+
+
 def _id_gt(a: str, b: str) -> bool:
     return tuple(int(x) for x in a.split("-")) > tuple(int(x) for x in b.split("-"))
 
@@ -72,6 +78,7 @@ class FakeRedis:
         self._delivered: dict[str, int] = {}
         self._owner: dict[str, str] = {}  # entry_id -> the consumer it was last delivered or claimed to
         self.renewals: list[tuple[str, int]] = []  # (lock key, new lifetime in seconds) of each successful renewal
+        self.lag_unknown = False  # Redis reports a null lag after entries were deleted from the middle of the unread range
         self.pipeline_runs: list[tuple[bool, list[str]]] = []  # (transaction, commands) of each execute()
         self.trims: list[tuple[str, str | None]] = []  # (stream, minid) of each XTRIM
         self.deleted_consumers: list[tuple[str, str, str]] = []  # (stream, group, consumer)
@@ -102,6 +109,13 @@ class FakeRedis:
             {"name": name, "idle": 0, "pending": len([e for e, owner in self._owner.items() if owner == name and e in live and e not in self.acked])}
             for name in sorted(names)
         ]
+
+    async def xinfo_groups(self, stream):
+        """The one row XINFO GROUPS gives each group: entries delivered and not acknowledged (`pending`) and added and not delivered (`lag`)."""
+        live = [eid for eid, _fields in self.streams.get(stream, [])]
+        pending = len([e for e in live if e in self._delivered and e not in self.acked])
+        lag = len([e for e in live if e not in self._delivered])
+        return [{"name": group, "consumers": 1, "pending": pending, "lag": None if self.lag_unknown else lag} for group in sorted(self.groups.get(stream, set()))]
 
     async def xgroup_delconsumer(self, stream, group, consumer):
         self.deleted_consumers.append((stream, group, consumer))
@@ -268,6 +282,7 @@ class TestPublishRequest:
         entries = client.streams[jobs.requests_stream_key("ecorp")]
         assert len(entries) == 1
         payload = json.loads(entries[0][1]["payload"])
+        _assert_stamped_just_now(payload.pop("enqueued_at"))
         assert payload == {
             "kind": "turn",
             "request_id": "r1",
@@ -339,6 +354,7 @@ class TestPublishResumeRequest:
         entries = client.streams[jobs.requests_stream_key("ecorp")]
         assert len(entries) == 1
         payload = json.loads(entries[0][1]["payload"])
+        _assert_stamped_just_now(payload.pop("enqueued_at"))
         assert payload == {
             "kind": "resume",
             "request_id": "r1",
@@ -360,6 +376,7 @@ class TestPublishCancelRequest:
         entries = client.streams[jobs.requests_stream_key("ecorp")]
         assert len(entries) == 1
         payload = json.loads(entries[0][1]["payload"])
+        _assert_stamped_just_now(payload.pop("enqueued_at"))
         assert payload == {
             "kind": "cancel",
             "request_id": "r1",
@@ -533,6 +550,16 @@ class TestPublishResultAndReadResults:
             {"type": "token", "content": "a"},
             {"type": "done"},
         ]
+
+    async def test_a_job_nobody_took_ends_with_a_worker_unreachable_error_a_client_can_switch_on(self):
+        """The one error event that carried only `content` (PRODUCTION_REVIEW.md R24)."""
+        client = FakeRedis()
+
+        events = [event async for event in queue.read_results(client, "r1", first_event_deadline_seconds=0.001)]
+
+        assert len(events) == 1
+        assert events[0]["code"] == "worker_unreachable"
+        assert events[0]["message"] == events[0]["content"] and "agent-worker" in events[0]["content"]
 
     async def test_no_deadline_given_preserves_the_old_wait_forever_behavior(self):
         """Default (`first_event_deadline_seconds=None`) — every existing

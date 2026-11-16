@@ -6,7 +6,13 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_core.runnables import RunnableConfig
 
 from app.agent.cost import metering
@@ -26,7 +32,7 @@ from app.agent.graph.model_route import routed_unreachable, tier_alias
 from app.agent.graph.skill_guards import pending_skill_required_tool
 from app.agent.graph.state import State
 from app.core import gateway, metrics
-from app.core.config import CHAT_MODEL
+from app.core.config import CHAT_MODEL, STALE_TOOL_RESULT_MAX_CHARS
 from app.core.untrusted import frame_untrusted
 from app.ports.outbound.llm import ChatModel, ContentBlock
 
@@ -57,6 +63,33 @@ def _question_index(messages: list[BaseMessage], anchor: int | None) -> int | No
     if isinstance(anchor, int) and 0 <= anchor < len(messages) and is_user_message(messages[anchor]):
         return anchor
     return next((i for i in range(len(messages) - 1, -1, -1) if is_user_message(messages[i])), None)
+
+
+# What an earlier turn's long tool result is replaced by in what the model is SENT (never in what is stored). The tool_call_id and the name stay on the
+# message, so every tool call still has its answer, which an OpenAI-style API insists on (pattern 8).
+STALE_TOOL_RESULT_NOTE = "[Earlier result of {name}, omitted to save space. Call the tool again if you need it.]"
+
+
+def without_stale_tool_results(messages: list[BaseMessage], max_chars: int) -> list[BaseMessage]:
+    """A copy of `messages` in which each ToolMessage from a turn BEFORE the current one that is longer than `max_chars` is replaced by a short note.
+
+    A crawled page (up to 20,000 characters), a sandbox output, a loaded skill's full text and a subagent's answer were each paid for again on every later
+    call, every round of every later turn, until history passed `HISTORY_TOKEN_CEILING` and `compact_history` summarised it, and on a small model a long
+    stale result also pushes the current question away from where it generates (pattern 79). The stored `state["messages"]` and the checkpoint keep the
+    full results; this only shortens the copy the model reads. Items are replaced in place, so no index (the retrieval anchor) moves. 0 turns it off.
+
+    Cost: the provider's prompt cache keeps the previous call's prefix, so when a new turn starts the previous turn's long results become notes and the
+    prefix changes once, at that point; within a turn it is stable. One cache miss per turn buys a much shorter prompt on every call
+    (PRODUCTION_REVIEW.md R31)."""
+    turn_start = next((i for i in range(len(messages) - 1, -1, -1) if is_user_message(messages[i])), None)
+    if not max_chars or turn_start is None:
+        return messages
+    out = list(messages)
+    for i in range(turn_start):
+        m = out[i]
+        if isinstance(m, ToolMessage) and len(str(m.content)) > max_chars:  # the content may be a list of parts
+            out[i] = m.model_copy(update={"content": STALE_TOOL_RESULT_NOTE.format(name=m.name or "a tool")})
+    return out
 
 
 def _refusal_update(state: State, block: ContentBlock) -> dict[str, Any]:
@@ -92,6 +125,7 @@ def make_agent_node(
     skill_required_tools: tuple[str, ...] = (),
     cannot_open_links: bool = False,
     system_prompt: str,
+    stale_tool_result_max_chars: int | None = None,
 ) -> Callable[..., Awaitable[dict[str, Any]]]:
     """Factory, not a plain function, because `agent` needs an LLM client; tests build it with a fake (e.g.
     GenericFakeChatModel) via `make_agent_node(fake_llm)(state)` to cover message assembly without a network
@@ -107,6 +141,8 @@ def make_agent_node(
       "call it now" reminder is only ever about one of those.
     - `cannot_open_links`: True for a domain with no tool that reaches an address (`links.cannot_open_links`);
       a turn whose question contains a link then carries a reminder that it can't be opened.
+    - `stale_tool_result_max_chars`: an earlier turn's tool result longer than this reaches the model as a short note instead (`without_stale_tool_results`);
+      `None` is the configured `STALE_TOOL_RESULT_MAX_CHARS`, 0 keeps them whole.
     - `system_prompt`: the calling domain's (`manifest.system_prompt`, bound by `build_graph`), the first
       message of EVERY call, taken from the manifest at call time rather than from the thread. Nothing
       persists a prompt in the checkpoint, so a prompt edit reaches every conversation on the next call with
@@ -153,6 +189,10 @@ def make_agent_node(
             )
             messages = [m for i, m in enumerate(messages) if not droppable(i, m)]
             anchor = next((i for i, m in enumerate(messages) if m is anchor_msg), None)
+        # After the filtering above (it shifts indexes) and before the notes are added: shortened in the COPY only, in place, so `anchor` still points at the question.
+        messages = without_stale_tool_results(
+            messages, STALE_TOOL_RESULT_MAX_CHARS if stale_tool_result_max_chars is None else stale_tool_result_max_chars
+        )
         context = state.get("context", "")
 
         # What this call adds to the turn rides on the turn's own question: reference material

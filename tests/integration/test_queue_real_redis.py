@@ -82,6 +82,7 @@ async def test_a_turn_request_round_trips_from_producer_through_a_real_consumer_
         [(_, entries)] = response
         [(entry_id, fields)] = entries
         payload = json.loads(fields["payload"])
+        assert isinstance(payload.pop("enqueued_at"), float)  # stamped by the API: the worker's queue wait is measured from it (R17)
         assert payload == {
             "kind": "turn",
             "request_id": request_id,
@@ -206,3 +207,41 @@ async def test_a_consumer_that_owns_nothing_is_removed_when_its_worker_stops_and
 
     names = {info["name"] for info in await client.xinfo_consumers(stream, jobs.CONSUMER_GROUP)}
     assert names == {"busy-worker"}
+
+
+async def test_a_published_event_and_its_expiry_land_together_on_a_real_server():
+    """`XADD` and `EXPIRE` are one MULTI now: the stream exists with a lifetime the moment it holds its first event (PRODUCTION_REVIEW.md R08)."""
+    client = queue.get_client()
+    request_id = str(uuid.uuid4())
+
+    await streams.publish_result(client, request_id, {"type": "token", "content": "hi"})
+    await streams.publish_result(client, request_id, {"type": "done"})
+
+    key = jobs.results_stream_key(request_id)
+    assert 0 < await client.ttl(key) <= jobs.RESULTS_STREAM_TTL_SECONDS
+    assert [event async for event in queue.read_results(client, request_id)] == [{"type": "token", "content": "hi"}, {"type": "done"}]
+
+
+async def test_the_queue_gauges_read_a_real_servers_lag_and_pending_and_ack_and_delete_does_not_make_it_unknowable():
+    """`record_queue_depth` reads XINFO GROUPS' `lag`. Redis reports none (null) once entries were deleted from the middle of a group's UNREAD range, and the
+    workers now delete every job they acknowledge: this shows that deleting delivered entries from the front keeps `lag` known (PRODUCTION_REVIEW.md R17)."""
+    from app.core import metrics
+
+    client = queue.get_client()
+    stream = jobs.requests_stream_key()
+    await streams.ensure_consumer_group(client)
+    for n in range(8):
+        await queue.publish_request(client, request_id=f"r{n}", text="hi", thread_id=f"t{n}", ctx=TEST_CTX)
+    delivered = await client.xreadgroup(jobs.CONSUMER_GROUP, "w1", {stream: ">"}, count=3)
+    ids = [entry_id for entry_id, _ in delivered[0][1]]
+
+    [row] = [g for g in await client.xinfo_groups(stream) if g["name"] == jobs.CONSUMER_GROUP]
+    assert (row["pending"], row["lag"]) == (3, 5)
+
+    await streams.ack_and_delete(client, stream, jobs.CONSUMER_GROUP, ids[0])  # a worker finished its first job
+    await streams.ack_and_delete(client, stream, jobs.CONSUMER_GROUP, ids[1])
+    [row] = [g for g in await client.xinfo_groups(stream) if g["name"] == jobs.CONSUMER_GROUP]
+    assert (row["pending"], row["lag"]) == (1, 5), "lag still known after delivered entries were deleted"
+
+    await streams.record_queue_depth(client, stream, jobs.CONSUMER_GROUP, "integration-test")
+    assert metrics.agent_queue_lag is not None  # set without raising against the real reply shape

@@ -9,10 +9,12 @@ import contextlib
 import json
 import logging
 import time
+from collections.abc import Callable
 from typing import Any, cast
 
 import redis.asyncio as redis
 
+from app.core import metrics
 from app.ports.outbound.jobs import (
     CONSUMER_GROUP,
     RESULTS_STREAM_TTL_SECONDS,
@@ -114,8 +116,13 @@ async def publish_result(client: redis.Redis, request_id: str, event: dict[str, 
     tool_end, citations, error, done) to this request's results stream,
     refreshing its TTL so a long-running turn doesn't expire mid-flight."""
     key = results_stream_key(request_id)
-    await client.xadd(key, {"payload": json.dumps(event)})
-    await client.expire(key, RESULTS_STREAM_TTL_SECONDS)
+    # One round trip for the pair, not two awaited one after the other: an answer of 500 tokens was 1,500 sequential round trips with the cancel check, each
+    # holding up the model's stream. A MULTI as well, so a worker that dies between the two can no longer leave a results stream with no expiry
+    # (PRODUCTION_REVIEW.md R08, step 1).
+    async with client.pipeline(transaction=True) as pipe:
+        pipe.xadd(key, {"payload": json.dumps(event)})
+        pipe.expire(key, RESULTS_STREAM_TTL_SECONDS)
+        await pipe.execute()
 
 
 # --- Crash recovery for a requests stream's consumer group (agent_worker.py and ingest_worker.py use these
@@ -265,17 +272,22 @@ async def pause_after_failed_read(stop_event: asyncio.Event, delay: float) -> fl
     return min(delay * 2, READ_BACKOFF_MAX_SECONDS)
 
 
-async def claim_free_slots(semaphore: asyncio.Semaphore, stop_event: asyncio.Event, *, limit: int, wait_seconds: float) -> int:
+async def claim_free_slots(
+    semaphore: asyncio.Semaphore, stop_event: asyncio.Event, *, limit: int, wait_seconds: float, on_wait: Callable[[], None] | None = None
+) -> int:
     """Waits for one free concurrency slot, then takes every other free one without waiting, up to `limit`, and returns how many the caller now holds: the
     number of jobs it may start, so the number it may ask the queue for. 0 means the worker was told to stop first, and nothing is held.
 
     A worker used to ask `XREADGROUP` for its whole concurrency and then wait on the semaphore for each entry. A claimed entry's idle clock runs while
     it waits, so under saturation "idle" measured the queue and not a dead worker, and a healthy job was reclaimed and run a second time (pattern 99).
-    The wait wakes every `wait_seconds` to look at the stop flag, as a blocking read does; the caller gives back what a read did not use."""
+    The wait wakes every `wait_seconds` to look at the stop flag, as a blocking read does, and calls `on_wait` each time: a worker whose every slot is
+    busy for minutes is waiting, not hung, and its heartbeat (app/platform/worker_heartbeat.py) must say so. The caller gives back what a read did not use."""
     while not stop_event.is_set():
         try:
             await asyncio.wait_for(semaphore.acquire(), timeout=wait_seconds)
         except TimeoutError:
+            if on_wait is not None:
+                on_wait()
             continue
         held = 1
         while held < limit and not semaphore.locked():
@@ -291,3 +303,25 @@ async def claim_free_slots(semaphore: asyncio.Semaphore, stop_event: asyncio.Eve
 def release_slots(semaphore: asyncio.Semaphore, count: int) -> None:
     for _ in range(count):
         semaphore.release()
+
+
+def observe_queue_wait(queue: str, payload: dict[str, Any]) -> None:
+    """How long a job waited on the stream before this worker took it (`agent_queue_wait_seconds`): now minus the `enqueued_at` the API stamped on it. A job
+    with no stamp (published by an older API during a rolling deploy) or a nonsense one is skipped, and a clock a little behind the API's counts as no wait
+    rather than a negative one. Never raises: a measurement must not fail a job (PRODUCTION_REVIEW.md R17)."""
+    enqueued_at = payload.get("enqueued_at")
+    if isinstance(enqueued_at, bool) or not isinstance(enqueued_at, int | float):
+        return
+    metrics.agent_queue_wait_seconds.labels(queue=queue).observe(max(0.0, time.time() - enqueued_at))
+
+
+async def record_queue_depth(client: redis.Redis, stream: str, group: str, domain: str) -> None:
+    """Sets `agent_queue_pending` and `agent_queue_lag` for `domain` from XINFO GROUPS, once per reclaim pass of every worker (the last writer wins, and they
+    agree). Lag is left unset when Redis reports none: it cannot say after entries were deleted from the middle of a group's unread range."""
+    for info in await client.xinfo_groups(stream):
+        if info.get("name") != group:
+            continue
+        metrics.agent_queue_pending.labels(domain=domain).set(float(info.get("pending") or 0))
+        if info.get("lag") is not None:
+            metrics.agent_queue_lag.labels(domain=domain).set(float(info["lag"]))
+        return

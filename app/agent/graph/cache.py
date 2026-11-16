@@ -14,17 +14,37 @@ from langchain_core.messages import AIMessage
 
 from app.agent.graph.loop_guards import tool_capability
 from app.agent.graph.messages import (
+    COMPACTION_MARKER_KEY,
     current_turn_messages,
     human_text,
+    is_user_message,
     last_human_message,
+    previous_human_message,
 )
 from app.agent.graph.state import State
 from app.core.security import SecurityCtx
 
 
+def _is_the_conversations_first_question(messages: list[Any]) -> bool:
+    """True only for the first thing the person asked in this thread. Anything after it ("yes", "do it", "more detail please", "and for March?")
+    means nothing on its own, so a lookup by meaning matches whatever similar short message was cached, in another conversation, and the cached answer
+    belongs there (PRODUCTION_REVIEW.md R33). A first question is the only one whose meaning does not depend on the conversation.
+
+    A compaction breadcrumb counts as an earlier conversation: `compact_history` replaces the older turns, so a long thread can have no earlier human
+    message left in `messages` and still not be at its start."""
+    last_index = next((i for i in range(len(messages) - 1, -1, -1) if is_user_message(messages[i])), None)
+    if last_index is None:
+        return False
+    if previous_human_message(messages, last_index) is not None:
+        return False
+    return not any(getattr(m, "additional_kwargs", {}).get(COMPACTION_MARKER_KEY) for m in messages[:last_index])
+
+
 # --- Node: semantic cache lookup (GRAPH_PATTERNS.md pattern 22) ---
 def make_check_semantic_cache_node(
     cache_get: Callable[["SecurityCtx | None", str], Awaitable[tuple[str, list[dict[str, Any]]] | None]],
+    *,
+    enabled: bool = True,
 ) -> Callable[[State], Awaitable[dict[str, Any]]]:
     """Factory, same rationale as make_retrieve_context_node: needs an
     injected client so tests can fake it (see tests/agent/graph/test_nodes.py) instead
@@ -42,6 +62,9 @@ def make_check_semantic_cache_node(
         miss and a degraded lookup both return None), so no try/except
         is needed here.
         """
+        # The node stays in the graph whatever the setting, so the topology does not change with it (a paused conversation's checkpoint names nodes).
+        if not enabled or not _is_the_conversations_first_question(state["messages"]):
+            return {}
         last_human = last_human_message(state["messages"])
         if last_human is None:
             return {}
@@ -81,6 +104,8 @@ def _turn_acted(state: State, tool_capabilities: Mapping[str, str]) -> bool:
 def make_write_semantic_cache_node(
     cache_set: Callable[["SecurityCtx | None", str, str, list[dict[str, Any]]], Awaitable[None]],
     tool_capabilities: Mapping[str, str],
+    *,
+    enabled: bool = True,
 ) -> Callable[[State], Awaitable[dict[str, Any]]]:
     """Factory, same rationale as make_check_semantic_cache_node.
     `tool_capabilities` is the calling domain's own tier map (`build_graph`
@@ -103,8 +128,10 @@ def make_write_semantic_cache_node(
         from reading is still worth caching; an answer that came from acting is
         not an answer to be repeated.
         """
-        if state.get("cache_hit"):
+        if state.get("cache_hit") or not enabled:
             return {}
+        if not _is_the_conversations_first_question(state["messages"]):
+            return {}  # the other half of the rule in check_semantic_cache: only a first question is ever stored, so none is replayed against a follow-up
         if _turn_acted(state, tool_capabilities):
             return {}
         last_human = last_human_message(state["messages"])

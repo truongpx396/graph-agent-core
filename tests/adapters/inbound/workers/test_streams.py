@@ -13,6 +13,37 @@ from tests.adapters.outbound.redis.test_queue import FakeRedis
 STREAM, GROUP = "agent:requests:test", "workers-test"
 
 
+class TestPublishResult:
+    """An answer of 500 tokens was 1,500 sequential round trips: the cancel check, an XADD and an EXPIRE for each event (PRODUCTION_REVIEW.md R08, step 1)."""
+
+    async def test_an_event_and_its_expiry_are_one_pipelined_round_trip(self):
+        client = FakeRedis()
+
+        await streams.publish_result(client, "req-1", {"type": "token", "content": "hi"})
+
+        assert client.pipeline_runs == [(True, ["xadd", "expire"])]
+        assert client.expiries["agent:results:req-1"] == streams.RESULTS_STREAM_TTL_SECONDS
+        assert len(client.streams["agent:results:req-1"]) == 1
+
+    async def test_every_event_of_a_turn_is_one_round_trip_and_the_ttl_is_refreshed_on_each(self):
+        client = FakeRedis()
+
+        for event in ({"type": "token", "content": "a"}, {"type": "token", "content": "b"}, {"type": "done"}):
+            await streams.publish_result(client, "req-2", event)
+
+        assert client.pipeline_runs == [(True, ["xadd", "expire"])] * 3
+
+    async def test_the_ingest_workers_publisher_is_the_same(self):
+        from app.adapters.inbound.workers import ingest_streams
+
+        client = FakeRedis()
+
+        await ingest_streams.publish_result(client, "job-1", {"type": "started"})
+
+        assert client.pipeline_runs == [(True, ["xadd", "expire"])]
+        assert client.expiries["ingest:results:job-1"] == streams.RESULTS_STREAM_TTL_SECONDS
+
+
 class TestAckAndDelete:
     async def test_it_acknowledges_and_removes_the_entry_in_one_transaction(self):
         """Real gap (read from the code, and `XACK` alone is documented to leave the entry in the stream): every message ever
@@ -160,3 +191,16 @@ class TestClaimFreeSlots:
 
         assert await streams.claim_free_slots(semaphore, stop, limit=2, wait_seconds=1) == 0
         assert not semaphore.locked()
+
+
+    async def test_a_wait_for_a_slot_ticks_so_a_worker_with_every_slot_busy_still_shows_it_is_alive(self):
+        semaphore = asyncio.Semaphore(1)
+        await semaphore.acquire()
+        ticks = []
+        claim = asyncio.create_task(streams.claim_free_slots(semaphore, asyncio.Event(), limit=1, wait_seconds=0.01, on_wait=lambda: ticks.append(1)))
+
+        await asyncio.sleep(0.08)
+        semaphore.release()
+
+        assert await asyncio.wait_for(claim, 1) == 1
+        assert len(ticks) >= 3

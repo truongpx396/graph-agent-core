@@ -34,6 +34,7 @@ from app.agent.graph.messages import (
     COMPACTION_MARKER_KEY,
     is_retry_artifact,
 )
+from app.agent.graph.stream_events import STREAM_EVENT
 from app.agent.runtime import cancelled_turn
 from app.agent.runtime import core as runtime_module
 from app.core import gateway, metrics, tracing
@@ -141,6 +142,12 @@ def _turn_outcome(state: dict[str, Any]) -> str:
     return "rejected" if state.get("iterations", 0) == 0 else "success"
 
 
+# How often a turn asks whether it was cancelled: at most this often, not once per event. The check is a Redis GET and a 500-token answer is 500 events, so asking
+# every time was 500 round trips awaited one after another on the model's own stream. A stop takes effect within this long, at an event boundary, as before
+# (PRODUCTION_REVIEW.md R08, step 1).
+_CANCEL_POLL_INTERVAL_SECONDS = 0.25
+
+
 async def _iterate_with_timeout(aiter: AsyncIterator[Any], timeout_seconds: float, cancel_check: CancelCheck | None = None) -> AsyncGenerator[Any, None]:
     """Wrap an async iterator so the whole run aborts once total wall-clock
     time exceeds `timeout_seconds` (enforces REQUEST_TIMEOUT_SECONDS).
@@ -148,7 +155,8 @@ async def _iterate_with_timeout(aiter: AsyncIterator[Any], timeout_seconds: floa
     this loop in a generic `except Exception` for Langfuse error-marking.
 
     `cancel_check` (optional, `Callable[[], Awaitable[bool]]`) is polled
-    once per iteration, before waiting on the next event; if it returns
+    before waiting on an event, at most once per `_CANCEL_POLL_INTERVAL_SECONDS`
+    and always before the first event; if it returns
     True, raises `TurnCancelledError`. Cancellation only takes effect at the
     next event boundary, not mid-flight on an already-running tool/model
     call. Wired by `app/adapters/inbound/workers/agent_worker.py` to a Redis cancel flag
@@ -157,12 +165,17 @@ async def _iterate_with_timeout(aiter: AsyncIterator[Any], timeout_seconds: floa
     """
     aiter = aiter.__aiter__()
     deadline = time.monotonic() + timeout_seconds
+    last_checked: float | None = None  # None until the first check: the first iteration always asks
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError(f"Request exceeded {timeout_seconds}s timeout")
-        if cancel_check is not None and await cancel_check():
-            raise TurnCancelledError()
+        if cancel_check is not None:
+            now = time.monotonic()
+            if last_checked is None or now - last_checked >= _CANCEL_POLL_INTERVAL_SECONDS:
+                last_checked = now
+                if await cancel_check():
+                    raise TurnCancelledError()
         try:
             yield await asyncio.wait_for(aiter.__anext__(), timeout=remaining)
         except StopAsyncIteration:
@@ -274,6 +287,12 @@ def _turn_trace(name: str, session_id: str, input_text: str) -> Iterator[tuple[_
         raise
 
 
+def _checkpoint_refusal_code(error: str) -> ErrorCode:
+    """The code for what `resumability_error_async` refused with: its text starts with the reason (`checkpoint_lost: ...`,
+    `checkpoint_incompatible: ...`), which `hitl.py` also counts as `agent_checkpoint_issue_total{reason}`."""
+    return ErrorCode.CHECKPOINT_INCOMPATIBLE if error.startswith("checkpoint_incompatible") else ErrorCode.CHECKPOINT_LOST
+
+
 async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, Any] | Command[Any] | None, cfg: RunnableConfig, trace: _TurnTrace, cancel_check: CancelCheck | None = None) -> AsyncGenerator[dict[str, Any], None]:
     """Shared core of astream_events_turn/astream_events_resume: drives one `graph.astream_events()` call,
     translates events into typed shapes, and yields exactly one terminal event.
@@ -281,21 +300,22 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
     - `{"type": "approval_required", "tool_calls": [...]}`: paused at human_approval's interrupt
       (graph/hitl.py); resume via `astream_events_resume`.
     - `{"type": "retry"}` (NOT terminal): discard everything streamed so far, because it was rejected or
-      replaced (else old and retried answers render concatenated). It comes from three `on_chain_end` sources,
-      each replacing the last message in place:
+      replaced (else old and retried answers render concatenated). A NODE announces it (`graph/stream_events.py`,
+      `adispatch_custom_event`), and this function forwards the announcement without knowing which node it was:
       - `retry_output`: check_output rejected the answer; the loop to `agent` supplies fresh tokens;
       - `check_output` itself, when it inserted a missing citation marker after the answer streamed: no
-        `agent` call follows, so a synthetic "token" event carries the corrected text after "retry";
+        `agent` call follows, so the announcement carries the corrected text too and it is forwarded as a
+        "token" after the "retry";
       - `retry_exhausted`: `route_after_check` gave up after MAX_CONSECUTIVE_SAME_RETRY_REASON and replaces
         the message the same way, EXCEPT for checks marked `trust_on_exhaust` (a real answer merely missing
-        its marker), where it no-ops, since a "retry" would blank a good answer with nothing to follow.
-      A nested `run_subagent` graph shares these node names, so every `on_chain_end` tagged
+        its marker), where it announces nothing, since a "retry" would blank a good answer with nothing to follow.
+      A nested `run_subagent` graph shares those node names, so every announcement tagged
       `metadata.subagent_name` is ignored.
       A fourth source is a model stream that broke part-way and that the `agent` node's retry policy ran
       again (pattern 7): the second attempt's tokens would follow the first's, so a model call that starts
       while the previous one is still open, and had sent tokens, announces the restart the same way.
     - `{"type": "compacted"}` (NOT terminal): `compact_history` (pattern 41) trimmed context before `agent`
-      ran. Informational; fires only when it trimmed something.
+      ran, and said so the same way. Informational; fires only when it trimmed something.
     - `{"type": "citations", "items": [...]}` / `{"type": "followups", "items": [...]}`: just before "done",
       when the answer cited something / suggest_followups (pattern 27) produced any.
     - `{"type": "done"}`: the turn finished.
@@ -316,6 +336,7 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
     # a finished one always does: so a start while a call is still open, one that had sent tokens, is a retry.
     model_call_open = False
     open_call_streamed = False
+    first_token_seen = False  # what a person waits before they see anything: agent_first_token_seconds (R17)
     try:
         async for event in _iterate_with_timeout(
             graph.astream_events(graph_input, config=cfg, version="v2"),
@@ -358,6 +379,9 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
                 content = _text_content(event["data"]["chunk"].content)
                 if content:
                     open_call_streamed = True
+                    if not first_token_seen:
+                        first_token_seen = True
+                        metrics.agent_first_token_seconds.observe(time.monotonic() - start)
                     final_answer.append(content)
                     yield {"type": "token", "content": content}
 
@@ -383,58 +407,19 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
                     payload["subagent"] = subagent_name
                 yield payload
 
-            elif kind == "on_chain_end" and event.get("metadata", {}).get("subagent_name"):
-                # A nested run_subagent graph shares the node names below (check_output,
-                # retry_output, ...), and its events arrive on THIS stream. They describe the
-                # subagent's own turn: acting on them cleared the parent's answer, yielded
-                # `retry` and then the subagent's text as a token, which the client showed as
-                # the answer. Only tool_start/tool_end are surfaced from a nested run (tagged
-                # with `subagent` above), so the chain ends are ignored here.
-                pass
-
-            elif kind == "on_chain_end" and event["name"] == "retry_output":
-                # check_output rejected the answer; discard what's streamed
-                # so far (see this function's docstring, "retry").
-                final_answer.clear()
-                yield {"type": "retry"}
-
-            elif kind == "on_chain_end" and event["name"] == "check_output":
-                # check_output mechanically inserted a missing citation
-                # marker after the answer already streamed (see docstring)
-                # — only fires when it actually returned a replacement.
-                output = event["data"].get("output") or {}
-                replacement_messages = output.get("messages") or []
-                if replacement_messages:
+            elif kind == "on_custom_event" and event["name"] == STREAM_EVENT and not event_metadata.get("subagent_name"):
+                # A node announced what the client should see (`graph/stream_events.py`): the runtime no longer recognises nodes by name. A nested
+                # `run_subagent` graph shares the node names and its announcements arrive on THIS stream, tagged `metadata.subagent_name`: they
+                # describe the subagent's own turn, and acting on them cleared the parent's answer and showed the subagent's text as the answer.
+                announced = event["data"]
+                if announced["type"] == "retry":
                     final_answer.clear()
                     yield {"type": "retry"}
-                    replacement_text = replacement_messages[-1].content
-                    if isinstance(replacement_text, str) and replacement_text:
-                        final_answer.append(replacement_text)
-                        yield {"type": "token", "content": replacement_text}
-
-            elif kind == "on_chain_end" and event["name"] == "retry_exhausted":
-                # route_after_check gave up after
-                # MAX_CONSECUTIVE_SAME_RETRY_REASON and unconditionally
-                # replaced the message — except for
-                # the checks marked trust_on_exhaust, where it no-ops (see this
-                # function's docstring, "retry", for the two real bugs this
-                # branch guards against).
-                output = event["data"].get("output") or {}
-                replacement_messages = output.get("messages") or []
-                if replacement_messages:
-                    final_answer.clear()
-                    yield {"type": "retry"}
-                    replacement_text = replacement_messages[-1].content
-                    if isinstance(replacement_text, str) and replacement_text:
-                        final_answer.append(replacement_text)
-                        yield {"type": "token", "content": replacement_text}
-
-            elif kind == "on_chain_end" and event["name"] == "compact_history":
-                # Runs every turn but only does real work once its
-                # ceiling trips; `output` is `{}` (app/agent/graph/core.py's early
-                # return) otherwise.
-                output = event["data"].get("output") or {}
-                if output.get("messages"):
+                elif announced["type"] == "token":
+                    # The replacement text after a `retry`: no model call follows to stream a new one, and the trace and the fallback read `final_answer`.
+                    final_answer.append(announced["content"])
+                    yield {"type": "token", "content": announced["content"]}
+                elif announced["type"] == "compacted":
                     yield {"type": "compacted"}
 
     except TurnCancelledError:
@@ -592,6 +577,9 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
             # to leave a finished turn with a blank trace and no metrics. The client still gets
             # the same events in the same order.
             if synthetic_token:
+                if not first_token_seen:  # a cache hit or a rejection: the person's first sight of text, and the fastest turns there are
+                    first_token_seen = True
+                    metrics.agent_first_token_seconds.observe(time.monotonic() - start)
                 yield {"type": "token", "content": synthetic_token}
             terminal_event = {"type": "done"}
     # No per-turn flush: the shared client's own background consumer sends
@@ -652,15 +640,8 @@ async def astream_events_turn(
         metrics.agent_requests_total.labels(outcome="rejected").inc()
         yield {"type": "error", "content": refusal.message, **refusal.to_dict()}
         return
-    # Reserves this turn's worst-case cost against the tenant's in-flight
-    # total for the rest of this generator's life (released in `finally`
-    # below, unconditionally) — see app/agent/runtime/core.py::reserve_turn_budget's own
-    # docstring for the race this closes: without it, a sibling turn for
-    # the same tenant starting moments later would see nearly the same
-    # `spent` this turn's own check just read: the usage events land as each
-    # call returns, but not the calls this turn has yet to make.
-    budget_hold = await runtime_module.reserve_turn_budget(ctx)
-    try:
+    # The hold (`_BudgetHold`) is released on every exit of this generator.
+    async with _BudgetHold(ctx):
         graph = await runtime_module.init_graph_async()
         pending = await paused_approval_async(graph, {"configurable": {"thread_id": thread_id}})
         if pending is not None:
@@ -700,27 +681,12 @@ async def astream_events_turn(
                 "content": "A previous pending approval on this conversation could not be resumed after an app update; starting a new request.",
             }
         await runtime_module.upsert_session(ctx, thread_id, text)
-        with _turn_trace("chat-turn-stream", thread_id, text) as (trace, callbacks):
-            cfg: RunnableConfig = {
-                "configurable": {"thread_id": thread_id, "ctx": ctx},
-                "callbacks": callbacks,
-                "recursion_limit": runtime_module.RECURSION_LIMIT,
-            }
-            graph_input = {
-                "messages": [HumanMessage(content=_build_human_content(text, images))],
-                "require_approval": require_approval,
-            }
-            # `aclosing`, here and at the two other call sites: a bare `async for` over a generator does
-            # not close it when the OUTER generator is closed, so the inner one would be finalised
-            # later, by the event loop's own hook (or never, at loop teardown), and its `GeneratorExit`
-            # handling (the trace) would run late. This closes it in the same `aclose()`.
-            async with aclosing(
-                _run_graph_stream(graph, graph_input, cfg, trace, cancel_check=cancel_check)
-            ) as events:
-                async for event in events:
-                    yield event
-    finally:
-        _release_turn_budget_in_background(ctx, budget_hold)
+        def build_input() -> dict[str, Any]:  # called inside the trace: a failure here (a bad image) must still finish it as an error
+            return {"messages": [HumanMessage(content=_build_human_content(text, images))], "require_approval": require_approval}
+
+        async with aclosing(_run_turn("chat-turn-stream", graph, thread_id, ctx, build_input, text, cancel_check)) as events:
+            async for event in events:
+                yield event
 
 
 def _release_turn_budget_in_background(ctx: SecurityCtx | None, budget_hold: str | None) -> None:
@@ -741,6 +707,56 @@ def _release_turn_budget_in_background(ctx: SecurityCtx | None, budget_hold: str
     """
     release_task = asyncio.create_task(runtime_module.release_turn_budget(ctx, budget_hold))
     release_task.add_done_callback(_log_if_release_task_failed)
+
+
+class _BudgetHold:
+    """`async with _BudgetHold(ctx):` reserves this turn's worst-case cost against the tenant's in-flight total for the rest of the block and releases it
+    on EVERY exit (`_release_turn_budget_in_background`). One place for what the three entry points each did by hand: without the hold a sibling turn for the
+    same tenant starting moments later would read nearly the same `spent` this one's own check just read, since the usage events land as each call returns
+    but not the calls this turn has yet to make (`runtime/core.py::reserve_turn_budget`). A plain class and not `contextlib.asynccontextmanager`, so a close
+    mid-turn (`GeneratorExit`) is handled by nothing but `__aexit__`."""
+
+    def __init__(self, ctx: SecurityCtx) -> None:
+        self._ctx = ctx
+        self._hold: str | None = None
+
+    async def __aenter__(self) -> "_BudgetHold":
+        self._hold = await runtime_module.reserve_turn_budget(self._ctx)
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        _release_turn_budget_in_background(self._ctx, self._hold)
+        return False
+
+
+async def _run_turn(
+    name: str,
+    graph: CompiledStateGraph,
+    thread_id: str,
+    ctx: SecurityCtx,
+    build_input: Callable[[], dict[str, Any] | Command[Any] | None],
+    trace_input: str,
+    cancel_check: CancelCheck | None,
+) -> AsyncGenerator[dict[str, Any], None]:
+    """What every entry point does once its own checks have passed: open the turn's trace, build the run's config and stream the graph.
+
+    `build_input` is called INSIDE the trace, as the entry points always did: a failure while building a turn's input (an image that cannot be assembled)
+    must still finish the trace as an error and not leave it open with an input and nothing else.
+
+    `astream_events_turn`, `astream_events_resume` and `astream_events_continue_turn` each built the same config and held the same `aclosing`; this is that, once.
+    `aclosing` on EVERY inner generator is not optional, and it is two layers now: here around `_run_graph_stream`, and in each entry point around this generator.
+    A bare `async for` does not close what it iterates when the OUTER generator is closed, so its own cleanup (the trace, the abandoned-turn metrics) would run
+    late, from the event loop's finalizer hook (`.claude/rules/runtime-reliability.md`). `name` is the trace's, and
+    `trace_input` is what it is opened with (the person's text, `resume(...)`, `continue(...)`; PRODUCTION_REVIEW.md R35, part B)."""
+    with _turn_trace(name, thread_id, trace_input) as (trace, callbacks):
+        cfg: RunnableConfig = {
+            "configurable": {"thread_id": thread_id, "ctx": ctx},
+            "callbacks": callbacks,
+            "recursion_limit": runtime_module.RECURSION_LIMIT,
+        }
+        async with aclosing(_run_graph_stream(graph, build_input(), cfg, trace, cancel_check=cancel_check)) as events:
+            async for event in events:
+                yield event
 
 
 def _log_if_release_task_failed(task: asyncio.Task[Any]) -> None:
@@ -894,30 +910,20 @@ async def astream_events_resume(
         metrics.agent_requests_total.labels(outcome="rejected").inc()
         yield {"type": "error", "content": refusal.message, **refusal.to_dict()}
         return
-    budget_hold = await runtime_module.reserve_turn_budget(ctx)
-    try:
+    async with _BudgetHold(ctx):
         graph = await runtime_module.init_graph_async()
         error = await resumability_error_async(graph, {"configurable": {"thread_id": thread_id}})
         if error:
-            yield {"type": "error", "content": error}
+            envelope = ErrorEnvelope(code=_checkpoint_refusal_code(error), message=error)
+            yield {"type": "error", "content": envelope.message, **envelope.to_dict()}
             yield {"type": "done"}
             return
 
-        with _turn_trace(
-            "chat-turn-stream-resume", thread_id, f"resume(approved={approved})"
-        ) as (trace, callbacks):
-            cfg: RunnableConfig = {
-                "configurable": {"thread_id": thread_id, "ctx": ctx},
-                "callbacks": callbacks,
-                "recursion_limit": runtime_module.RECURSION_LIMIT,
-            }
-            async with aclosing(
-                _run_graph_stream(graph, Command(resume=approved), cfg, trace, cancel_check=cancel_check)
-            ) as events:
-                async for event in events:
-                    yield event
-    finally:
-        _release_turn_budget_in_background(ctx, budget_hold)
+        async with aclosing(
+            _run_turn("chat-turn-stream-resume", graph, thread_id, ctx, lambda: Command(resume=approved), f"resume(approved={approved})", cancel_check)
+        ) as events:
+            async for event in events:
+                yield event
 
 
 async def astream_events_continue_turn(thread_id: str, ctx: SecurityCtx, cancel_check: CancelCheck | None = None) -> AsyncGenerator[dict[str, Any], None]:
@@ -950,43 +956,28 @@ async def astream_events_continue_turn(thread_id: str, ctx: SecurityCtx, cancel_
     hold, since the crashed worker's was lost with it and this turn's remaining spend would otherwise be
     invisible to its siblings' checks.
     """
-    budget_hold = await runtime_module.reserve_turn_budget(ctx)
-    try:
-        async for event in _continue_turn_events(thread_id, ctx, cancel_check):
-            yield event
-    finally:
-        _release_turn_budget_in_background(ctx, budget_hold)
+    async with _BudgetHold(ctx):
+        graph = await runtime_module.init_graph_async()
+        state = await graph.aget_state({"configurable": {"thread_id": thread_id}})
+        if state.next and any(task.interrupts for task in state.tasks):
+            # The crashed attempt reached human_approval's interrupt() but
+            # died before its own ack (`process_request` acks a job the
+            # instant its generator finishes — reaching a real pause counts —
+            # so a "turn" job only ever gets reclaimed if the crash happened
+            # strictly before that point; this is the sliver where it happened
+            # strictly after). Feeding a bare `None` into an interrupted task
+            # supplies no resume value — that path belongs to
+            # `astream_events_resume`'s `Command(resume=...)`, not this one.
+            envelope = ErrorEnvelope(
+                code=ErrorCode.PENDING_APPROVAL,
+                message="This turn paused for approval right before a worker crash — resume or cancel it instead of retrying.",
+            )
+            yield {"type": "error", "content": envelope.message, **envelope.to_dict()}
+            return
 
-
-async def _continue_turn_events(thread_id: str, ctx: SecurityCtx, cancel_check: CancelCheck | None) -> AsyncGenerator[dict[str, Any], None]:
-    """The body of `astream_events_continue_turn`, split out so the hold above
-    wraps every exit path of it with one try/finally."""
-    graph = await runtime_module.init_graph_async()
-    cfg_probe: RunnableConfig = {"configurable": {"thread_id": thread_id}}
-    state = await graph.aget_state(cfg_probe)
-    if state.next and any(task.interrupts for task in state.tasks):
-        # The crashed attempt reached human_approval's interrupt() but
-        # died before its own ack (`process_request` acks a job the
-        # instant its generator finishes — reaching a real pause counts —
-        # so a "turn" job only ever gets reclaimed if the crash happened
-        # strictly before that point; this is the sliver where it happened
-        # strictly after). Feeding a bare `None` into an interrupted task
-        # supplies no resume value — that path belongs to
-        # `astream_events_resume`'s `Command(resume=...)`, not this one.
-        envelope = ErrorEnvelope(
-            code=ErrorCode.PENDING_APPROVAL,
-            message="This turn paused for approval right before a worker crash — resume or cancel it instead of retrying.",
-        )
-        yield {"type": "error", "content": envelope.message, **envelope.to_dict()}
-        return
-
-    with _turn_trace("chat-turn-stream-continue", thread_id, "continue(crash-recovery)") as (trace, callbacks):
-        cfg: RunnableConfig = {
-            "configurable": {"thread_id": thread_id, "ctx": ctx},
-            "callbacks": callbacks,
-            "recursion_limit": runtime_module.RECURSION_LIMIT,
-        }
-        async with aclosing(_run_graph_stream(graph, None, cfg, trace, cancel_check=cancel_check)) as events:
+        async with aclosing(
+            _run_turn("chat-turn-stream-continue", graph, thread_id, ctx, lambda: None, "continue(crash-recovery)", cancel_check)
+        ) as events:
             async for event in events:
                 yield event
 
@@ -1014,7 +1005,7 @@ async def cancel_run(thread_id: str, ctx: SecurityCtx) -> bool:
     return True
 
 
-async def get_session_messages(thread_id: str) -> list[dict[str, Any]]:
+async def get_session_messages(thread_id: str, *, limit: int | None = None, before: int | None = None) -> list[dict[str, Any]]:
     """Session-switcher transcript replay (`GET /chat/sessions/{thread_id}/messages`, app/adapters/inbound/api/routers/chat.py).
     It reads the same Postgres checkpointer every resume/cancel path uses (`chat_sessions` in
     app/agent/runtime/sessions.py holds only title and timestamps, not content).
@@ -1022,16 +1013,21 @@ async def get_session_messages(thread_id: str) -> list[dict[str, Any]]:
     No `ctx` here on purpose: a thread_id's checkpoint carries no owner. Ownership (does this thread belong to
     the caller's tenant+principal) is the CALLER's job, via `sessions.list_sessions`, before calling this.
 
-    Returns `[{"role": "user"|"assistant"|"system", "text": str}, ...]`: a replay of what the user actually
+    Returns `[{"index": int, "role": "user"|"assistant"|"system", "text": str}, ...]`: a replay of what the user actually
     saw, not a forensic trace (that's Langfuse). Omitted: `SystemMessage`s, `ToolMessage`s, a tool-calling
     `AIMessage` with no text, and retry artifacts (`messages.RETRY_ARTIFACT_KEY`: the corrective feedback
     `retry_output` wrote, the answer it rejected, or an untrusted answer a fallback replaced), since the
     person neither said nor saw them. One exception: a compact_history breadcrumb (`COMPACTION_MARKER_KEY`)
     comes back as `role: "system"`, so a replay shows older turns were cut rather than silently missing.
+
+    `index` is a message's position in the whole filtered transcript, counted from 0. `before` keeps only the messages with a smaller index and `limit`
+    the last that many of those, taken AFTER the filtering above (a page of 50 is 50 things a person saw, not 50 stored messages). With neither, it is the
+    whole transcript, as before. A page is read from the full state every time (the checkpointer cannot slice a channel), so this bounds what is sent, not
+    what is read, and a `compact_history` run between two requests renumbers the older part (PRODUCTION_REVIEW.md R27).
     """
     graph = await runtime_module.init_graph_async()
     state = await graph.aget_state({"configurable": {"thread_id": thread_id}})
-    messages = []
+    messages: list[dict[str, Any]] = []
     stored = state.values.get("messages", [])
     for m in stored:
         if is_retry_artifact(m):
@@ -1046,8 +1042,9 @@ async def get_session_messages(thread_id: str) -> list[dict[str, Any]]:
             continue
         text = _text_content(m.content)
         if text:
-            messages.append({"role": role, "text": text})
-    return messages
+            messages.append({"index": len(messages), "role": role, "text": text})
+    page = messages if before is None else messages[:before]
+    return page if limit is None else page[-limit:]
 
 
 async def get_pending_approval(thread_id: str) -> dict[str, Any] | None:

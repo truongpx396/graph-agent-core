@@ -43,6 +43,7 @@ class ErrorCode(str, Enum):
     THREAD_BUSY = "thread_busy"
     NO_PROGRESS = "no_progress"
     WORKER_LOST = "worker_lost"
+    WORKER_UNREACHABLE = "worker_unreachable"  # a queued job published no event within its first-event deadline: no worker took it
     # The four the front door (the authlimit service, specs/018) answers with, in the same envelope; the API itself emits the first and
     # the last (a request that reaches it with no valid identity, or while it cannot check one). See AUTH_ERRORS.
     UNAUTHENTICATED = "unauthenticated"

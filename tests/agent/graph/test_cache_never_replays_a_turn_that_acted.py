@@ -172,7 +172,11 @@ async def test_one_non_read_only_call_among_read_only_ones_is_enough_to_skip_the
     assert await _written_for(state, _CAPS) == []
 
 
-async def test_only_the_current_turn_counts_an_earlier_turns_write_does_not_block_a_later_plain_answer():
+def test_only_the_current_turn_counts_an_earlier_turns_write_is_not_this_turns_action():
+    """The rule `_turn_acted` applies, on its own: an earlier turn's write says nothing about this turn's answer. (Since R33 a later turn is never written to the
+    cache at all, so this is no longer visible through the node; the rule is still what keeps a first question's own write out when IT acted.)"""
+    from app.agent.graph.cache import _turn_acted
+
     state = {
         "messages": [
             HumanMessage(content="earlier request"),
@@ -186,7 +190,23 @@ async def test_only_the_current_turn_counts_an_earlier_turns_write_does_not_bloc
         "used_citations": [],
     }
 
-    assert await _written_for(state, _CAPS) == [("what is the refund policy?", "Refunds take 5 days.")]
+    assert _turn_acted(state, _CAPS) is False
+
+
+async def test_a_later_turn_is_not_written_whatever_it_did():
+    """PRODUCTION_REVIEW.md R33: only a conversation's first question is cached."""
+    state = {
+        "messages": [
+            HumanMessage(content="earlier request"),
+            AIMessage(content="An answer."),
+            HumanMessage(content="what is the refund policy?"),
+            AIMessage(content="Refunds take 5 days."),
+        ],
+        "ctx": TEST_CTX,
+        "used_citations": [],
+    }
+
+    assert await _written_for(state, _CAPS) == []
 
 
 async def test_a_cache_served_turn_is_still_never_rewritten():

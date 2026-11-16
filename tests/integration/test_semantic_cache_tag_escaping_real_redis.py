@@ -56,27 +56,49 @@ def _ctx(tenant, principal):
 
 
 async def test_a_principal_containing_the_or_operator_cannot_read_anothers_cached_answer(tenant):
-    await semantic_cache.set(_ctx(tenant, "bob"), QUESTION, "bob's private answer", [])
+    await semantic_cache.set(_ctx(tenant, "bob"), QUESTION, "bob's private answer", [], domain="ecorp")
 
-    assert await semantic_cache.get(_ctx(tenant, "bob"), QUESTION) is not None, (
+    assert await semantic_cache.get(_ctx(tenant, "bob"), QUESTION, domain="ecorp") is not None, (
         "control: bob must hit his own entry, or the assertion below passes vacuously"
     )
-    assert await semantic_cache.get(_ctx(tenant, "alice|bob"), QUESTION) is None
+    assert await semantic_cache.get(_ctx(tenant, "alice|bob"), QUESTION, domain="ecorp") is None
 
 
 async def test_a_tenant_containing_the_or_operator_cannot_read_another_tenants_cached_answer(tenant):
-    await semantic_cache.set(_ctx(tenant, "p"), QUESTION, "the other tenant's answer", [])
+    await semantic_cache.set(_ctx(tenant, "p"), QUESTION, "the other tenant's answer", [], domain="ecorp")
 
-    assert await semantic_cache.get(_ctx(tenant, "p"), QUESTION) is not None, "control"
-    assert await semantic_cache.get(_ctx(f"nobody-{uuid.uuid4().hex[:8]}|{tenant}", "p"), QUESTION) is None
+    assert await semantic_cache.get(_ctx(tenant, "p"), QUESTION, domain="ecorp") is not None, "control"
+    assert await semantic_cache.get(_ctx(f"nobody-{uuid.uuid4().hex[:8]}|{tenant}", "p"), QUESTION, domain="ecorp") is None
 
 
 @pytest.mark.parametrize("principal", ["o'neil", "a|b", "back\\slash", "a b", "x/y?z", "plus+minus-dot."])
 async def test_a_principal_with_punctuation_still_hits_its_own_entry(tenant, principal):
     """The escape must round-trip: escaping is only correct if the value stored
     raw still matches the query built from it."""
-    await semantic_cache.set(_ctx(tenant, principal), QUESTION, "mine", [])
+    await semantic_cache.set(_ctx(tenant, principal), QUESTION, "mine", [], domain="ecorp")
 
-    hit = await semantic_cache.get(_ctx(tenant, principal), QUESTION)
+    hit = await semantic_cache.get(_ctx(tenant, principal), QUESTION, domain="ecorp")
 
     assert hit is not None and hit[0] == "mine"
+
+
+async def test_the_same_question_in_another_domain_is_a_miss_and_in_its_own_domain_a_hit(tenant):
+    """A cached answer belongs to the domain that wrote it: another domain has another prompt and other tools (PRODUCTION_REVIEW.md R23)."""
+    await semantic_cache.set(_ctx(tenant, "p"), QUESTION, "the support domain's answer", [], domain="support")
+
+    assert (await semantic_cache.get(_ctx(tenant, "p"), QUESTION, domain="support"))[0] == "the support domain's answer", "control"
+    assert await semantic_cache.get(_ctx(tenant, "p"), QUESTION, domain="sales") is None
+    assert await semantic_cache.get(_ctx(tenant, "p"), QUESTION, domain="support|sales") is None, "a domain cannot widen the filter either"
+
+
+async def test_an_entry_is_written_with_its_expiry_in_one_step_against_a_real_server(tenant):
+    """`JSON.SET` and `EXPIRE` queued on one MULTI: the fake could not tell whether redis-py's JSON commands queue on a pipeline at all."""
+    await semantic_cache.set(_ctx(tenant, "p"), QUESTION, "an answer", [], domain="ecorp")
+
+    client = semantic_cache._get_client()
+    keys = [key async for key in client.scan_iter(match="cache:v2:*")]
+    mine = [key for key in keys if (await client.json().get(key)).get("tenant") == tenant]
+
+    assert len(mine) == 1
+    assert 0 < await client.ttl(mine[0]) <= semantic_cache.SEMANTIC_CACHE_TTL_SECONDS
+    assert (await client.json().get(mine[0]))["domain"] == "ecorp"

@@ -630,6 +630,60 @@ groups:
             the API this is an outage of everything behind the door. This is the end of a story whose beginning is
             ApiIdentityKeysRefreshFailing. specs/018.
 
+      - alert: AgentQueueBacklog
+        expr: max by (domain) (agent_queue_lag) > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The {{ $labels.domain }} queue has had more than 20 jobs waiting for five minutes"
+          description: >-
+            agent_queue_lag{domain} is the number of entries on that requests stream
+            that no worker has been given yet (read from XINFO GROUPS by every worker's
+            reclaim pass; `ingest` is the upload queue). More than 20 for five minutes
+            means the pool takes jobs slower than they arrive: every person behind them
+            is waiting, and past CHAT_FIRST_RESPONSE_DEADLINE_SECONDS (30 s) the API
+            gives up on a chat job and tells them no worker answered. Add a replica
+            (`dc up -d --scale agent-worker=N`, WORKER_CONCURRENCY.md) or look for
+            workers that are alive but stuck (AgentWorkerLoopStalled). 20 is two full
+            workers at the default concurrency of 10: tune it to your pool.
+
+      - alert: AgentQueueWaitHigh
+        expr: histogram_quantile(0.95, sum by (le, queue) (rate(agent_queue_wait_seconds_bucket[5m]))) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The 95th percentile {{ $labels.queue }} job waits more than 10 s for a worker"
+          description: >-
+            agent_queue_wait_seconds{queue} is how long a job sat on the stream before a
+            worker started it. A p95 above ten seconds for five minutes means a person
+            in twenty waits that long before their turn even begins (the API stops
+            waiting at 30 s). It is the number that says the pool is undersized before
+            AgentQueueBacklog does, because a job can wait without a lasting backlog.
+            A reclaimed job keeps its first publish time, so a crashed worker also shows
+            up here as one long wait.
+
+      - alert: AgentWorkerLoopStalled
+        expr: time() - max by (queue, loop) (max_over_time(agent_worker_last_loop_timestamp_seconds[15m])) > 180
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No {{ $labels.queue }} worker's {{ $labels.loop }} loop has passed for three minutes"
+          description: >-
+            agent_worker_last_loop_timestamp_seconds{queue,loop} is the time a worker's
+            read or reclaim loop last passed, and no replica of that queue has moved it
+            for three minutes: every worker's event loop is stuck (a blocking call, a
+            deadlock) or the pool is gone. WorkerUnreachable asks whether anyone took a
+            job; this asks whether anyone is still looping, and a worker can stop
+            looping while its container stays up. The container's health check
+            (app/platform/worker_heartbeat.py) marks a stuck replica unhealthy, but
+            compose does not restart it by itself (deploy/README.md). Look at `docker
+            compose ps`, then `docker compose logs <worker>` for what it was doing when
+            it stopped. The expression looks back 15 minutes because the collector
+            forgets a series five minutes after its last update.
+
       - alert: AgentQueueReadFailing
         expr: increase(agent_worker_queue_read_failed_total[5m]) > 0
         for: 1m

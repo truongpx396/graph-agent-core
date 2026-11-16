@@ -275,6 +275,11 @@
     color: var(--text); transition: background-color .15s ease, border-color .15s ease;
   }
   .followups button:hover { background: var(--surface-hover); border-color: var(--border-strong); }
+  .load-earlier {
+    display: block; margin: .4rem auto; font: inherit; font-size: .8rem; padding: .38rem .9rem; border-radius: var(--radius-pill);
+    border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text); cursor: pointer;
+  }
+  .load-earlier:hover { background: var(--surface-hover); border-color: var(--border-strong); }
 
   form { display: flex; gap: .5rem; padding-top: .9rem; margin-top: .25rem;
     border-top: 1px solid var(--border); flex-wrap: wrap; }
@@ -1585,21 +1590,64 @@ function startFreshConversation() {
   sessionSelect.value = "";
 }
 
+// A long conversation is read a page at a time (GET .../messages?limit=&before=): the last TRANSCRIPT_PAGE messages on a switch, and
+// the page before the oldest one shown each time "Load earlier messages" is pressed. `index` is a message's place in the whole transcript.
+const TRANSCRIPT_PAGE = 50;
+
+function renderReplayedMessage(m) {
+  if (m.role === "user") addMessage("user", m.text);
+  else if (m.role === "system") addMessage("system", m.text);
+  else addStaticAssistantMessage(m.text);
+}
+
+// Puts a "Load earlier messages" button above the transcript when messages before `oldestIndex` exist, or takes it away when none do.
+function offerEarlierMessages(tid, oldestIndex) {
+  const existing = messagesEl.querySelector(".load-earlier");
+  if (existing) existing.remove();
+  if (oldestIndex <= 0) return;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "load-earlier";
+  button.textContent = "Load earlier messages";
+  button.addEventListener("click", () => loadEarlierMessages(tid, oldestIndex, button));
+  messagesEl.insertBefore(button, messagesEl.firstChild);
+}
+
+async function loadEarlierMessages(tid, before, button) {
+  button.disabled = true;
+  try {
+    const response = await fetch(
+      `/chat/sessions/${encodeURIComponent(tid)}/messages?limit=${TRANSCRIPT_PAGE}&before=${before}`,
+      { headers: headers() },
+    );
+    if (!response.ok || tid !== threadId) { button.disabled = false; return; }
+    const older = await response.json();
+    // The renderers append at the end, so render, then move what they added to just under the button, and keep the
+    // message the person was reading where it was.
+    const firstShown = button.nextSibling;
+    const heightBefore = messagesEl.scrollHeight;
+    const countBefore = messagesEl.children.length;
+    for (const m of older) renderReplayedMessage(m);
+    for (const el of Array.from(messagesEl.children).slice(countBefore)) messagesEl.insertBefore(el, firstShown);
+    messagesEl.scrollTop += messagesEl.scrollHeight - heightBefore;
+    offerEarlierMessages(tid, older.length ? older[0].index : 0);
+  } catch (_err) {
+    button.disabled = false;
+  }
+}
+
 async function switchToSession(newThreadId) {
   resetTurnUi();
   threadId = newThreadId;
   messagesEl.innerHTML = "";
   try {
-    const response = await fetch(`/chat/sessions/${encodeURIComponent(newThreadId)}/messages`, {
+    const response = await fetch(`/chat/sessions/${encodeURIComponent(newThreadId)}/messages?limit=${TRANSCRIPT_PAGE}`, {
       headers: headers(),
     });
     if (!response.ok) return;
     const transcript = await response.json();
-    for (const m of transcript) {
-      if (m.role === "user") addMessage("user", m.text);
-      else if (m.role === "system") addMessage("system", m.text);
-      else addStaticAssistantMessage(m.text);
-    }
+    for (const m of transcript) renderReplayedMessage(m);
+    if (transcript.length) offerEarlierMessages(newThreadId, transcript[0].index);
     messagesEl.scrollTop = messagesEl.scrollHeight;
     await checkPendingApproval(newThreadId);
   } catch (_err) {

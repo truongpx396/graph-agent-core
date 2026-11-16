@@ -14,3 +14,12 @@ POST /chat/stream/queued the endpoint no longer allows anonymous access and now 
 POST /ingest/upload the endpoint no longer allows anonymous access and now only accepts `bearerAuth` [api-security-anonymous-access-removed]. This endpoint inherits the API's top-level security requirements.
 POST /v1/decide added required request body
 POST /v1/embeddings added required request body
+POST /chat/cancel the `thread_id` request property's maxLength was set to `200`
+POST /chat/cancel the `thread_id` request property's minLength was set to `1`
+POST /chat/resume the `thread_id` request property's maxLength was set to `200`
+POST /chat/resume the `thread_id` request property's minLength was set to `1`
+POST /chat/stream/queued the `images` request property's maxItems was set to `4`
+POST /chat/stream/queued the `images/items/` request property's maxLength was set to `7000000`
+POST /chat/stream/queued the `message` request property's maxLength was set to `32000`
+POST /chat/stream/queued the `thread_id` request property's maxLength was set to `200`
+POST /chat/stream/queued the `thread_id` request property's minLength was set to `1`

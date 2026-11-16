@@ -16,6 +16,7 @@ import redis.asyncio as redis
 
 from app.adapters.outbound.redis.queue import read_events
 from app.core import metrics
+from app.core.errors import ErrorCode, ErrorEnvelope
 from app.core.security import SecurityCtx
 from app.platform.redis_client import get_client
 from app.ports.outbound.jobs import INGEST_REQUESTS_STREAM, ingest_results_stream_key
@@ -45,6 +46,7 @@ async def publish_ingest_request(
             "content_type": content_type,
             "ctx": ctx,
             "topic": topic,
+            "enqueued_at": time.time(),  # the worker observes how long the job waited (agent_queue_wait_seconds, R17)
         }
     )
     await client.xadd(INGEST_REQUESTS_STREAM, {"payload": payload})
@@ -77,13 +79,14 @@ async def read_results(
         if deadline is not None and time.monotonic() >= deadline:
             # Same signal as app/adapters/outbound/redis/queue.py::read_results — see there.
             metrics.agent_worker_unreachable_total.labels(queue="ingest").inc()
-            yield {
-                "type": "error",
-                "content": (
+            envelope = ErrorEnvelope(
+                code=ErrorCode.WORKER_UNREACHABLE,
+                message=(
                     f"No response for job {job_id!r} after "
                     f"{first_event_deadline_seconds:.0f}s — is an ingest-worker running?"
                 ),
-            }
+            )
+            yield {"type": "error", "content": envelope.message, **envelope.to_dict()}
             return
         response = await read_events(client, key, last_id, block_ms)  # retried after a connection error, like the chat queue's reader
         if not response:

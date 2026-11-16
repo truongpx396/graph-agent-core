@@ -93,10 +93,12 @@ from app.adapters.inbound.workers.streams import (
     clear_cancel_flag,
     ensure_consumer_group,
     is_cancelled,
+    observe_queue_wait,
     pause_after_failed_read,
     publish_dead_letter,
     publish_result,
     reclaim_stale_entries,
+    record_queue_depth,
     release_consumer,
     release_slots,
     release_thread_lock,
@@ -139,6 +141,7 @@ from app.platform.logging_config import bind_request_id, configure_logging
 from app.platform.profiling import start_profiling
 from app.platform.redis_client import UNAVAILABLE_ERRORS, StreamReadResponse, get_client
 from app.platform.telemetry import configure_telemetry
+from app.platform.worker_heartbeat import beat
 from app.ports.outbound.domains import domain_catalog
 from app.ports.outbound.jobs import (
     CONSUMER_GROUP,
@@ -357,6 +360,7 @@ async def process_request(client: redis.Redis, entry_id: str, fields: dict[str, 
     payload = json.loads(fields["payload"])
     request_id = payload["request_id"]
     kind = payload.get("kind", "turn")
+    observe_queue_wait("agent", payload)  # how long this job waited for a worker (R17)
     handler = _DISPATCH.get(kind)
     lock_token = uuid.uuid4().hex
     lock_released = False
@@ -591,6 +595,7 @@ async def _reclaim_loop(client: redis.Redis, stop_event: asyncio.Event, *, graph
     slow reclaim pass is no reclaim pass ever again for this process."""
     min_idle_ms = AGENT_WORKER_RECLAIM_IDLE_SECONDS * 1000
     while not stop_event.is_set():
+        beat("agent", "reclaim")  # proof of life for the container's health check (app/platform/worker_heartbeat.py)
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=WORKER_RECLAIM_INTERVAL_SECONDS)
             return  # stop_event was set during the wait — shutting down
@@ -608,6 +613,7 @@ async def _reclaim_loop(client: redis.Redis, stop_event: asyncio.Event, *, graph
                 for entry_id, fields in entries:
                     await _handle_reclaimed_job(client, entry_id, fields, graph=graph, domain=domain)
                 await trim_stale_entries(client, requests_stream_key(domain), max_age_seconds=REQUESTS_STREAM_MAX_AGE_SECONDS)
+                await record_queue_depth(client, requests_stream_key(domain), CONSUMER_GROUP, domain)  # the gauges the backlog alert reads (R17)
             except Exception as exc:  # noqa: BLE001 - one bad pass must not end reclaim for this process's whole life, nor for the other domains
                 logger.warning("agent_worker_reclaim_pass_failed", extra={"domain": domain, "error_class": type(exc).__name__})
 
@@ -652,7 +658,10 @@ async def run() -> None:
 
     read_backoff = READ_BACKOFF_START_SECONDS
     while not stop_event.is_set():
-        free = await claim_free_slots(semaphore, stop_event, limit=_MAX_CONCURRENCY, wait_seconds=_BLOCK_MS / 1000)
+        beat("agent", "read")
+        free = await claim_free_slots(
+            semaphore, stop_event, limit=_MAX_CONCURRENCY, wait_seconds=_BLOCK_MS / 1000, on_wait=lambda: beat("agent", "read")
+        )
         if not free:
             continue  # told to stop while every slot was busy
         try:

@@ -32,5 +32,7 @@ async def publish_result(client: redis.Redis, job_id: str, event: dict[str, Any]
     error) to this job's results stream, refreshing its TTL on every
     write so a slow extraction doesn't let the stream expire mid-job."""
     key = ingest_results_stream_key(job_id)
-    await client.xadd(key, {"payload": json.dumps(event)})
-    await client.expire(key, RESULTS_STREAM_TTL_SECONDS)
+    async with client.pipeline(transaction=True) as pipe:  # one round trip, and no stream left without an expiry (the chat worker's publish_result, R08)
+        pipe.xadd(key, {"payload": json.dumps(event)})
+        pipe.expire(key, RESULTS_STREAM_TTL_SECONDS)
+        await pipe.execute()

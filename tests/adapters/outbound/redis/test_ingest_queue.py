@@ -6,6 +6,7 @@ works unchanged since ingest_queue.py talks to Redis the same way
 queue.py does, just against different stream/group names.
 """
 import json
+import time
 
 import pytest
 
@@ -13,6 +14,12 @@ from app.adapters.inbound.workers import ingest_streams
 from app.adapters.outbound.redis import ingest_queue
 from app.ports.outbound import jobs
 from tests.adapters.outbound.redis.test_queue import FakeRedis
+
+
+def _assert_stamped_just_now(stamp):
+    """Every job the API publishes carries `enqueued_at` (epoch seconds): the worker's `agent_queue_wait_seconds` is measured from it (PRODUCTION_REVIEW.md R17)."""
+    assert isinstance(stamp, float) and abs(time.time() - stamp) < 30
+
 
 
 class TestEnsureConsumerGroup:
@@ -50,6 +57,7 @@ class TestPublishIngestRequest:
         entries = client.streams[jobs.INGEST_REQUESTS_STREAM]
         assert len(entries) == 1
         payload = json.loads(entries[0][1]["payload"])
+        _assert_stamped_just_now(payload.pop("enqueued_at"))
         assert payload == {
             "job_id": "j1",
             "object_key": "ecorp/abc-report.pdf",
@@ -97,6 +105,14 @@ class TestPublishResultAndReadResults:
         events = [event async for event in ingest_queue.read_results(client, "j-blip")]
 
         assert events == [{"type": "done", "chunks": 3}]
+
+    async def test_an_upload_nobody_took_ends_with_a_worker_unreachable_error(self):
+        client = FakeRedis()
+
+        events = [event async for event in ingest_queue.read_results(client, "j-nobody", first_event_deadline_seconds=0.001)]
+
+        assert [(e["type"], e["code"]) for e in events] == [("error", "worker_unreachable")]
+        assert "ingest-worker" in events[0]["content"]
 
     async def test_read_results_stops_at_an_error_event_too(self):
         client = FakeRedis()
