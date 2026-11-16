@@ -245,3 +245,19 @@ async def test_the_queue_gauges_read_a_real_servers_lag_and_pending_and_ack_and_
 
     await streams.record_queue_depth(client, stream, jobs.CONSUMER_GROUP, "integration-test")
     assert metrics.agent_queue_lag is not None  # set without raising against the real reply shape
+
+
+async def test_a_conversation_is_busy_exactly_while_a_worker_holds_its_real_lock_and_asking_does_not_take_it():
+    """`is_thread_busy` against the lock the workers really take (`SET NX EX`, compare-and-delete on release): the delete of a conversation reads it
+    (PRODUCTION_REVIEW.md R11) and must never be the one to hold or free it."""
+    client = queue.get_client()
+    thread = f"busy-{uuid.uuid4().hex}"
+
+    assert await queue.is_thread_busy(client, thread) is False
+    assert await streams.acquire_thread_lock(client, thread, "worker-1") is True
+    assert await queue.is_thread_busy(client, thread) is True
+    assert await streams.acquire_thread_lock(client, thread, "worker-2") is False, "asking is not holding: the lock is still worker-1's"
+    assert await client.get(jobs.thread_lock_key(thread)) == "worker-1"
+
+    await streams.release_thread_lock(client, thread, "worker-1")
+    assert await queue.is_thread_busy(client, thread) is False

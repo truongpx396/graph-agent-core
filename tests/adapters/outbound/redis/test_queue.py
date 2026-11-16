@@ -208,6 +208,9 @@ class FakeRedis:
     async def get(self, key):
         return self.kv.get(key)
 
+    async def exists(self, *keys):
+        return sum(1 for key in keys if key in self.kv or key in self.streams)
+
     async def eval(self, script, numkeys, *keys_and_args):
         """Only ever called with streams.py's own two lock scripts: `_RELEASE_LOCK_SCRIPT` (compare-and-delete) and `_RENEW_LOCK_SCRIPT` (compare-and-
         extend). Reimplements just those, not a real Lua interpreter, same "just enough" scope as every other method here."""
@@ -849,3 +852,46 @@ class TestTurnQueueAdapter:
         monkeypatch.setattr(client, "ping", down)
         with pytest.raises(ConnectionError):
             await turn_queue.ping()
+
+
+class TestIsThreadBusy:
+    """PRODUCTION_REVIEW.md R11: the owner's delete of a conversation refuses while a turn holds its lock. It READS the lock; it never takes or frees it."""
+
+    async def test_a_conversation_whose_lock_a_worker_holds_is_busy(self):
+        client = FakeRedis()
+        await streams.acquire_thread_lock(client, "t1", "token-a")
+
+        assert await queue.is_thread_busy(client, "t1") is True
+
+    async def test_a_conversation_nobody_holds_is_not_busy_including_after_the_worker_releases_it(self):
+        client = FakeRedis()
+        assert await queue.is_thread_busy(client, "t1") is False
+
+        await streams.acquire_thread_lock(client, "t1", "token-a")
+        await streams.release_thread_lock(client, "t1", "token-a")
+
+        assert await queue.is_thread_busy(client, "t1") is False
+
+    async def test_another_conversations_lock_does_not_make_this_one_busy(self):
+        client = FakeRedis()
+        await streams.acquire_thread_lock(client, "t2", "token-a")
+
+        assert await queue.is_thread_busy(client, "t1") is False
+
+    async def test_asking_changes_nothing(self):
+        client = FakeRedis()
+        await streams.acquire_thread_lock(client, "t1", "token-a")
+        before = dict(client.kv), dict(client.expiries)
+
+        await queue.is_thread_busy(client, "t1")
+        await queue.is_thread_busy(client, "t9")
+
+        assert (dict(client.kv), dict(client.expiries)) == before
+
+    async def test_the_adapter_class_reads_through_the_clients_it_is_given(self, monkeypatch):
+        client = FakeRedis()
+        await streams.acquire_thread_lock(client, "t1", "token-a")
+        monkeypatch.setattr(queue, "get_client", lambda: client)
+
+        assert await queue.RedisTurnQueue().is_thread_busy("t1") is True
+        assert await queue.RedisTurnQueue().is_thread_busy("t2") is False

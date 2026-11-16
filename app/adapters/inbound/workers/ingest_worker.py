@@ -103,6 +103,12 @@ def _make_progress_reporter(client: redis.Redis, job_id: str) -> Callable[[int, 
     return on_progress
 
 
+def _queued_at(payload: dict[str, Any]) -> float | None:
+    """When the API queued the job (`enqueued_at`, epoch seconds), or None for a job queued before the field existed (the ingest then counts it as now)."""
+    value = payload.get("enqueued_at")
+    return None if isinstance(value, bool) or not isinstance(value, int | float) else float(value)
+
+
 async def process_job(client: redis.Redis, entry_id: str, fields: dict[str, Any]) -> None:
     """Run one ingest job and publish its outcome — always ack, even on
     failure, same shape as `agent_worker.py::process_request`. Not because
@@ -137,9 +143,13 @@ async def process_job(client: redis.Redis, entry_id: str, fields: dict[str, Any]
                 text,
                 title=Path(filename).stem,
                 ctx=payload["ctx"],
-                source=f"upload:{filename}",
+                source=ingestor.upload_source(filename),
                 topic=payload.get("topic"),
                 on_progress=on_progress,
+                # The upload replaces the older chunks of the same file name, ordered by when it was QUEUED: a job a crash made run again is not newer
+                # than an upload made after it (PRODUCTION_REVIEW.md R18). The job id is stable across a reclaim, so the retry lands on the same ids.
+                ingest_id=job_id,
+                queued_at=_queued_at(payload),
             )
             await publish_result(client, job_id, {"type": "done", "chunks": chunks})
         except Exception as exc:  # noqa: BLE001 - the queue must keep moving regardless

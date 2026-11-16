@@ -27,5 +27,11 @@ class Checkpointing(Protocol):
         """Releases what `open` acquired. A no-op when nothing was opened."""
         ...
 
+    async def delete_thread(self, thread_id: str) -> None:
+        """Removes every checkpoint and pending write of one conversation. Idempotent: a thread with none is not an error. Raises when `open` has not run in
+        this process or the store cannot be reached. The caller decides that the conversation may go (retention, or its owner asking): this does not check
+        who owns `thread_id` (PRODUCTION_REVIEW.md R11)."""
+        ...
+
 
 checkpointing: Slot[Checkpointing] = Slot("checkpointing", Checkpointing)

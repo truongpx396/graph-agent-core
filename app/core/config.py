@@ -323,6 +323,11 @@ class Settings(BillingSettings):
     # finished is kept whatever its age (see the module), and the wallet's debits are never touched.
     usage_event_retention_days: int = Field(default=400, ge=USAGE_EVENT_MIN_RETENTION_DAYS)
 
+    # How long a conversation is kept after its last message, for scripts/jobs/checkpoint_sweep.py (PRODUCTION_REVIEW.md R11): its checkpoints (every step of every turn,
+    # the whole message list again at each change) and its row in the session directory. 0 is off, the default, so nothing is deleted until an operator chooses a number.
+    # Not a billing record (the usage events and the wallet are untouched) and not the person's cross-session memories (MEMORY_RETENTION_DAYS).
+    checkpoint_retention_days: int = Field(default=0, ge=0)
+
     # What a turn does when the chat model has NO known price. Every dollar
     # ceiling above multiplies tokens by a price, so an unpriced model makes
     # them all read $0 — the failure is silent by construction. "allow" keeps
@@ -853,6 +858,7 @@ MAX_COST_USD_PER_PRINCIPAL_PER_MONTH = settings.max_cost_usd_per_principal_per_m
 PRICING_REFRESH_SECONDS = settings.pricing_refresh_seconds
 UNPRICED_MODEL_POLICY = settings.unpriced_model_policy
 USAGE_EVENT_RETENTION_DAYS = settings.usage_event_retention_days
+CHECKPOINT_RETENTION_DAYS = settings.checkpoint_retention_days
 BUDGET_CHECK_FAILURE_POLICY = settings.budget_check_failure_policy
 USAGE_RECONCILE_TOLERANCE_USD = settings.usage_reconcile_tolerance_usd
 USAGE_RECONCILE_TOLERANCE_PCT = settings.usage_reconcile_tolerance_pct

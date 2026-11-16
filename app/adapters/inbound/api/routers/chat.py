@@ -15,14 +15,15 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.adapters.inbound.api.deps import get_ctx, get_domain
 from app.adapters.inbound.api.events import ChatEvent, EventStreamResponse
 from app.adapters.inbound.api.schemas import (
     CancelRequest,
     ChatRequest,
+    ErrorResponse,
     PendingApproval,
     ResumeRequest,
     SessionMessage,
@@ -34,6 +35,7 @@ from app.core.config import (
     CHAT_FIRST_RESPONSE_DEADLINE_SECONDS,
     CHAT_SUBMIT_DEDUP_TTL_SECONDS,
 )
+from app.core.errors import ErrorCode, ErrorEnvelope
 from app.core.security import SecurityCtx
 from app.ports.outbound.jobs import RESULTS_STREAM_TTL_SECONDS, turn_queue
 
@@ -269,6 +271,33 @@ async def chat_sessions(
     as Policy.lower's memory scoping (pattern 49 added the domain part), so
     switching domains in the web UI also switches which sessions list."""
     return await sessions.list_sessions(ctx, domain)  # type: ignore[return-value]  # response_model coerces dict -> SessionSummary at the HTTP boundary; a direct Python call (see tests/adapters/inbound/api/test_api.py) intentionally gets the raw dicts back
+
+
+@router.delete(
+    "/chat/sessions/{thread_id}",
+    status_code=204,
+    response_class=Response,
+    tags=["sessions"],
+    responses={
+        404: {"description": "No such session for the caller (another person's session reads the same as an unknown one)."},
+        409: {"model": ErrorResponse, "description": "`thread_busy`: a turn is running on this session. Try again when it has finished or been cancelled."},
+    },
+)
+async def chat_delete_session(thread_id: str, ctx: SecurityCtx = Depends(get_ctx), domain: str = Depends(get_domain)) -> Response:
+    """Delete one of the caller's own sessions: its saved conversation (every checkpoint) and its entry in the session list.
+
+    `session_belongs_to` is checked first, as on the GET routes, and is the whole authorization boundary: the saved conversation has no tenant, person or
+    domain of its own. A session with a turn running on it is refused (409, `thread_busy`) rather than pulled out from under the turn; one paused at an
+    approval is deleted, and the approval can no longer be given. A message sent on the id afterwards starts a new conversation. This does not remove the
+    copies of the text that Langfuse or the gateway's logs may hold."""
+    try:
+        found = await sessions.delete_session(ctx, thread_id, domain)
+    except sessions.SessionBusyError:
+        busy = ErrorEnvelope(ErrorCode.THREAD_BUSY, "A turn is running on this conversation. Try again when it has finished.")
+        return JSONResponse(busy.to_dict(), status_code=409)
+    if not found:
+        raise HTTPException(status_code=404, detail="session not found")
+    return Response(status_code=204)
 
 
 @router.get("/chat/sessions/{thread_id}/messages", response_model=list[SessionMessage], tags=["sessions"])

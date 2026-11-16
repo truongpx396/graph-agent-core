@@ -1,0 +1,33 @@
+meta {
+  name: Delete a document
+  type: http
+  seq: 3
+}
+
+delete {
+  url: {{baseUrl}}/ingest/documents
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "filename": "sample.pdf"
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("the document's chunks were removed", function () {
+    expect(res.getBody().chunks_removed).to.be.greaterThan(0);
+  });
+}
+
+docs {
+  Removes what `Upload a document` added: every chunk of that file name in the signed-in tenant's knowledge base, and the stored copies of the file. Run it once the
+  upload's job has finished (`Follow an upload` shows `done`); before that there is nothing to delete and the answer is 404. The tenant is the caller's own, never
+  a field of the request. An answer already cached may still quote the document for up to an hour.
+}

@@ -1,0 +1,21 @@
+meta {
+  name: Delete a session
+  type: http
+  seq: 4
+}
+
+delete {
+  url: {{baseUrl}}/chat/sessions/{{threadId}}
+  body: none
+  auth: inherit
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  Deletes one of the caller's own sessions: the saved conversation and its entry in the session list. A session that is not the caller's is a 404, the same as an unknown one
+  (so is one already deleted). While a turn is running on it the answer is a 409 with `code: thread_busy`: try again when the turn has finished or been cancelled. A message sent
+  on the same `thread_id` afterwards starts a new conversation. This does not remove copies of the text held by Langfuse or the gateway's logs.
+}

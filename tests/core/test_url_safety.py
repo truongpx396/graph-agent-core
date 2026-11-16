@@ -17,7 +17,12 @@ import time
 
 import pytest
 
-from app.core.url_safety import UnsafeURLError, assert_safe_url, assert_safe_url_async
+from app.core.url_safety import (
+    UnsafeURLError,
+    assert_safe_url,
+    assert_safe_url_async,
+    resolve_checked_async,
+)
 
 
 def _resolves_to(monkeypatch, *addresses: str) -> None:
@@ -207,3 +212,35 @@ async def test_control_the_sync_guard_called_from_async_code_does_stall_the_loop
 
     assert gap >= _SLOW_RESOLVE_SECONDS * 0.9
 
+
+
+# --- The addresses a caller may connect to (PRODUCTION_REVIEW.md R20) -----------------------------------------------------
+
+
+async def test_the_checked_addresses_are_returned_in_resolver_order_without_repeats(monkeypatch):
+    """A caller that connects to one of these cannot be rebound to an internal address after the check: it never resolves the name again."""
+    # A resolver answers one record per socket type, so the same address commonly comes back two or three times.
+    _resolves_to(monkeypatch, "93.184.216.34", "93.184.216.35", "93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946")
+
+    assert await resolve_checked_async("https://example.com/a") == [
+        "93.184.216.34", "93.184.216.35", "2606:2800:220:1:248:1893:25c8:1946",
+    ]
+
+
+async def test_one_internal_address_among_public_ones_refuses_the_whole_set_and_returns_nothing(monkeypatch):
+    """Returning only the public ones would be a quiet filter: the name is still attacker-controlled, so it is refused, not trimmed."""
+    _resolves_to(monkeypatch, "93.184.216.34", "10.0.0.5")
+
+    with pytest.raises(UnsafeURLError, match="disallowed address"):
+        await resolve_checked_async("https://example.com/a")
+
+
+async def test_an_unresolvable_or_non_https_host_has_no_addresses_to_return(monkeypatch):
+    def nxdomain(*args, **kwargs):
+        raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+
+    monkeypatch.setattr(socket, "getaddrinfo", nxdomain)
+    with pytest.raises(UnsafeURLError, match="could not resolve"):
+        await resolve_checked_async("https://nowhere.invalid/a")
+    with pytest.raises(UnsafeURLError):
+        await resolve_checked_async("http://example.com/a")

@@ -5,6 +5,8 @@ It is not the usage table (that one no-ops on a zero-token or rejected turn and 
 vanish from the switcher) and not the checkpointer's `checkpoints` table (no tenant or principal column to scope by, and a title parsed out of
 its blob format would be fragile). Statements only: whether a write may fail a turn is the application's call.
 """
+import builtins
+from datetime import datetime
 from typing import Any
 
 from app.platform.sql_store import fetch_dicts, get_connection
@@ -54,3 +56,30 @@ class PgSessionStore:
                 (tenant, principal, domain),
             )
             return await fetch_dicts(cur)
+
+    async def list_inactive(self, before: datetime, limit: int, after: tuple[datetime, str] | None = None) -> builtins.list[dict[str, Any]]:  # `list` is a method of this class: the builtin by name
+
+        # Keyset order on (last_active_at, thread_id): stable when two threads share a timestamp, and a page never repeats a row whether or not the caller
+        # deleted the last one. The table's index leads with the tenant, so this reads by time with a scan; fine for a job that runs off-peak.
+        columns = "SELECT thread_id, tenant, principal, domain, last_active_at FROM chat_sessions WHERE last_active_at < %s"
+        async with get_connection() as conn:
+            if after is None:
+                cur = await conn.execute(f"{columns} ORDER BY last_active_at, thread_id LIMIT %s", (before, limit))
+            else:
+                cur = await conn.execute(
+                    f"{columns} AND (last_active_at, thread_id) > (%s, %s) ORDER BY last_active_at, thread_id LIMIT %s",
+                    (before, after[0], after[1], limit),
+                )
+            return await fetch_dicts(cur)
+
+    async def delete(
+        self, tenant: str, principal: str, thread_id: str, domain: str, *, inactive_before: datetime | None = None
+    ) -> bool:
+        sql = "DELETE FROM chat_sessions WHERE thread_id = %s AND tenant = %s AND principal = %s AND domain = %s"
+        params: tuple[Any, ...] = (thread_id, tenant, principal, domain)
+        if inactive_before is not None:
+            sql += " AND last_active_at < %s"
+            params += (inactive_before,)
+        async with get_connection() as conn:
+            cur = await conn.execute(sql, params)
+            return cur.rowcount > 0

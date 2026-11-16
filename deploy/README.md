@@ -449,11 +449,60 @@ opposite drifts on adjacent days: that signature is the straddle, not a loss.
 table spend is read from. It takes no arguments; the window is the setting. It prints what it did and says when it stopped at its ceiling (run it again). Nothing schedules it: run it from cron once your retention
 policy is decided. The billing package has its own sweep for its own table (`make billing-usage-sweep`, in the billing [runbook](../packages/billing/docs/RUNBOOK.md)).
 
+## Trimming conversations
+
+**`make checkpoint-sweep`** deletes a conversation (every checkpoint of it, and its row in the session directory) `CHECKPOINT_RETENTION_DAYS` after its last message. **The default is 0, which is off**:
+nothing is deleted until you choose a number, and until you do, the checkpointer's tables grow with every step of every turn (each change to the message list stores the whole list again). Run it by hand
+with `ARGS=--dry-run` first: it prints how many conversations it would delete and changes nothing. A real run needs the checkpointer database (it opens the saver itself); it prints what it did, and says when it
+stopped at its ceiling of 50,000 conversations (run it again). Nothing schedules it; from cron once the retention policy is decided:
+
+```
+30 3 * * * cd /opt/graph-agent-core && docker compose --project-directory . -f deploy/compose/docker-compose.prod.yml run --rm --no-deps -T api python -m scripts.jobs.checkpoint_sweep
+```
+
+(`-T` because cron has no terminal, and `api` because it is the service the other one-off commands in this file run from. That line was written from the compose file and the other commands here, not run on a droplet: try it by hand with `--dry-run` before relying on it.)
+
+A person can also delete one of their own conversations with `DELETE /chat/sessions/{id}` (it refuses while a turn is running on it). That route acts only for the signed-in person: there is no operator route that deletes one named person's conversations on request, so a deletion request has this sweep (everything past a number of days) or the person's own delete to rely on.
+
+It does not touch the usage events (`make usage-events-sweep`), the wallet, a person's cross-session memories, the gateway's spend logs (`store_prompts_in_spend_logs` is off in production) or Langfuse, and it
+does not trim old checkpoints inside a conversation that is still in use. A conversation that gets a message while the sweep runs keeps its row, but may lose its older history. One that was paused at an
+approval is deleted with the rest, and the approval can no longer be given, which runs nothing.
+
 ## Credit billing (optional)
 
 Everything about credit billing (turning it on, changing a wallet, reconciling the wallet, selling a credit pack with Stripe or Polar, its dashboard and alerts) is the billing package's:
 [`packages/billing/docs/RUNBOOK.md`](../packages/billing/docs/RUNBOOK.md). Deployment specifics that are this repository's: apply the package's schema to an existing volume with `make billing-migrate`
 (`make billing-migrate-status ARGS=--check` is the deploy gate), before the code that uses it, and start its workers from the app image as shown above.
+
+## The crawler's network
+
+The crawler (`crawl4ai`, headless Chromium; `app/adapters/outbound/crawl4ai/web_crawler.py`) is **not in the production stack, and must not be added to it as it is.** The app checks the first
+URL it hands over (`app/core/url_safety.py`); the browser then follows redirects and loads sub-resources by itself, so a page that passes the check can send it to `http://qdrant:6333`,
+`http://litellm:4000` or the droplet's metadata address. Isolation for that is the network's job, not the application's (PRODUCTION_REVIEW.md R20, specs/009 A1).
+
+What the development compose file does (`deploy/compose/docker-compose.yml`): `crawl4ai` is alone on its own `crawler` network, and the three app roles that call it (`api`, `agent-worker`,
+`ingest-worker`) are on `crawler` and on `default`. Checked on a real Docker daemon with stand-in containers: a container on `crawler` alone cannot resolve or reach one on `default`, by name
+or by address; an app container on both reaches both.
+
+What that does **not** do, and what to add before the crawler runs anywhere that matters:
+
+1. **Name and pin the network's subnet** in the production compose file (`ipam: config: [{subnet: 172.30.50.0/24}]`), so a firewall rule can name it. Publish no port for the crawler; the app reaches it by its
+   service name, and `CRAWL4AI_API_TOKEN` is set (crawl4ai 0.9+ refuses to listen beyond loopback without one).
+2. **Block what a bridge network still reaches.** A bridge network has internet egress, and on a cloud droplet that includes the provider's metadata service (`169.254.169.254`: instance credentials)
+   and the VPC's private addresses. Docker offers no option for this; it is a host firewall rule in the `DOCKER-USER` chain, scoped to the crawler's subnet, for example:
+
+   ```
+   sudo iptables -I DOCKER-USER -s 172.30.50.0/24 -d 169.254.169.254 -j DROP
+   sudo iptables -I DOCKER-USER -s 172.30.50.0/24 -d 10.0.0.0/8 -j DROP
+   sudo iptables -I DOCKER-USER -s 172.30.50.0/24 -d 172.16.0.0/12 ! -d 172.30.50.0/24 -j DROP
+   sudo iptables -I DOCKER-USER -s 172.30.50.0/24 -d 192.168.0.0/16 -j DROP
+   ```
+
+   Make them persistent (`iptables-persistent`, or a systemd unit that runs before Docker) and confirm from inside the container (`docker exec <crawler> curl -m 3 http://169.254.169.254/`) that each one times out.
+   **These rules were not run on a droplet from here**: treat them as the shape of the control, and test them where they will apply.
+3. **The development stack is weaker than this.** It publishes its infrastructure on the host's ports (Qdrant, Redis, Postgres and others), and a bridge network reaches the host through its gateway
+   (`host.docker.internal` on Docker Desktop), so on a developer's machine the crawler can still reach those published ports. Do not point the dev crawler at a page you do not trust.
+4. The application's own check on the first URL stays: it is the first line, not the only one.
 
 ## Security scanning in front of all this
 

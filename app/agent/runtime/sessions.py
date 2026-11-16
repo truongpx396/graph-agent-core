@@ -15,6 +15,8 @@ import logging
 from typing import Any
 
 from app.core.security import SecurityCtx, valid_ctx
+from app.ports.outbound.checkpointing import checkpointing
+from app.ports.outbound.jobs import turn_queue
 from app.ports.outbound.sessions import session_store
 
 logger = logging.getLogger(__name__)
@@ -110,3 +112,26 @@ async def session_belongs_to(ctx: SecurityCtx | None, thread_id: str, domain: st
     if not valid_ctx(ctx) or not thread_id:
         return False
     return await session_store.get().owns(ctx["tenant"], ctx["principal"], thread_id, domain)
+
+
+class SessionBusyError(Exception):
+    """A turn is running on the conversation, so it cannot be deleted now (`ErrorCode.THREAD_BUSY` at the API)."""
+
+
+async def delete_session(ctx: SecurityCtx | None, thread_id: str, domain: str = "ecorp") -> bool:
+    """Deletes one of the caller's own conversations: its checkpoints and its row in the session directory (PRODUCTION_REVIEW.md R11, the owner's side of
+    `retention.py`). `False` when there is no such conversation for this tenant, person and domain, which reads the same as an unknown id: another person's
+    thread is never confirmed to exist. Raises `SessionBusyError` while a turn holds the conversation's lock.
+
+    Ownership is checked FIRST: the checkpointer has no tenant, person or domain to scope by, so nothing may reach `delete_thread` for an id that
+    `session_belongs_to` did not clear. Checkpoints go before the row, so a failure between the two leaves a row the owner can delete again.
+
+    A message sent in the moments between the busy check and the delete would run on a conversation whose checkpoints were just deleted: it starts a new one
+    under the same id. The lock is the workers' to take, so this route does not hold it; the window is those moments, not the turn."""
+    if not valid_ctx(ctx) or not await session_belongs_to(ctx, thread_id, domain):
+        return False
+    if await turn_queue.get().is_thread_busy(thread_id):
+        raise SessionBusyError(thread_id)
+    await checkpointing.get().delete_thread(thread_id)
+    await session_store.get().delete(ctx["tenant"], ctx["principal"], thread_id, domain)
+    return True

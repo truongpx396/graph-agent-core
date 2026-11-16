@@ -11,6 +11,7 @@ from app.core.config import (
     CHAT_MAX_IMAGES,
     CHAT_MESSAGE_MAX_CHARS,
 )
+from app.core.errors import ErrorCode
 
 # A conversation id becomes part of several Redis keys and a checkpoint's primary key. No character pattern: a Telegram conversation id embeds a principal
 # (`telegram:<principal>:<chat>`), so only the length is bounded (PRODUCTION_REVIEW.md R14).
@@ -93,6 +94,36 @@ class IngestUploadResult(BaseModel):
             "publish failure) — other files in the same request still succeed "
             "independently; see ingest_upload's own docstring."
         ),
+    )
+
+
+class ErrorResponse(BaseModel):
+    """The envelope the front door answers with, for an error the API itself reports over plain HTTP (the streaming routes report theirs as an `error` event)."""
+
+    code: ErrorCode = Field(..., description="What went wrong, as a stable code a client can switch on.")
+    message: str = Field(..., description="Written for the person; never an exception's text.")
+    details: dict[str, Any] | None = Field(None, description="Extra fields for some codes.")
+
+
+class IngestDeleteRequest(BaseModel):
+    filename: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        description=(
+            "The file name the document was uploaded under, as `IngestUploadResult.filename` returned it (any directory part is dropped, as an upload drops it). "
+            "The tenant is the caller's own and is never read from the request."
+        ),
+    )
+
+
+class IngestDeleteResult(BaseModel):
+    filename: str = Field(..., description="The file name that was deleted, after any directory part was dropped.")
+    chunks_removed: int = Field(..., ge=0, description="How many of the tenant's chunks of this document were removed from the knowledge base.")
+    objects_removed: int = Field(
+        ...,
+        ge=0,
+        description="How many stored copies of the uploaded file were removed (one per upload of this name, best effort: a copy that could not be removed is not counted out).",
     )
 
 

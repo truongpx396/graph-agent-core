@@ -16,13 +16,12 @@ import socket
 import threading
 from pathlib import Path
 
-import httpx
 import pytest
 
 from app.adapters.outbound.embeddings import embeddings
 from app.adapters.outbound.qdrant import qdrant_store
-from app.adapters.outbound.web import page_fetch
 from app.ingestion import ingestor
+from app.ports.outbound.web import FetchedPage, PageFetchFailedError, page_fetcher
 from tests.conftest import TEST_CTX, metric_value
 
 
@@ -332,29 +331,18 @@ async def _allow_any_url(url):
     return None
 
 
-class _FakeResponse:
-    def __init__(self, status_code=200, content=b"", text="", headers=None):
-        self.status_code = status_code
-        self.content = content
-        self.text = text
-        self.headers = headers or {}
+class _Fetcher:
+    """The `PageFetcher` port, faked: what `ingest_url` does with a page is under test here, not how httpx fetches one (that is
+    tests/adapters/outbound/web/test_page_fetch.py)."""
 
+    def __init__(self, page=None, *, raises=None):
+        self.page, self.raises, self.calls = page, raises, []
 
-class _FakeClient:
-    def __init__(self, response, *, raise_on_get=None):
-        self._response = response
-        self._raise_on_get = raise_on_get
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc):
-        return False
-
-    async def get(self, url, headers=None):
-        if self._raise_on_get:
-            raise self._raise_on_get
-        return self._response
+    async def fetch(self, url, *, max_bytes):
+        self.calls.append((url, max_bytes))
+        if self.raises:
+            raise self.raises
+        return self.page
 
 
 class TestIngestUrl:
@@ -369,83 +357,58 @@ class TestIngestUrl:
     async def test_strips_html_before_ingesting(self, monkeypatch):
         monkeypatch.setattr(ingestor, "_assert_safe_url", _allow_any_url)
         html = "<html><body><script>evil()</script><p>Real content here.</p></body></html>"
-        fake_response = _FakeResponse(
-            status_code=200,
-            content=html.encode(),
-            text=html,
-            headers={"content-type": "text/html"},
-        )
-        monkeypatch.setattr(
-            page_fetch.httpx, "AsyncClient", lambda **kw: _FakeClient(fake_response)
-        )
         captured = {}
 
-        async def fake_ingest_text(text, title, ctx, source="text", topic=None):
+        async def fake_ingest_text(text, title, ctx, source="text", topic=None, *, ingest_id=None):
             captured["text"] = text
             captured["title"] = title
             captured["source"] = source
+            captured["ingest_id"] = ingest_id
             return 1
 
         monkeypatch.setattr(ingestor, "ingest_text", fake_ingest_text)
 
-        await ingestor.ingest_url("https://example.com/page", ctx=TEST_CTX)
+        with page_fetcher.overriding(_Fetcher(FetchedPage(200, "text/html", html, len(html)))):
+            await ingestor.ingest_url("https://example.com/page", ctx=TEST_CTX)
 
         assert "Real content here." in captured["text"]
         assert "evil()" not in captured["text"]
         assert captured["source"] == "url:https://example.com/page"
+        assert captured["ingest_id"], "a page is one document: fetching it again replaces the earlier copy (R18)"
 
     async def test_refuses_when_response_exceeds_size_limit(self, monkeypatch):
         monkeypatch.setattr(ingestor, "_assert_safe_url", _allow_any_url)
-        big = b"x" * (ingestor._MAX_URL_BYTES + 1)
-        fake_response = _FakeResponse(status_code=200, content=big, text="x", headers={})
-        monkeypatch.setattr(
-            page_fetch.httpx, "AsyncClient", lambda **kw: _FakeClient(fake_response)
-        )
 
-        with pytest.raises(ingestor.IngestRefusedError):
+        with page_fetcher.overriding(_Fetcher(FetchedPage(200, "", "", ingestor._MAX_URL_BYTES + 1))), pytest.raises(ingestor.IngestRefusedError):
             await ingestor.ingest_url("https://example.com/huge", ctx=TEST_CTX)
 
     async def test_refuses_on_http_error_status(self, monkeypatch):
         monkeypatch.setattr(ingestor, "_assert_safe_url", _allow_any_url)
-        fake_response = _FakeResponse(status_code=404, content=b"", text="", headers={})
-        monkeypatch.setattr(
-            page_fetch.httpx, "AsyncClient", lambda **kw: _FakeClient(fake_response)
-        )
 
-        with pytest.raises(ingestor.IngestRefusedError):
+        with page_fetcher.overriding(_Fetcher(FetchedPage(404, "", "", 0))), pytest.raises(ingestor.IngestRefusedError):
             await ingestor.ingest_url("https://example.com/missing", ctx=TEST_CTX)
 
     async def test_refuses_on_transport_error(self, monkeypatch):
         monkeypatch.setattr(ingestor, "_assert_safe_url", _allow_any_url)
-        monkeypatch.setattr(
-            page_fetch.httpx,
-            "AsyncClient",
-            lambda **kw: _FakeClient(None, raise_on_get=httpx.ConnectError("refused")),
-        )
 
-        with pytest.raises(ingestor.IngestRefusedError):
+        with page_fetcher.overriding(_Fetcher(raises=PageFetchFailedError("refused"))), pytest.raises(ingestor.IngestRefusedError):
             await ingestor.ingest_url("https://example.com/down", ctx=TEST_CTX)
 
-    async def test_does_not_follow_redirects(self, monkeypatch):
-        """SSRF-relevant: a validated URL redirecting to an unvalidated one
-        must not be silently followed — see _assert_safe_url's docstring."""
+    async def test_asks_the_fetcher_once_with_its_size_limit(self, monkeypatch):
+        """The fetcher streams and stops at `max_bytes` (PRODUCTION_REVIEW.md R20); `ingest_url` is what tells it how many. That a redirect is not followed is the
+        fetcher's own contract (test_page_fetch.py), not something to re-test through a fake of it."""
         monkeypatch.setattr(ingestor, "_assert_safe_url", _allow_any_url)
-        captured_kwargs = {}
-
-        def fake_client(**kwargs):
-            captured_kwargs.update(kwargs)
-            return _FakeClient(_FakeResponse(status_code=200, content=b"x", text="x"))
-
-        monkeypatch.setattr(page_fetch.httpx, "AsyncClient", fake_client)
 
         async def fake_ingest_text(*a, **kw):
             return 0
 
         monkeypatch.setattr(ingestor, "ingest_text", fake_ingest_text)
+        fetcher = _Fetcher(FetchedPage(200, "text/plain", "x", 1))
 
-        await ingestor.ingest_url("https://example.com/page", ctx=TEST_CTX)
+        with page_fetcher.overriding(fetcher):
+            await ingestor.ingest_url("https://example.com/page", ctx=TEST_CTX)
 
-        assert captured_kwargs["follow_redirects"] is False
+        assert fetcher.calls == [("https://example.com/page", ingestor._MAX_URL_BYTES)]
 
 
 class _FakeEmbedder:

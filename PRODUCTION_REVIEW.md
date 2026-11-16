@@ -135,16 +135,16 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R08 | Three Redis round trips for every token | P1 | S, then M | read from code | | done (step 1; step 2 needs a load-test measurement first) |
 | R09 | No payload index on the fields every vector search filters by | P1 | S | read from code | R03 | done |
 | R10 | One HTTP client per ML-service call; the same question embedded up to four times a turn | P1 | M | read from code | | done |
-| R11 | Checkpoints are kept forever; no way to delete a conversation | P1 | M | read from code | | open |
+| R11 | Checkpoints are kept forever; no way to delete a conversation | P1 | M | read from code | | done (retention sweep, off by default; the owner's delete route; no button in the web page) |
 | R12 | An approval approves whatever is pending, not what was shown; decisions are not recorded | P1 | L | read from code | | open |
 | R13 | A dropped connection loses the rest of the answer; no keepalive | P1 | M | read from code | | open |
 | R14 | No size limit on a message, a conversation id or attached images | P1 | S | read from code | | done |
 | R15 | Production Redis: one instance for queue and cache, no persistence policy, floating image tags | P1 | M | read from code | R04 | open |
 | R16 | The production gateway stores every prompt and answer | P1 | S | read from code | | done |
 | R17 | No queue depth, queue wait or first-token metric; no traces in production | P1 | M, then L | read from code | | done (part 1; part 2, traces, needs a spec) |
-| R18 | A re-uploaded document leaves its old chunks; no way to delete a document | P1 | M | read from code | R09 | open |
+| R18 | A re-uploaded document leaves its old chunks; no way to delete a document | P1 | M | read from code | R09 | done (with a version order instead of "another ingest id", see pattern 24; no list route) |
 | R19 | The dependency ladder: Langfuse 2, LangChain 0.3, LangGraph 0.2 | P1 | L | from the field | R17 | open |
-| R20 | Web fetches: rebinding window, whole body read before the size check, crawler egress | P1 | M | read from code | | open |
+| R20 | Web fetches: rebinding window, whole body read before the size check, crawler egress | P1 | M | read from code | | done (fetcher; the crawler's host firewall rule is documented, not run) |
 | R21 | Five statements that are no longer true | P1 | S | read from code | | done (four corrected; the `scope_filter` docstring became true when R09 added its integration test) |
 | R22 | A hung worker is never restarted | P2 | S | read from code | | done |
 | R23 | The answer cache ignores the domain; its expiry is set in a second call | P2 | S | read from code | | done |
