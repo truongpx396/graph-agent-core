@@ -164,6 +164,13 @@ agent_retry_total = Counter(
     "agent_retry_total", "Output-quality retries triggered by route_after_check"
 )
 
+agent_stream_restarted_total = Counter(
+    "agent_stream_restarted_total",
+    "A model stream failed after it had sent tokens and the `agent` node's retry policy ran it again; the "
+    "client was told to discard what it had shown (pattern 7). Distinct from agent_retry_total, which "
+    "counts output-quality retries of a stream that ended normally.",
+)
+
 agent_zero_citations_total = Counter(
     "agent_zero_citations_total",
     "Non-empty final answers with retrieved context available but zero "
