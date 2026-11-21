@@ -27,7 +27,7 @@ from app.agent.runtime import core as runtime_module
 from app.agent.runtime import stream as stream_module
 from app.core import errors, metrics
 from app.ports.outbound import models as model_ports
-from tests.agent.fakes import make_agent_node
+from tests.agent.fakes import make_graph_node_agent
 from tests.conftest import TEST_CTX, metric_value
 
 _REAL_FETCH = pricing._fetch_model_info
@@ -381,7 +381,7 @@ class TestTheAgentNodePricesWithIt:
         from app.core.config import CHAT_MODEL
 
         _patch_fetch(monkeypatch, _entry(CHAT_MODEL, GPT_4O))
-        agent = make_agent_node(self._llm(1000, 500))
+        agent = make_graph_node_agent(self._llm(1000, 500))
 
         result = await agent({"messages": [HumanMessage(content="hi")], "total_cost_usd": 0.25})
 
@@ -394,7 +394,7 @@ class TestTheAgentNodePricesWithIt:
         from app.core.config import CHAT_MODEL
 
         _patch_fetch(monkeypatch, _entry(CHAT_MODEL, FREE), _entry("specialist", GPT_4O))
-        agent = make_agent_node(self._llm(1000, 500), model_alias="specialist")
+        agent = make_graph_node_agent(self._llm(1000, 500), model_alias="specialist")
 
         result = await agent({"messages": [HumanMessage(content="hi")]})
 
@@ -405,7 +405,7 @@ class TestTheAgentNodePricesWithIt:
 
         _patch_fetch(monkeypatch, _entry(CHAT_MODEL, {}))
         before = metric_value(metrics.agent_unpriced_usage_total, model_alias=CHAT_MODEL)
-        agent = make_agent_node(self._llm(1000, 500))
+        agent = make_graph_node_agent(self._llm(1000, 500))
 
         result = await agent({"messages": [HumanMessage(content="hi")]})
 

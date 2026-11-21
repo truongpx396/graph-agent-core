@@ -1,5 +1,6 @@
 """Generic infrastructure helpers with no dependency on any node's own logic:
 `instrumented` (structured lifecycle logging wrapper applied at graph-registration time),
+`named_edge` (registers a conditional edge's router under the name a checkpoint stores it by, whatever the function is called),
 `friendly_tool_error` (ToolNode's error-recovery formatter), `make_llm` (the chat client factory: the
 configured alias, endpoint and tool shape, built by the `ChatModels` port) and `without_tools` (the same client with the tool schemas taken off).
 
@@ -30,6 +31,26 @@ logger = logging.getLogger(__name__)
 F = TypeVar("F", bound=Callable[..., Any])
 # A graph node: `(state)` or `(state, config)` returning the state update, sync or async (`instrumented` handles both).
 NodeFn: TypeAlias = Callable[..., "dict[str, Any] | Awaitable[dict[str, Any]]"]
+# A conditional edge's router: `(state)` returning the node(s) to run next.
+RouterFn: TypeAlias = Callable[..., Any]
+
+
+def named_edge(router: RouterFn, name: str) -> RouterFn:
+    """`router`, registered with LangGraph under `name` whatever the function is called.
+
+    A checkpoint records a conditional edge under its router's `__name__` (`path.name or "condition"`, langgraph 0.2.76), and a turn a worker
+    left mid-flight finds its pending node through that name: rename the function and a resume runs nothing, silently (GRAPH_PATTERNS.md 16,
+    `tests/agent/graph/test_checkpoint_across_a_topology_change.py`). `build_graph` registers every router through here under the name in
+    `EDGE_CHANNEL_NAMES`, so a router's Python name follows the `graph_edge_route_after_<node>` rule and the stored name never moves.
+    `functools.wraps` carries the return annotation across: LangGraph reads a `Literal[...]` return as the edge's targets.
+    """
+
+    @functools.wraps(router)
+    def named(state: Any) -> Any:
+        return router(state)
+
+    named.__name__ = name
+    return named
 
 
 def instrumented(node_name: str) -> Callable[[F], F]:

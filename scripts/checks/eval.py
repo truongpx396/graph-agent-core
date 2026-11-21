@@ -61,7 +61,7 @@ REPETITION_PASS_THRESHOLD = 0.80  # 4-of-5
 GROUNDED_CLAIMS_THRESHOLD = 0.95  # answer-quality gate, over the whole golden set
 
 # Every golden case needs a valid ctx to even reach retrieve_context (see
-# app/agent/graph/core.py's route_after_validation) — DEFAULT_TENANT so search_docs can
+# app/agent/graph/core.py's graph_edge_route_after_validate_input) — DEFAULT_TENANT so search_docs can
 # actually find the docs `make ingest` seeded under it.
 _EVAL_CTX: SecurityCtx = {"tenant": DEFAULT_TENANT, "principal": "eval-harness", "claims": {}}
 

@@ -1,4 +1,4 @@
-"""`should_continue`'s helpers: tool-call fingerprinting and per-turn repeat/loop detection
+"""`graph_edge_route_after_agent`'s helpers: tool-call fingerprinting and per-turn repeat/loop detection
 (`_tool_call_fingerprint`, `_current_turn_tool_call_batches`, `consecutive_repeat_count`), the
 mandatory human-approval capability gate (`tool_capability`, `mandatory_gate_reason`), and the
 use_skill-without-search check (`use_skill_called_without_search`, which `graph/tool_guards.py`
@@ -69,7 +69,7 @@ def consecutive_repeat_count(messages: list[BaseMessage]) -> int:
 def mandatory_gate_reason(tool_calls: list[ToolCall], tool_capabilities: Mapping[str, str]) -> str | None:
     """None if every call in this batch is read_only; otherwise the more
     severe capability present ("outward" — including any undeclared tool —
-    over "mutating"), used only to label the metric in should_continue.
+    over "mutating"), used only to label the metric in graph_edge_route_after_agent.
     Gating itself doesn't care which one — either forces human_approval."""
     capabilities = {tool_capability(tc["name"], tool_capabilities) for tc in tool_calls}
     if "outward" in capabilities:

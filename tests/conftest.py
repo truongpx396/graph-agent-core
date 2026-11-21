@@ -4,8 +4,8 @@ be up.
 - `mock_search_docs`/`mock_semantic_cache`: no test reaches a live Qdrant/Redis/embeddings backend just by
   running `retrieve_context`/`check_semantic_cache`/`write_semantic_cache` through `build_graph()`'s default
   `GraphDeps`. A test that cares about a retrieved or cached value injects its own fake
-  (`GraphDeps(search_docs=fake)`, `GraphDeps(cache_get=fake, ...)`, or `make_retrieve_context_node(fake)` /
-  `make_check_semantic_cache_node(fake)` at node level).
+  (`GraphDeps(search_docs=fake)`, `GraphDeps(cache_get=fake, ...)`, or `make_graph_node_retrieve_context(fake)` /
+  `make_graph_node_check_semantic_cache(fake)` at node level).
 - `mock_classification`: the model router's one live call (`app/adapters/outbound/mlservice/classification.py`, a POST to the ML
   service's /v1/decide) always sees "no answer". The usage event's model-alias lookup is guarded inside
   `usage_event_sink`, the only caller of `model_resolver.resolve_model`.
@@ -27,7 +27,7 @@ be up.
   the already-tested degrade path.
 
 `TEST_CTX`: a valid SecurityCtx for every test that drives a turn through validate_input, since
-`route_after_validation` fails closed without one. Import it directly (`from tests.conftest import TEST_CTX`),
+`graph_edge_route_after_validate_input` fails closed without one. Import it directly (`from tests.conftest import TEST_CTX`),
 not as a fixture: most call sites need a plain value in a hand-built config/state dict.
 
 `metric_value` installs the ONE real `MeterProvider` (an `InMemoryMetricReader`) at this module's import time.

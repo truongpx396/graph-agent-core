@@ -40,7 +40,7 @@ class DomainPlugin(Protocol):
     def tool_capabilities(self) -> dict[str, str]:
         """Maps each tool name to `"read_only" | "mutating" | "outward"` —
         see `app/agent/tools/builtin.py::SHARED_TOOL_CAPABILITIES`'s comment for the mandatory
-        human_approval gate this feeds (`should_continue`, unchanged
+        human_approval gate this feeds (`graph_edge_route_after_agent`, unchanged
         regardless of domain)."""
         ...
 

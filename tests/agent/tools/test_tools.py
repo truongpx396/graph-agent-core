@@ -1137,7 +1137,7 @@ class TestRunSubagentImpl:
     async def test_hitting_its_own_no_progress_budget_reports_a_clear_message_not_empty(self):
         """Same identical-tool-call-batch loop MAX_REPEATED_ACTIONS already
         catches for the top-level agent (GRAPH_PATTERNS.md pattern 34) — this
-        is one of should_continue's several "__end__" routes, not the
+        is one of graph_edge_route_after_agent's several "__end__" routes, not the
         iteration/token/cost caps specifically, which is exactly why the
         impl treats "no final answer" as one catch-all signal rather than
         re-deriving which specific budget tripped."""
@@ -1166,9 +1166,9 @@ class TestRunSubagentImpl:
 
     async def test_giving_up_on_a_stuck_retry_loop_reports_a_clear_message_not_the_rejected_text(self):
         """Different route than the two tests above: those hit
-        should_continue's OWN tool-loop safety nets (never reaching
+        graph_edge_route_after_agent's OWN tool-loop safety nets (never reaching
         check_output at all); this one goes through check_output/
-        route_after_check's SEPARATE same-reason-repeat guard
+        graph_edge_route_after_check_output's SEPARATE same-reason-repeat guard
         (MAX_CONSECUTIVE_SAME_RETRY_REASON) instead — a nested subagent
         can get stuck in that loop too. `deferred_instead_of_acting` is
         one of the NOT trust-content reasons (app/agent/graph/core.py's

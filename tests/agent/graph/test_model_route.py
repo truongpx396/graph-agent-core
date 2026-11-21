@@ -16,7 +16,7 @@ from langgraph.types import Command
 
 from app.agent.graph import model_route
 from app.agent.graph.build import GraphDeps
-from app.agent.graph.model_route import make_route_model_node
+from app.agent.graph.model_route import make_graph_node_route_model
 from app.ports.outbound.classification import NO_ANSWER, Labelled
 from tests.agent.fakes import call, cfg, queue_llm
 from tests.ecorp import build_graph, build_subagent_graph
@@ -85,7 +85,7 @@ def state(*messages, **extra):
 
 
 async def run(node_state):
-    return await make_route_model_node()(node_state, None)
+    return await make_graph_node_route_model()(node_state, None)
 
 
 # ---- the three modes ----------------------------------------------------------------------------------------------------------------

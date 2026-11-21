@@ -140,7 +140,7 @@ def model_unpriced_envelope() -> ErrorEnvelope:
 async def reserve_turn_budget(ctx: SecurityCtx | None) -> str | None:
     """Called once a turn has passed `allowance_refusal` and is
     about to actually run — holds MAX_COST_USD_PER_TURN (the hard cap
-    graph/routing.py::should_continue already enforces per turn, so it's
+    graph/routing.py::graph_edge_route_after_agent already enforces per turn, so it's
     always a safe upper bound on what this turn could cost) against this
     tenant's in-flight total. Returns the hold's id, or None if `ctx` is
     invalid or the write itself failed — callers pass this straight to

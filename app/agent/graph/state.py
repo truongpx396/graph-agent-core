@@ -8,7 +8,7 @@ router and builder can depend on it without a cycle.
 - `STATE_SCHEMA_VERSION` — bumped only on a genuinely incompatible `State` or
   topology change (see its comment).
 - The safety budgets (iterations, tokens, tool calls per turn, history size,
-  repeat and retry limits) that `should_continue`, `check_output` and the
+  repeat and retry limits) that `graph_edge_route_after_agent`, `check_output` and the
   compaction node enforce, and the smaller ones a nested subagent run is held
   to. Their reasoning lives in the comments next to each, and in
   GRAPH_PATTERNS.md patterns 10, 13, 34, 35 and 41.
@@ -48,10 +48,10 @@ HISTORY_TOKEN_FLOOR = 4000  # once tripped, trim front-to-back until the
 MAX_HISTORY_SUMMARY_CHARS = 4000  # (AR-015a) the CUMULATIVE history_summary
 # must stay bounded too, or the "compacted" summary becomes the next
 # unbounded input. Exceeding it is a named terminal state
-# (context_window_exceeded), not silent truncation — see route_after_compaction.
+# (context_window_exceeded), not silent truncation — see graph_edge_route_after_compact_history.
 MAX_REPEATED_ACTIONS = 3  # consecutive IDENTICAL tool-call batches before
 # ending as no_progress — bounds convergence, not just repetition, and
-# fires independently of (usually before) MAX_ITERATIONS — see should_continue.
+# fires independently of (usually before) MAX_ITERATIONS — see graph_edge_route_after_agent.
 MAX_CONSECUTIVE_SAME_RETRY_REASON = 2  # check_output's own convergence
 # check, mirroring MAX_REPEATED_ACTIONS but for the retry_output loop.
 # Live bug: a turn stuck on the SAME rejection reason burned 6 retry
@@ -59,11 +59,11 @@ MAX_CONSECUTIVE_SAME_RETRY_REASON = 2  # check_output's own convergence
 # the same fallback it could've reached after 2. `2` = one
 # self-correction attempt per distinct reason; deliberately does NOT reset
 # on a DIFFERENT reason (that's slow progress through distinct issues, not
-# a stuck loop) — see route_after_check/retry_exhausted.
+# a stuck loop) — see graph_edge_route_after_check_output/retry_exhausted.
 
 # Budgets for a NESTED subagent run (app/agent/tools/run_subagent_domain.py::make_domain_subagent_tool,
 # pattern 46) — separate from the constants above; a subagent's own
-# should_continue is bound to THESE via functools.partial, independent of
+# graph_edge_route_after_agent is bound to THESE via functools.partial, independent of
 # the parent turn's remaining budget. Hardcoded (not Settings-backed) as a
 # loop-count safety net, unlike MAX_SUBAGENT_COST_USD_PER_RUN
 # (app/core/config.py, IS Settings-backed — a $ policy knob, not a safety net).
@@ -112,7 +112,7 @@ class State(TypedDict):
     iterations: int  # Track how many agent loops we've done *this turn*.
     total_tokens: int  # Cumulative token usage *this turn* (see agent()).
     total_cost_usd: float  # Cumulative $ cost *this turn*, priced per call from
-    # the model's LiteLLM prices (app/agent/cost/pricing.py) — should_continue enforces
+    # the model's LiteLLM prices (app/agent/cost/pricing.py) — graph_edge_route_after_agent enforces
     # MAX_COST_USD_PER_TURN against this
     # (GRAPH_PATTERNS.md patterns 26 and 35).
     subagent_spend: Annotated[list[tuple[int, float]], concat_or_reset]  # One
@@ -123,18 +123,18 @@ class State(TypedDict):
     # run_subagent calls must list-concat safely rather than race a
     # read-modify-write like total_tokens/total_cost_usd do (safe there
     # only because `agent` never runs concurrently with itself). Summed
-    # into should_continue's MAX_TOKENS_PER_TURN/MAX_COST_USD_PER_TURN
+    # into graph_edge_route_after_agent's MAX_TOKENS_PER_TURN/MAX_COST_USD_PER_TURN
     # checks on top of total_tokens/total_cost_usd (pattern 46's disclosed
     # gap), without touching MAX_SUBAGENT_*'s own separate per-run ceiling.
     # Reset every turn by validate_input (it writes `None`, which
     # `concat_or_reset` turns into []), same as total_tokens/
     # total_cost_usd — unlike history_summary, must NOT accumulate turn over turn.
     require_approval: bool  # Opt-in: gate tool calls behind human_approval.
-    approved: bool  # Set by human_approval; read by route_after_approval. Reset
+    approved: bool  # Set by human_approval; read by graph_edge_route_after_human_approval. Reset
     # every turn by validate_input (it is not re-run on a resume, so a pause's
     # own decision is never cleared out from under it).
     cancelled: bool  # Set by human_approval on a cancel decision; read by
-    # route_after_approval to end the run outright (GRAPH_PATTERNS.md pattern 36).
+    # graph_edge_route_after_human_approval to end the run outright (GRAPH_PATTERNS.md pattern 36).
     run_id: str  # Per-turn correlation id for node lifecycle logs (see
     # validate_input, instrumented) — regenerated every turn, same reset
     # point as iterations/total_tokens.
@@ -143,7 +143,7 @@ class State(TypedDict):
     ctx: SecurityCtx | None  # Stamped ONCE by validate_input from
     # config["configurable"]["ctx"] (the trusted boundary) — read-only
     # from here on; no other node may write this key. See
-    # app/core/security.py's SecurityCtx and route_after_validation's
+    # app/core/security.py's SecurityCtx and graph_edge_route_after_validate_input's
     # fail-closed check.
     citations: list[dict[str, Any]]  # Set by retrieve_context — every numbered [n]
     # source retrieve_context's pre-fetch could have cited, whether or not
@@ -167,13 +167,13 @@ class State(TypedDict):
     # retry_reason_repeat_count below — never reset mid-turn elsewhere.
     retry_reason_repeat_count: int  # Set by check_output — consecutive
     # rounds THIS SAME reason has fired (1 on first occurrence, reset to 1
-    # on a different reason). Read by route_after_check to give up
+    # on a different reason). Read by graph_edge_route_after_check_output to give up
     # (routing to retry_exhausted) once MAX_CONSECUTIVE_SAME_RETRY_REASON is hit.
     cache_hit: bool  # Set by check_semantic_cache — read by
     # write_semantic_cache to skip a redundant re-embed+write on a turn that
     # was already served from cache (GRAPH_PATTERNS.md pattern 22).
     moderation_blocked: bool  # Set by moderate_input — read by
-    # route_after_moderation (GRAPH_PATTERNS.md pattern 25).
+    # graph_edge_route_after_moderate_input (GRAPH_PATTERNS.md pattern 25).
     model_route: Literal["local", "medium", "strong"] | None  # Set by route_model ONLY (specs/014, specs/015, pattern 68): which tier
     # answers this turn. `None` = no decision, read as local. Reset to None by validate_input each new turn (never on a resume,
     # which skips it, so an approval pause keeps its route and /v1/decide is not asked twice). Optional by design: a checkpoint

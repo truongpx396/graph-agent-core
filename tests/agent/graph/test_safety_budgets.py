@@ -25,9 +25,9 @@ from app.agent.graph.compaction import (
     _format_turns_for_summary,
     _messages_to_trim,
     _trim_history,
-    make_compact_history_node,
+    make_graph_node_compact_history,
 )
-from app.agent.graph.core import validate_input
+from app.agent.graph.core import graph_node_validate_input
 from app.agent.graph.messages import COMPACTION_MARKER_KEY
 from app.agent.graph.state import (
     MAX_ITERATIONS,
@@ -36,12 +36,12 @@ from app.agent.graph.state import (
     MAX_TOOL_CALLS_PER_TURN,
     concat_or_reset,
 )
-from app.agent.graph.tool_guards import batch_problem, tool_batch_guard
+from app.agent.graph.tool_guards import batch_problem, graph_node_tool_batch_guard
 from app.agent.runtime import core as agent_module
 from app.core import metrics, tool_runtime
 from app.core.config import MAX_COST_USD_PER_TURN, MAX_SUBAGENT_COST_USD_PER_RUN
 from tests.conftest import TEST_CTX, metric_value
-from tests.ecorp import ECORP_TOOL_NAMES, build_graph, should_continue
+from tests.ecorp import ECORP_TOOL_NAMES, build_graph, graph_edge_route_after_agent
 
 
 def _tool_call_message(name, args, call_id="call_1"):
@@ -66,7 +66,7 @@ class TestPerTurnReset:
             "total_tokens": 5000,
             "subagent_spend": [(500, 0.05)],
         }
-        result = validate_input(state, _cfg())
+        result = graph_node_validate_input(state, _cfg())
         assert result["iterations"] == 0
         assert result["total_tokens"] == 0
         # None is the reducer's explicit reset marker (a plain [] would be a no-op
@@ -79,7 +79,7 @@ class TestPerTurnReset:
         cancel on one turn must not decide the routing of a later turn's
         approval. See TestApprovalAfterAnEarlierCancel for the end-to-end case."""
         state = {"messages": [HumanMessage(content="hi")], "cancelled": True, "approved": True}
-        result = validate_input(state, _cfg())
+        result = graph_node_validate_input(state, _cfg())
         assert result["cancelled"] is False
         assert result["approved"] is False
 
@@ -89,7 +89,7 @@ class TestPerTurnReset:
         iterations/total_tokens, or logs from different turns on a
         long-running thread would be indistinguishable."""
         state = {"messages": [HumanMessage(content="hi")], "run_id": "stale"}
-        result = validate_input(state, _cfg())
+        result = graph_node_validate_input(state, _cfg())
         assert result["run_id"] and result["run_id"] != "stale"
 
     def test_validate_input_stamps_ctx_from_config(self):
@@ -98,7 +98,7 @@ class TestPerTurnReset:
         never derived from state/message content. See State's docstring
         for why this is the only node allowed to write it."""
         state = {"messages": [HumanMessage(content="hi")]}
-        result = validate_input(state, _cfg())
+        result = graph_node_validate_input(state, _cfg())
         assert result["ctx"] == TEST_CTX
 
     def test_validate_input_forgets_the_previous_turns_retrieved_context(self):
@@ -111,13 +111,13 @@ class TestPerTurnReset:
             "context": "[1] last turn's retrieved text",
             "context_anchor_index": 4,
         }
-        result = validate_input(state, _cfg())
+        result = graph_node_validate_input(state, _cfg())
         assert result["context"] == ""
         assert result["context_anchor_index"] is None
 
     def test_validate_input_stamps_none_when_config_has_no_ctx(self):
         state = {"messages": [HumanMessage(content="hi")]}
-        result = validate_input(state, {"configurable": {}})
+        result = graph_node_validate_input(state, {"configurable": {}})
         assert result["ctx"] is None
 
 
@@ -338,14 +338,14 @@ class TestHistoryBudget:
         validate_input stays a plain, dependency-free function of
         state/config with no LLM call of its own."""
         state = {"messages": self._turns(3)}
-        result = validate_input(state, _cfg())
+        result = graph_node_validate_input(state, _cfg())
         assert "messages" not in result
 
 
 class TestCompactHistoryNode:
     """compact_history (app/agent/graph/core.py) replaced validate_input's old discard-only trim with a
     discard-AND-summarize node — see _messages_to_trim (the shared "what falls outside the window" helper) and
-    make_compact_history_node's docstring.
+    make_graph_node_compact_history's docstring.
     """
 
     @staticmethod
@@ -368,7 +368,7 @@ class TestCompactHistoryNode:
     async def test_applies_the_trim_and_increments_metric(self):
         before = metric_value(metrics.agent_history_compacted_total)
         messages = self._turns(3)
-        compact_history = make_compact_history_node(
+        compact_history = make_graph_node_compact_history(
             GenericFakeChatModel(messages=iter([AIMessage(content="a summary")])),
             ceiling=self._tripped_ceiling(messages),
             floor=1,
@@ -390,7 +390,7 @@ class TestCompactHistoryNode:
 
     async def test_returns_nothing_when_within_budget(self):
         messages = self._turns(1)
-        compact_history = make_compact_history_node(
+        compact_history = make_graph_node_compact_history(
             GenericFakeChatModel(messages=iter([])),
             ceiling=_estimate_tokens(messages) + 10,  # comfortably above
             floor=1,
@@ -403,7 +403,7 @@ class TestCompactHistoryNode:
                 raise RuntimeError("boom")
 
         messages = self._turns(3)
-        compact_history = make_compact_history_node(
+        compact_history = make_graph_node_compact_history(
             _BoomLLM(), ceiling=self._tripped_ceiling(messages), floor=1
         )
         result = await compact_history({"messages": messages})
@@ -428,7 +428,7 @@ class TestCompactHistoryNode:
                 return AIMessage(content="an extended summary")
 
         messages = self._turns(3)
-        compact_history = make_compact_history_node(
+        compact_history = make_graph_node_compact_history(
             _RecordingLLM(), ceiling=self._tripped_ceiling(messages), floor=1
         )
         state = {"messages": messages, "history_summary": "earlier summary text"}
@@ -444,7 +444,7 @@ class TestToolCallBudget:
             "iterations": 1,
             "messages": [_tool_call_message("calculator", {"expression": "1+1"})],
         }
-        assert should_continue(state) == "tools"
+        assert graph_edge_route_after_agent(state) == "tools"
 
     def test_exceeding_budget_routes_to_the_tool_batch_guard_as_too_many_tool_calls(self):
         calls = [
@@ -452,7 +452,7 @@ class TestToolCallBudget:
             for i in range(MAX_TOOL_CALLS_PER_TURN + 1)
         ]
         state = {"iterations": 1, "messages": [AIMessage(content="", tool_calls=calls)]}
-        assert should_continue(state) == "tool_batch_guard"
+        assert graph_edge_route_after_agent(state) == "tool_batch_guard"
         assert batch_problem(calls, state["messages"], ECORP_TOOL_NAMES) == "too_many_tool_calls"
 
     def test_at_exactly_the_limit_still_routes_normally(self):
@@ -461,7 +461,7 @@ class TestToolCallBudget:
             for i in range(MAX_TOOL_CALLS_PER_TURN)
         ]
         state = {"iterations": 1, "messages": [AIMessage(content="", tool_calls=calls)]}
-        assert should_continue(state) == "tools"
+        assert graph_edge_route_after_agent(state) == "tools"
 
     def test_too_many_tool_calls_node_rejects_every_pending_call(self):
         calls = [
@@ -469,7 +469,7 @@ class TestToolCallBudget:
             for i in range(MAX_TOOL_CALLS_PER_TURN + 2)
         ]
         ai = AIMessage(content="", tool_calls=calls)
-        result = tool_batch_guard({"messages": [ai]}, ECORP_TOOL_NAMES)
+        result = graph_node_tool_batch_guard({"messages": [ai]}, ECORP_TOOL_NAMES)
         assert len(result["messages"]) == len(calls)
         for msg, call in zip(result["messages"], calls, strict=True):
             assert msg.tool_call_id == call["id"]
@@ -483,7 +483,7 @@ class TestTokenBudget:
             "total_tokens": MAX_TOKENS_PER_TURN - 1,
             "messages": [AIMessage(content="final answer, long enough.")],
         }
-        assert should_continue(state) == "check_output"
+        assert graph_edge_route_after_agent(state) == "check_output"
 
     def test_over_budget_ends_even_with_a_pending_tool_call(self):
         state = {
@@ -491,11 +491,11 @@ class TestTokenBudget:
             "total_tokens": MAX_TOKENS_PER_TURN,
             "messages": [_tool_call_message("calculator", {"expression": "1+1"})],
         }
-        assert should_continue(state) == "no_answer"
+        assert graph_edge_route_after_agent(state) == "no_answer"
 
     def test_missing_total_tokens_defaults_to_zero(self):
         state = {"iterations": 1, "messages": [AIMessage(content="final answer here.")]}
-        assert should_continue(state) == "check_output"
+        assert graph_edge_route_after_agent(state) == "check_output"
 
 
 class TestSubagentSpendBudget:
@@ -511,7 +511,7 @@ class TestSubagentSpendBudget:
             "subagent_spend": [(1, 0.0)],
             "messages": [AIMessage(content="final answer, long enough.")],
         }
-        assert should_continue(state) == "no_answer"
+        assert graph_edge_route_after_agent(state) == "no_answer"
 
     def test_own_cost_under_budget_but_subagent_spend_tips_it_over(self):
         state = {
@@ -520,7 +520,7 @@ class TestSubagentSpendBudget:
             "subagent_spend": [(0, 0.001)],
             "messages": [AIMessage(content="final answer, long enough.")],
         }
-        assert should_continue(state) == "no_answer"
+        assert graph_edge_route_after_agent(state) == "no_answer"
 
     def test_missing_subagent_spend_defaults_to_empty(self):
         state = {
@@ -528,7 +528,7 @@ class TestSubagentSpendBudget:
             "total_tokens": MAX_TOKENS_PER_TURN - 1,
             "messages": [AIMessage(content="final answer, long enough.")],
         }
-        assert should_continue(state) == "check_output"
+        assert graph_edge_route_after_agent(state) == "check_output"
 
     def test_subagent_spend_well_under_its_own_run_ceiling_can_still_trip_the_turn_ceiling(self):
         """The nested run's own MAX_SUBAGENT_TOKENS_PER_RUN/
@@ -542,14 +542,14 @@ class TestSubagentSpendBudget:
             "subagent_spend": [(MAX_SUBAGENT_TOKENS_PER_RUN // 2, 0.0)],
             "messages": [AIMessage(content="final answer, long enough.")],
         }
-        assert should_continue(state) == "no_answer"
+        assert graph_edge_route_after_agent(state) == "no_answer"
         state = {
             "iterations": 1,
             "total_cost_usd": MAX_COST_USD_PER_TURN - 0.001,
             "subagent_spend": [(0, MAX_SUBAGENT_COST_USD_PER_RUN / 2)],
             "messages": [AIMessage(content="final answer, long enough.")],
         }
-        assert should_continue(state) == "no_answer"
+        assert graph_edge_route_after_agent(state) == "no_answer"
 
 
 class TestToolTimeout:

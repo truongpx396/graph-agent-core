@@ -56,7 +56,7 @@ async def test_an_empty_identity_value_passes_the_header_check_but_is_not_a_vali
     easy to assume the opposite: `get_ctx` accepts an empty string (the header
     is present), so the request is NOT rejected at the HTTP layer. Isolation
     still holds because every consumer fails closed on `valid_ctx` — the graph
-    (`route_after_validation`), every ctx-aware tool, the session and cache
+    (`graph_edge_route_after_validate_input`), every ctx-aware tool, the session and cache
     lookups. A stricter boundary (reject empty with a 422) would be a
     behavior change the load test's invalid-identity scenario relies on being
     absent, so it is recorded here rather than silently assumed."""

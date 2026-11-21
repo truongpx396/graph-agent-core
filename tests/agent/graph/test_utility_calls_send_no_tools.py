@@ -10,8 +10,8 @@ from langchain_core.runnables import RunnableBinding
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
-from app.agent.graph.compaction import make_compact_history_node
-from app.agent.graph.followups import make_suggest_followups_node
+from app.agent.graph.compaction import make_graph_node_compact_history
+from app.agent.graph.followups import make_graph_node_suggest_followups
 from app.agent.graph.utils import make_llm, without_tools
 from tests.agent.fakes import cfg, scripted_llm
 
@@ -34,7 +34,7 @@ async def test_the_followup_call_carries_no_tool_schemas():
     llm, kwargs_seen = _bound_fake(lambda _m: AIMessage(content="What else?\nAnd then?"))
     state = {"messages": [AIMessage(content="Support is open nine to five [1].")], "used_citations": [{"marker": "[1]"}]}
 
-    result = await make_suggest_followups_node(llm)(state, cfg(str(uuid.uuid4())))
+    result = await make_graph_node_suggest_followups(llm)(state, cfg(str(uuid.uuid4())))
 
     assert result["followups"] == ["What else?", "And then?"]
     assert len(kwargs_seen) == 1 and "tools" not in kwargs_seen[0]
@@ -55,7 +55,7 @@ async def test_the_history_summary_call_carries_no_tool_schemas():
     for i in range(6):
         history.append(HumanMessage(content=f"an earlier question number {i}, " + "with plenty of words " * 8, id=f"h{i}"))
         history.append(AIMessage(content=f"an earlier answer number {i}, " + "with plenty of words " * 8, id=f"a{i}"))
-    node = make_compact_history_node(llm, ceiling=300, floor=100)
+    node = make_graph_node_compact_history(llm, ceiling=300, floor=100)
 
     result = await node({"messages": history}, cfg(str(uuid.uuid4())))
 

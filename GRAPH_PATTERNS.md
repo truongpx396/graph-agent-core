@@ -18,7 +18,7 @@ The numbered patterns (1–89) the agent in `app/agent/` applies, each with the 
 ## Patterns
 
 ### 1. Input validation with a real exit
-`validate_input` stamps state; the conditional edge `route_after_validation` sends bad input to `reject_input` (an `AIMessage`: the system speaking, not the user) and on to `END`. Valid input continues to `compact_history`.
+`validate_input` stamps state; the conditional edge `graph_edge_route_after_validate_input` sends bad input to `reject_input` (an `AIMessage`: the system speaking, not the user) and on to `END`. Valid input continues to `compact_history`.
 - **Use when:** always. It costs nothing and catches most bad cases.
 
 ### 2. Context enrichment
@@ -30,10 +30,10 @@ Flow control lives in explicit state (`iterations`, `context`, …), which is wh
 - **Bug:** `context` and `context_anchor_index` are written only by `retrieve_context`, which a semantic-cache hit skips (22), and nothing reset them. A cache-hit answer that then failed `check_output` was retried with the PREVIOUS turn's retrieved text spliced in at the previous turn's index. `validate_input` now resets both each turn (`test_safety_budgets.py::TestPerTurnReset`).
 
 ### 4. Conditional routing
-`should_continue` is an edge function, not a node: it decides where execution goes after `agent` (tools, approval, budget exit, or done).
+`graph_edge_route_after_agent` is an edge function, not a node: it decides where execution goes after `agent` (tools, approval, budget exit, or done).
 
 ### 5. Output gate with a real retry
-`check_output` + `route_after_check` + `retry_output`. A suspiciously short answer routes to `retry_output`, which appends a corrective `HumanMessage` and loops to `agent`; `MAX_ITERATIONS` bounds the retries. Pattern 50 adds two retry reasons.
+`check_output` + `graph_edge_route_after_check_output` + `retry_output`. A suspiciously short answer routes to `retry_output`, which appends a corrective `HumanMessage` and loops to `agent`; `MAX_ITERATIONS` bounds the retries. Pattern 50 adds two retry reasons.
 - **One registry, not a flag per check.** Each reason is an `OutputCheck` in `graph/output_checks.py` (code, detect, feedback, metric, whether a repeatedly-rejected answer is still safe to show, fallback text) in one ordered tuple whose order IS the priority. `check_output` runs them all and records what fired in `State.output_findings` (`{code: detail}`); `last_retry_reason` is the first key. `retry_output`, `retry_exhausted` and `no_answer` read feedback, trust and fallback from the same entry, so a new check is one entry. Leak, fabrication and a skipped tool are judged on what the model wrote; deferral and misattribution on that text minus a closing offer (70); length and "still uncited" on what is shown.
 - **Retry artifacts.** The feedback is a `HumanMessage` only because that is the role a model acts on; the person didn't say it. `retry_output` tags it, and the answer it rejected, with `additional_kwargs[RETRY_ARTIFACT_KEY]` (`graph/messages.py`).
   - `is_user_message` is how every reader finds "the user's message" or "this turn". `get_session_messages` and `_format_turns_for_summary` skip artifacts; `_estimate_tokens` (which decides when to compact) doesn't count them; the worker's `_classify_reclaimed_turn` finds the turn's question with `is_user_message` and doesn't read a tagged answer as a finished turn.
@@ -68,12 +68,12 @@ Flow control lives in explicit state (`iterations`, `context`, …), which is wh
 
 | Budget | Where | Catches |
 |---|---|---|
-| `MAX_ITERATIONS` | `should_continue` | Model stuck calling tools |
-| `MAX_TOOL_CALLS_PER_TURN` | `should_continue` | One turn fanning into dozens of calls |
-| `MAX_TOKENS_PER_TURN` | `should_continue`, `agent()` | Unbounded spend over few iterations |
+| `MAX_ITERATIONS` | `graph_edge_route_after_agent` | Model stuck calling tools |
+| `MAX_TOOL_CALLS_PER_TURN` | `graph_edge_route_after_agent` | One turn fanning into dozens of calls |
+| `MAX_TOKENS_PER_TURN` | `graph_edge_route_after_agent`, `agent()` | Unbounded spend over few iterations |
 | `HISTORY_TOKEN_CEILING`/`FLOOR` | `compact_history` | History growing without bound (13, 41) |
-| `MAX_COST_USD_PER_TURN` | `should_continue`, `agent()` | Same tokens, different dollars by model tier (35) |
-| `MAX_REPEATED_ACTIONS` | `should_continue` | The same call with the same args, repeatedly (34) |
+| `MAX_COST_USD_PER_TURN` | `graph_edge_route_after_agent`, `agent()` | Same tokens, different dollars by model tier (35) |
+| `MAX_REPEATED_ACTIONS` | `graph_edge_route_after_agent` | The same call with the same args, repeatedly (34) |
 | `TOOL_TIMEOUT_SECONDS` | Per tool call | A hung Qdrant or embedding call |
 | `REQUEST_TIMEOUT_SECONDS` | Whole turn | Many slow-but-not-hung steps |
 | `RECURSION_LIMIT` = `MAX_ITERATIONS * 2 + 15` | LangGraph step cap (`app/agent/runtime/core.py`) | A routing bug causing a node cycle |
@@ -114,7 +114,7 @@ Retrieved text is wrapped in `<retrieved_document>` delimiters, and `SYSTEM_PROM
 - **An unexpected failure logs where, not what:** the class and `origin` (`app/agent/runtime/stream.py:612 in _run_graph_stream`, from `errors.error_origin`: the innermost frame in `app/`), never the message, which can carry a host, a SQL fragment or a DSN (30). A bare `IndexError` in a CI run (#171) could not be traced without it.
 
 ### 15. Tool capability declarations: a mandatory gate
-Every tool declares `read_only`, `mutating` or `outward`: the shared tools in `SHARED_TOOL_CAPABILITIES` (`app/agent/tools/builtin.py`), merged with each domain's own (`app/domains/<name>/tools.py`). `should_continue` checks every pending batch: any non-`read_only` call routes through `human_approval` **unconditionally**. A tool missing from the mapping defaults to `outward` (fail closed). No flag turns this off.
+Every tool declares `read_only`, `mutating` or `outward`: the shared tools in `SHARED_TOOL_CAPABILITIES` (`app/agent/tools/builtin.py`), merged with each domain's own (`app/domains/<name>/tools.py`). `graph_edge_route_after_agent` checks every pending batch: any non-`read_only` call routes through `human_approval` **unconditionally**. A tool missing from the mapping defaults to `outward` (fail closed). No flag turns this off.
 - **Why mandatory:** a RAG agent already carries untrusted content on nearly every turn (12); adding write capability is one gamble from a document steering a real write.
 - **`add_note` is the worked example** of the companion rule: a write tool is a fixed, typed, closed-vocabulary operation, and its point id is derived by code (a fresh UUID, later `tool_call_id`-derived, see Extending Further), never supplied by the model, so it can only append.
 - **Use when:** the moment a second tool exists. Retrofitting after several writers accumulate means auditing them all at once.
@@ -124,7 +124,7 @@ Every tool declares `read_only`, `mutating` or `outward`: the shared tools in `S
 - **Async everywhere:** the saver's lock binds to the event loop that created it, so every process awaits `init_graph_async()` on its own loop.
 - **`STATE_SCHEMA_VERSION` + `graph_version`:** each turn stamps a schema version (bumped only on a breaking `State`/topology change) and a build id. `resumability_error_async` runs before every resume and distinguishes `checkpoint_lost` (no paused run) from `checkpoint_incompatible` (schema mismatch). A differing build SHA alone is not an error: deploys change it constantly.
 - **A turn left mid-flight is not covered by that version, and a topology change can hide it.**
-  - LangGraph names the channel that triggers a node after the edge feeding it, and a conditional edge's channel carries the router function's name. Rename a router (as #171 did, `route_after_check` to `route_after_check_bound`) or remove a node, and a checkpoint a worker left mid-turn no longer shows its pending node: `next` is `()` and a resume runs nothing, silently. Verified on the installed LangGraph; `tests/agent/graph/test_checkpoint_across_a_topology_change.py` pins it, so an upgrade that changes it is noticed.
+  - LangGraph names the channel that triggers a node after the edge feeding it, and a conditional edge's channel carries the router function's name. Rename a router (as #171 did, `route_after_check` to `route_after_check_bound`) or remove a node, and a checkpoint a worker left mid-turn no longer shows its pending node: `next` is `()` and a resume runs nothing, silently. Verified on the installed LangGraph; `tests/agent/graph/test_checkpoint_across_a_topology_change.py` pins it, so an upgrade that changes it is noticed. Since the `graph_edge_` rename a router's Python name no longer matters: `build_graph` registers each under its entry in `EDGE_CHANNEL_NAMES` (see "Naming"), so only changing that table is a topology change.
   - A turn paused at `human_approval` is unaffected while that node's edges are unchanged, which is why `STATE_SCHEMA_VERSION` is not bumped for these changes.
   - What the app does: `_classify_reclaimed_turn` dead-letters an unfinished turn with nothing left to run (`agent_checkpoint_issue_total{reason="nothing_to_continue"}`), so the caller is told to retry; `_run_graph_stream` reports `checkpoint_incompatible` for a run that ends with no answer (it used to stream the person's own question back as the answer).
   - **Deploying a graph change: stop the workers and let their in-flight turns finish first** (they await them on SIGTERM). Renaming a router or node is what makes this necessary, so keep names stable.
@@ -133,7 +133,7 @@ Every tool declares `read_only`, `mutating` or `outward`: the shared tools in `S
 ### 17. Multi-tenant isolation
 A `SecurityCtx` (`tenant`, `principal`, `claims`) is stamped once by `validate_input` from `config["configurable"]["ctx"]`, never from message content. `Policy.lower(ctx, target)` becomes a Qdrant filter applied **inside the query**, never a Python post-filter: a buggy post-filter looks identical to a correct one until a cross-tenant leak.
 - `documents` scope to `tenant`; `memories` also to `owner`, in one collection told apart by a `kind` field that is part of the filter.
-- **Fail closed:** `route_after_validation` checks ctx first, and every ctx-aware tool re-checks it (a different code path).
+- **Fail closed:** `graph_edge_route_after_validate_input` checks ctx first, and every ctx-aware tool re-checks it (a different code path).
 - **Not authentication:** `get_ctx` trusts `X-Tenant-Id`/`X-Principal-Id`; a real auth gateway sets them.
 - **Bug: conversations weren't isolated.** Thread state (checkpoint, cancel flag, lock, dedup key) is keyed by `thread_id` alone and only the `GET` endpoints checked ownership. Anyone naming an id could read it through the model, approve its pending action under their own identity, or cancel it. `_require_conversation_owner` now runs first on send, resume and cancel: a send atomically claims a new id (`claim_session`, `INSERT … ON CONFLICT DO NOTHING`) or verifies an existing one, and every refusal is the 404 an unknown id gets. It fails closed.
 - **Gap:** the check is at the API, so anything publishing to Redis directly bypasses it. `telegram:<chat id>` ids are reserved, but Telegram still shares one thread across a group chat. A conversation with no `chat_sessions` row can't be resumed over HTTP.
@@ -179,9 +179,9 @@ A `SecurityCtx` (`tenant`, `principal`, `claims`) is stamped once by `validate_i
 
 ### 23. Config-first multi-domain composition
 `build_graph(manifest, domain)` keeps its topology and adapts to a domain through an `AgentManifest` (config: name, system prompt, exposed tools) and a `DomainPlugin` (code: tool implementations, capabilities, policy). There is no `if domain == "…"` in the graph and no default domain: both arguments are required. Ecorp is one more entry in `app/domains/registry.py`, the same shape as support, ops and sales (`app/domains/ecorp/`: `store.py` + `tools.py` + `domain.py`); the process default (`DEFAULT_DOMAIN`, `app/agent/runtime/core.py`) is a registry lookup.
-- **Port-swapping, not parameterization:** `should_continue` needs a domain's capability map but LangGraph calls it with only `state`, so it is bound with `functools.partial(should_continue, tool_capabilities=…)` once per build (no default: a tool set, tier map and prompt only mean something relative to one domain).
+- **Port-swapping, not parameterization:** `graph_edge_route_after_agent` needs a domain's capability map but LangGraph calls it with only `state`, so it is bound with `functools.partial(graph_edge_route_after_agent, tool_capabilities=…)` once per build (no default: a tool set, tier map and prompt only mean something relative to one domain).
 - **The load-bearing test:** `tests/agent/test_manifest.py` builds a domain with a different `Policy` and one Ecorp-unknown tool, proves the unmodified gate treats it as `mutating` using that domain's map, and checks Ecorp's tools are absent from its `ToolNode`.
-- **Bug (structural):** Ecorp's prompt and tools were welded into the generic graph, and `build_graph`, `should_continue`, `check_output`, `invalid_tool_call` and `make_llm` each defaulted to "Ecorp" when a caller named nothing. That forced the deferred imports (graph → manifest → builtin → `run_subagent` → graph) and let any module that wanted "the graph" pick up one domain's tools. Ecorp moved out and the defaults went; `graph/build.py` is the only module that imports every node, and nothing a node imports imports it back. Tests bind the generic functions to Ecorp in one place (`tests/ecorp.py`).
+- **Bug (structural):** Ecorp's prompt and tools were welded into the generic graph, and `build_graph`, `graph_edge_route_after_agent`, `check_output`, `invalid_tool_call` and `make_llm` each defaulted to "Ecorp" when a caller named nothing. That forced the deferred imports (graph → manifest → builtin → `run_subagent` → graph) and let any module that wanted "the graph" pick up one domain's tools. Ecorp moved out and the defaults went; `graph/build.py` is the only module that imports every node, and nothing a node imports imports it back. Tests bind the generic functions to Ecorp in one place (`tests/ecorp.py`).
 - **Not done:** several domains from one process (47).
 
 ### 24. General-purpose ingestor with parent-child chunking
@@ -196,7 +196,7 @@ A `SecurityCtx` (`tenant`, `principal`, `claims`) is stamped once by `validate_i
 - **Gap:** the fetcher's rebinding window is closed; the **crawler's** is not. The headless browser resolves names itself, follows redirects and loads sub-resources, so the guard on the first URL is a first line only. Its containment is the network (`deploy/README.md`, "The crawler's network": its own Docker network, plus a host firewall rule the production stack does not have yet because the crawler is not in it). A hung resolver still holds a task and a thread.
 
 ### 25. Input moderation before any spend
-`moderate_input` + `route_after_moderation` + `reject_moderation` (`app/core/moderation.py`) run right after `validate_input`'s checks, before the cache, compaction, retrieval or any LLM call. Two layers, cheapest first: (1) a regex screen for known injection/jailbreak phrasings plus a small denylist; (2) an ML classifier, Meta's Llama Prompt Guard 2 (22M) served by `ml-service`'s `/prompt-guard`, which catches paraphrases the patterns miss (`ML_INJECTION_THRESHOLD` 0.5; ~25–100 ms).
+`moderate_input` + `graph_edge_route_after_moderate_input` + `reject_moderation` (`app/core/moderation.py`) run right after `validate_input`'s checks, before the cache, compaction, retrieval or any LLM call. Two layers, cheapest first: (1) a regex screen for known injection/jailbreak phrasings plus a small denylist; (2) an ML classifier, Meta's Llama Prompt Guard 2 (22M) served by `ml-service`'s `/prompt-guard`, which catches paraphrases the patterns miss (`ML_INJECTION_THRESHOLD` 0.5; ~25–100 ms).
 - A real hit at either layer fails **closed**; a failure of the check *itself* (a regex bug, `ml-service` unreachable) fails **open**, recorded as `outcome="error"`. The two are deliberately not conflated.
 - **Bug:** compaction (an LLM call) ran right after `validate_input`, i.e. BEFORE moderation and the cache, so a moderated-out turn on a long thread and a cache-hit turn each still paid for a summarization, breaking the "before any spend" in the title. The order is now `validate_input → moderate_input → check_semantic_cache → (miss) compact_history → retrieve_context`. Test: `test_graph_integration.py::test_compaction_runs_only_after_moderation_and_a_cache_miss` (it reads node-start order off the event stream, which a router test can't see).
 - **Gap:** the threshold is the model's natural boundary, not recalibrated on live traffic. Moderation screens words, not pixels (44).
@@ -245,7 +245,7 @@ One lazy `psycopg_pool.ConnectionPool` singleton (`min_size=1`, `max_size=10`) b
 `MAX_COST_USD_PER_TURN` is a hard stop on cumulative per-turn dollars, distinct from the token cap because the same tokens cost differently by model tier. `agent()` computes incremental cost per call from LiteLLM's input/output/cached rates (`pricing.price_usage`), the same running total each usage event is priced from (`COST_GOVERNANCE.md`). It is checked **before** the next call: enforcement, not just recording.
 
 ### 36. Run cancellation
-A third outcome for a paused interrupt, not a repurposed rejection: `route_after_approval` checks `cancelled` first and goes to `__end__`, never back to `agent` (`CANCEL_SENTINEL`, `runtime/stream.py::cancel_run`). A rejection lets the agent react; a cancel must stop the run.
+A third outcome for a paused interrupt, not a repurposed rejection: `graph_edge_route_after_human_approval` checks `cancelled` first and goes to `__end__`, never back to `agent` (`CANCEL_SENTINEL`, `runtime/stream.py::cancel_run`). A rejection lets the agent react; a cancel must stop the run.
 - **Bug: a cancel outlived its run.** Nothing cleared `cancelled`, so a later pause on the same thread that the person *approved* went straight to `__end__`, leaving a dangling `tool_call`. `validate_input` now resets `cancelled`/`approved` each turn (a resume skips it). Test: `TestApprovalAfterAnEarlierCancel`.
 - **Bug: an approved run couldn't be cancelled.** `astream_events_resume` took no `cancel_check`, so `POST /chat/cancel` between "approve" and "done" set a flag nothing polled. It now forwards it: a cancel before the worker picks the job up stops the turn before the approved write, and a later one stops it at the next event boundary (a running tool finishes; cancellation is cooperative).
 - **Bug: a stream closed before its terminal event left a blank trace and no metrics.** The consumer can stop iterating mid-turn (the worker's `publish_result` raising, its task cancelled while publishing, Telegram or the CLI returning early). That lands in the consumer's frame, so `_run_graph_stream`'s `CancelledError` branch never ran; the generator was closed with `GeneratorExit`, which matched no `except`, and the trace kept its input with no output or level (indistinguishable in Langfuse from a turn still running) while the turn left no outcome behind. What holds now:
@@ -282,7 +282,7 @@ Tokens, cost and grounding are summed across repetitions; latency is averaged. T
 `compact_history` runs once per turn that reaches the model, after moderation and a semantic-cache miss and before retrieval (25). It summarizes exactly the discarded messages with one LLM call and folds the result into a cumulative `state["history_summary"]`, never reset per turn. `agent()` puts the summary ahead of the question, like retrieved context, with a short "don't restate this" reminder behind it (a small model was seen regurgitating the injected summary); both ride on the question itself (79). It's a separate field because `add_messages` has no insert-at-position.
 - **Bug: the summary and the retrieved context landed after the question.** `compact_history` runs just before `retrieve_context`, and what a node returns is appended, so its breadcrumb sits after the question, and the anchor was `len(messages) - 1`, which is the breadcrumb. The model was sent `question, summary, context` instead of `summary, context, question`, and the previous-turn lookup that enriches a vague follow-up (everything before the anchor) saw the current question as the previous turn. The anchor is now the question's own index. Test: `tests/agent/graph/test_compaction_anchor.py`. The breadcrumb still follows the question in stored history (a node can only append), so a transcript replay shows it after the turn that triggered it.
 - **A cache hit skips it,** so a long run of hits defers compaction to the next miss. That is the turn that needs the room, and a hit calls no model, so nothing is under context pressure meanwhile (`test_compaction_runs_only_after_moderation_and_a_cache_miss` pins it). The cost lands on that miss: the span it summarizes has grown with every hit. If it outgrows the summarizing model's window, the call fails and compaction degrades as always, to the trim without a new summary (the breadcrumb says so). It takes hundreds of consecutive hits on one thread to get there, so this is accepted, not capped.
-- If the summary itself passes `MAX_HISTORY_SUMMARY_CHARS`, `route_after_compaction` routes to `context_window_exceeded`: a named dead end, not silent truncation. A summarization failure still applies the trim and skips updating the summary.
+- If the summary itself passes `MAX_HISTORY_SUMMARY_CHARS`, `graph_edge_route_after_compact_history` routes to `context_window_exceeded`: a named dead end, not silent truncation. A summarization failure still applies the trim and skips updating the summary.
 
 ### 42. Telegram channel
 `app/adapters/inbound/channels/telegram/bot.py` long-polls `getUpdates`, resolves a stable `thread_id`/`SecurityCtx` per chat, and publishes each message as an unattended turn onto its domain's queue (89), where a worker drives `astream_events_turn_unattended()`; the channel collects the events the worker publishes back into one reply. Long-polling needs no inbound port or public URL; production would use `setWebhook`.
@@ -309,7 +309,7 @@ The only HTTP chat path. `POST /chat/stream/queued` publishes a turn to a Redis 
 - **Use when:** SSE connection count and LLM concurrency need to scale on different axes.
 
 ### 44. Multimodal image questions
-`_build_human_content(text, images)` returns a plain string (byte-identical to before) with no image and an OpenAI/LiteLLM content list with one or more. The app never fetches or decodes an image; the backing model does. Five call sites (`route_after_validation`, `moderate_input`, `check_semantic_cache`, `retrieve_context`, `write_semantic_cache`) assumed `.content` was a string, so `human_text`/`human_has_content` handle both, and an image-only question isn't rejected as empty.
+`_build_human_content(text, images)` returns a plain string (byte-identical to before) with no image and an OpenAI/LiteLLM content list with one or more. The app never fetches or decodes an image; the backing model does. Five call sites (`graph_edge_route_after_validate_input`, `moderate_input`, `check_semantic_cache`, `retrieve_context`, `write_semantic_cache`) assumed `.content` was a string, so `human_text`/`human_has_content` handle both, and an image-only question isn't rejected as empty.
 - **Two scope boundaries:** moderation screens words, not pixels (an image-only message passes); retrieval and caching stay text-only. Verify vision **and** tool-calling support before assuming an alias swap is enough.
 
 ### 45. Skill packages with progressive disclosure
@@ -419,7 +419,7 @@ Langfuse trace `1e46b2c8` (2026-10-21): "what is working hours of ecorp ?" got a
 ### 71. A refusal is final: not retried, not an error, and not left in the thread
 Langfuse traces `b376e4d8` and `2c8e76a4` (2026-10-21): LiteLLM's "Denied Financial Advice" guardrail (created in its admin UI; no committed config defines it) refused "should i invest in testla stock ?" with an HTTP 400. Three things in the app turned one policy decision into a dead session.
 - **Bug 1: every 4xx was retried.** LangGraph 0.2.76's `default_retry_on` excludes only `httpx.HTTPStatusError` 4xx (checked in the installed source), and the OpenAI SDK's `BadRequestError`, `AuthenticationError`, `NotFoundError` and `UnprocessableEntityError` are not that class, so `AGENT_RETRY_POLICY` made three attempts about five seconds apart. `gateway.is_permanent_client_error` (a 4xx other than 408, 409, 425 or 429) is now refused a retry, next to the budget stop's carve-out; a 429, a 5xx and a dropped connection are retried as before. (The comment above the policy said "connection error, 5xx"; the code did more.)
-- **Bug 2: a policy decision reached the person as an anonymous `internal` error.** `gateway.content_block` recognises the refusal by the structured fields LiteLLM sets (`provider_specific_fields.guardrail_name`, `guardrail_mode`), else by the "Content blocked" message, never by the status alone (a malformed request is also a 400). The `agent` node turns it into the turn's answer, "I can't help with that request." (the text `reject_moderation` uses; the rule, matched phrase and guardrail name stay in the gateway's log), marked with `GATEWAY_REFUSAL_KEY`. `should_continue` sends a marked message to `no_answer`, which ends the turn with no retry, no follow-up suggestions (more model calls on the same refused history) and no semantic-cache write (the refusal would be stored as the answer to this question). No new node or edge, no `STATE_SCHEMA_VERSION` bump. Any other 400 (context too long, a bad request) still raises and is reported as `internal`: those are bugs.
+- **Bug 2: a policy decision reached the person as an anonymous `internal` error.** `gateway.content_block` recognises the refusal by the structured fields LiteLLM sets (`provider_specific_fields.guardrail_name`, `guardrail_mode`), else by the "Content blocked" message, never by the status alone (a malformed request is also a 400). The `agent` node turns it into the turn's answer, "I can't help with that request." (the text `reject_moderation` uses; the rule, matched phrase and guardrail name stay in the gateway's log), marked with `GATEWAY_REFUSAL_KEY`. `graph_edge_route_after_agent` sends a marked message to `no_answer`, which ends the turn with no retry, no follow-up suggestions (more model calls on the same refused history) and no semantic-cache write (the refusal would be stored as the answer to this question). No new node or edge, no `STATE_SCHEMA_VERSION` bump. Any other 400 (context too long, a bad request) still raises and is reported as `internal`: those are bugs.
 - **Bug 3: the refused message stayed in the thread, and the gateway scans the whole list.** "hey" was refused for an earlier message's "stock + should i", and so was every turn after it. When the guardrail refused the REQUEST (`pre_call`), this turn's message is replaced in the stored thread by a placeholder (same id, which is how the reducer replaces instead of appending); a `post_call` block refused what the model wrote, so the question stays.
 - **Metrics:** `agent_gateway_content_blocked_total{mode}`, with no alert: it is the operator's own policy working. `agent_unparsed_completion_total` counts the dropped-call case in 73.
 - **Tests:** `tests/agent/graph/test_gateway_refusal.py` (38; 23 fail on the old code), including the real SDK exception from a `MockTransport` response and the two-turn session that used to end at the first turn. Every worker role sets `healthcheck: *worker-healthcheck`. Found in the same session: the app image's `HEALTHCHECK` probes the API's port, compose lets a service inherit it, and the workers only overrode `command`, so all of them showed `unhealthy` for as long as they ran. It is disabled for them, not replaced: a worker pool that picks up nothing is what the `WorkerUnreachable` alert already watches.
@@ -677,6 +677,22 @@ The queue is correct only while three numbers stay in order, and a comment in `c
 - **Gap:** `COUNT` is per stream, so a worker serving several domains with fewer free slots than streams can still claim an entry it must wait to start. A worker whose event loop is blocked for more than the lock's 60 s (a CPU-bound call on the loop) still loses its lock; that is what the counter is for.
 - **Use when:** correctness depends on one timeout outlasting another. Write the relation as a check that fails at start-up, not as a comment, and make the test name the variables.
 
+## Naming
+
+One rule, so a function's name says what it is and where `build_graph` wires it (`build.py` is the only module that connects them):
+
+| Name | What it is |
+|---|---|
+| `graph_node_<node>` | the function of the node registered as `"<node>"` |
+| `make_graph_node_<node>` | the factory that builds it when it needs a client or a setting; it returns a function named `graph_node_<node>` |
+| `graph_node_<node>_bound` | that function with this domain's arguments applied (a `functools.partial`, made in `build_graph`) |
+| `graph_edge_route_after_<node>` | the router of `<node>`'s conditional edge. `<node>` is the SOURCE node, so the router that reads `agent`'s answer is `graph_edge_route_after_agent` |
+| `graph_edge_route_after_<node>_bound` | the same, with the domain's arguments or the build's finish steps applied |
+
+- **The registered string is the node's identity**, not the function's name: traces, metrics, `instrumented`, stream events and checkpoint channels all use `"<node>"`. A node function can be renamed freely; the string cannot (a rename is a topology change, so drain the workers first, pattern 16).
+- **An edge's stored name is `EDGE_CHANNEL_NAMES[<node>]`**, not its router's name. LangGraph records a conditional edge under its router's `__name__`, which is why renaming a router once stranded turns in flight (pattern 16). `build_graph` registers every router through `named_edge` under its entry in that table, so the Python name follows the rule above and the stored name never moves. Three entries are `route` (their router is built by `then()`), one is `condition` (a `functools.partial` has no name), the rest are the names the routers had before the rename. A new conditional edge adds `graph_edge_route_after_<node>` as its entry.
+- **Adding a node or an edge:** write `graph_node_<node>` (or its factory) in the module that owns the concern, register it with `add("<node>", ...)` in `build_graph`, and for a conditional edge add the router and its table entry. `tests/agent/graph/test_graph_naming.py` fails on a node or router that breaks the rule; `tests/agent/graph/test_edge_channel_names.py` fails on a table that no longer matches what checkpoints carry.
+
 ## Graph Flow
 
 ```
@@ -685,25 +701,25 @@ START
 validate_input  ← resets per-turn fields (iterations, total_tokens, run_id, cancelled/approved, the retrieved
   ↓                context and its anchor, every check_output result); stamps SecurityCtx from
   ↓                config["configurable"]["ctx"]
-route_after_validation?  ← valid ctx? last user message (not retry feedback, pattern 5) non-empty?
+graph_edge_route_after_validate_input?  ← valid ctx? last user message (not retry feedback, pattern 5) non-empty?
   ├─→ reject_context  (no valid tenant+principal — checked FIRST, pattern 17) → END
   ├─→ reject_input    (AIMessage explaining the problem) → END
   └─→ moderate_input  ← regex screen + Prompt Guard classifier (pattern 25); first spend-adjacent
        │                 step, so nothing below runs for a refused input; fails closed on a hit,
        │                 open on the check's own failure
        ↓
-      route_after_moderation?
+      graph_edge_route_after_moderate_input?
        ├─→ reject_moderation ("I can't help with that request.") → END
        └─→ check_semantic_cache  ← tenant+principal cosine-KNN in Redis (pattern 22);
             │                       degrades to a miss on any failure
             ↓
-           route_after_cache?
+           graph_edge_route_after_check_semantic_cache?
             ├─→ check_output   (HIT: cached answer as a final AIMessage; no compaction, no retrieval, no LLM)
             └─→ compact_history  ← MISS, the first point the turn is known to need the model: trims past
                  │                  HISTORY_TOKEN_CEILING down to FLOOR and folds the dropped turns into
                  │                  history_summary with one LLM call (pattern 41); no-op in budget
                  ↓
-                route_after_compaction?  ← history_summary over MAX_HISTORY_SUMMARY_CHARS?
+                graph_edge_route_after_compact_history?  ← history_summary over MAX_HISTORY_SUMMARY_CHARS?
                  ├─→ context_window_exceeded  (a named dead end, not silent truncation) → END
                  └─→ route_model  ← asks the ML service whether this prompt needs a stronger model (pattern 68);
                       │ ║                writes ONLY `model_route`; every failure = local; off by default
@@ -716,7 +732,7 @@ route_after_validation?  ← valid ctx? last user message (not retry feedback, p
                       │       block ahead of the question (79); retried on transient failure (AGENT_RETRY_POLICY);
                       │       may call ask_clarification (pattern 27)
                       ↓
-                     should_continue?  ← the iteration/token/cost caps are checked first, whatever the model said
+                     graph_edge_route_after_agent?  ← the iteration/token/cost caps are checked first, whatever the model said
                       ├─→ no_answer  (MAX_ITERATIONS, MAX_TOKENS_PER_TURN, MAX_COST_USD_PER_TURN (35) or
                       │               MAX_REPEATED_ACTIONS identical batches (34), or the gateway's content
                       │               guardrail refused the call (71): answers any tool calls pending on the
@@ -726,7 +742,7 @@ route_after_validation?  ← valid ctx? last user message (not retry feedback, p
                       │                      pending call with a ToolMessage rejection) → agent
                       ├─→ human_approval  (require_approval, OR any non-read_only call — mandatory, pattern 15)
                       │    ↓
-                      │   route_after_approval?  ← interrupt() paused here
+                      │   graph_edge_route_after_human_approval?  ← interrupt() paused here
                       │    ├─→ tools      (approved)
                       │    ├─→ agent      (rejected, with synthesized ToolMessage rejections)
                       │    └─→ __end__    (cancelled — checked FIRST, never loops back, pattern 36)
@@ -736,7 +752,7 @@ route_after_validation?  ← valid ctx? last user message (not retry feedback, p
                       └─→ check_output  ← cache hits and misses both rejoin here; computes
                            │               used_citations and ungrounded_claims_count (20, 39)
                            ↓
-                          route_after_check?  ← leaked prompt, too short, fabricated, skipped a required
+                          graph_edge_route_after_check_output?  ← leaked prompt, too short, fabricated, skipped a required
                            │                    tool, deferred, uncited or misattributed?
                            ├─→ retry_output  ← tags the rejected answer + a corrective HumanMessage as retry
                            │                    artifacts (pattern 5) → agent

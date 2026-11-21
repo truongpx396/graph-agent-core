@@ -1,6 +1,6 @@
 """The tool-batch guard: one node that turns a batch of tool calls the model should not have made into a
 self-correcting retry, instead of running or surfacing it. `batch_problem` checks three problems in order
-(`should_continue` routes on it and `tool_batch_guard` re-derives it, so there is one definition each):
+(`graph_edge_route_after_agent` routes on it and `tool_batch_guard` re-derives it, so there is one definition each):
 - `too_many_tool_calls`: more than MAX_TOOL_CALLS_PER_TURN in one response (a confused model fanning out into
   dozens of searches);
 - `invalid_tool_call`: a name that is not one of THIS domain's tools (a hallucinated or malformed call, seen
@@ -76,13 +76,13 @@ _COUNTERS = {
 }
 
 
-def tool_batch_guard(state: State, valid_tool_names: frozenset[str]) -> dict[str, Any]:
+def graph_node_tool_batch_guard(state: State, valid_tool_names: frozenset[str]) -> dict[str, Any]:
     """Reject the pending batch without running it. `valid_tool_names` is bound per domain by
-    `build_graph` (`functools.partial`), the same set `should_continue` routed with."""
+    `build_graph` (`functools.partial`), the same set `graph_edge_route_after_agent` routed with."""
     last_ai = cast(AIMessage, state["messages"][-1])
     tool_calls = last_ai.tool_calls or []
     problem = batch_problem(tool_calls, state["messages"], valid_tool_names)
-    if problem is None:  # should_continue only routes here for a real problem
+    if problem is None:  # graph_edge_route_after_agent only routes here for a real problem
         return {}
     _COUNTERS[problem].inc()
     return {"messages": reject_tool_calls(tool_calls, _rejection_reason(problem, tool_calls, valid_tool_names))}

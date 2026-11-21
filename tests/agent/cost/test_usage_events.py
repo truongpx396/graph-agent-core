@@ -32,7 +32,7 @@ from app.core import metrics
 from app.ports.outbound import cost as cost_ports
 from app.ports.outbound import models as model_ports
 from app.ports.outbound.cost import UsageTableMissingError
-from tests.agent.fakes import make_agent_node
+from tests.agent.fakes import make_graph_node_agent
 from tests.agent.graph.test_graph_integration import _config
 from tests.conftest import TEST_CTX, metric_value
 from tests.ecorp import build_graph
@@ -260,12 +260,12 @@ class TestWhatAnEventRecords:
         assert call.priced.cost_usd is None
 
     async def test_the_node_records_the_kind_it_was_built_with(self, usage_event_sink):
-        await make_agent_node(_llm(_reply()), kind="subagent")({"messages": [HumanMessage(content="hi")]}, CONFIG)
+        await make_graph_node_agent(_llm(_reply()), kind="subagent")({"messages": [HumanMessage(content="hi")]}, CONFIG)
 
         assert [row["kind"] for row in usage_event_sink] == ["subagent"]
 
     async def test_a_real_delegated_run_is_recorded_as_a_subagent_call(self, usage_event_sink):
-        """Through `run_subagent`'s own wiring (`GraphDeps.meter_kind` -> `make_agent_node`), not a
+        """Through `run_subagent`'s own wiring (`GraphDeps.meter_kind` -> `make_graph_node_agent`), not a
         node built by hand: a delegated run's spend must be separable from the parent's."""
         from pathlib import Path
 
@@ -372,7 +372,7 @@ class TestAFailedWriteNeverFailsTheTurnAndIsNeverSilent:
 
     async def test_the_agent_node_still_answers_when_the_write_fails(self):
         with cost_ports.usage_events.overriding(_FailingStore(ConnectionError("appdata unreachable"))):
-            result = await make_agent_node(_llm(_reply("the answer")))({"messages": [HumanMessage(content="q")]}, CONFIG)
+            result = await make_graph_node_agent(_llm(_reply("the answer")))({"messages": [HumanMessage(content="q")]}, CONFIG)
 
         assert result["messages"][0].content == "the answer"
 

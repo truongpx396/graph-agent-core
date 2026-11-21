@@ -1,12 +1,12 @@
 """Token estimation and history trimming/compaction: `_estimate_tokens` (tiktoken-based approximate
 budget check), `_messages_to_trim`/`_trim_history` (which whole turns fall outside the kept window),
-`_format_turns_for_summary`/`make_compact_history_node` (folding trimmed turns into a running
+`_format_turns_for_summary`/`make_graph_node_compact_history` (folding trimmed turns into a running
 `history_summary` instead of discarding them, AR-015a), and `COMPACTION_MARKER_KEY`/
 `_compaction_marker_message` (the permanent breadcrumb left in `state["messages"]` when compaction
 does something).
 
 Depends only on `graph/state.py` (for `HISTORY_TOKEN_CEILING`/`HISTORY_TOKEN_FLOOR`) and
-`graph/messages.py`; `make_compact_history_node` is wired in by `graph/build.py`, and
+`graph/messages.py`; `make_graph_node_compact_history` is wired in by `graph/build.py`, and
 `COMPACTION_MARKER_KEY` is read by `runtime/stream.py::get_session_messages` and
 `graph/agent_node.py`.
 """
@@ -145,13 +145,13 @@ def _compaction_marker_message(turns_dropped: int, *, summarized: bool) -> Syste
     )
 
 
-def make_compact_history_node(
+def make_graph_node_compact_history(
     llm: ChatModel,
     ceiling: int = HISTORY_TOKEN_CEILING,
     floor: int = HISTORY_TOKEN_FLOOR,
     model_alias: str = CHAT_MODEL,
 ) -> Callable[..., Awaitable[dict[str, Any]]]:
-    """Factory, same rationale as make_agent_node/make_suggest_followups_node:
+    """Factory, same rationale as make_graph_node_agent/make_graph_node_suggest_followups:
     needs an LLM client to turn discarded turns into a running summary
     (AR-015a) instead of just discarding them.
 
@@ -164,13 +164,13 @@ def make_compact_history_node(
     `ceiling`/`floor` default to the module constants; overridable only so
     tests can trigger the hysteresis behavior with small budgets.
     `model_alias` is the LiteLLM alias `llm` is bound to, used only to price and record its
-    calls, the same meaning it has for `make_agent_node`.
+    calls, the same meaning it has for `make_graph_node_agent`.
 
     Sends no tool schemas (`utils.without_tools`): a transcript in, a summary out.
     """
     llm = without_tools(llm)
 
-    async def compact_history(state: State, config: RunnableConfig | None = None) -> dict[str, Any]:
+    async def graph_node_compact_history(state: State, config: RunnableConfig | None = None) -> dict[str, Any]:
         """Whatever `_messages_to_trim` would discard gets folded into the
         running `history_summary` instead of dropped — the trim itself is
         unchanged; only what happens to the discarded CONTENT is new.
@@ -234,4 +234,4 @@ def make_compact_history_node(
         marker = _compaction_marker_message(turns_dropped, summarized=True)
         return {"messages": [*removals, marker], "history_summary": new_summary}
 
-    return compact_history
+    return graph_node_compact_history

@@ -7,7 +7,7 @@ hallucination with a button on it; search is the missing first half. Ecorp has n
 says it cannot open links (`tests/domains/test_ecorp_cannot_open_links.py`); discovery without reading would
 be worse than neither.
 
-Tier `outward`, so every call waits for a human (Principle II, `should_continue`). A search is read-only in
+Tier `outward`, so every call waits for a human (Principle II, `graph_edge_route_after_agent`). A search is read-only in
 effect, but it SENDS TEXT THE MODEL WROTE to a third party and spends a paid credit, and the model's context
 is untrusted on nearly every turn (pattern 12): a poisoned document could put something in a query string that
 shouldn't be there. The approval prompt shows the query; nothing makes that optional.

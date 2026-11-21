@@ -9,7 +9,7 @@ the server.
 ## Capability is the caller's, never the remote's (AR-004b)
 
 Every tool declares a capability (`read_only`/`mutating`/`outward`,
-`app/agent/tools/builtin.py::SHARED_TOOL_CAPABILITIES`) that `should_continue` uses to gate approval. A remote
+`app/agent/tools/builtin.py::SHARED_TOOL_CAPABILITIES`) that `graph_edge_route_after_agent` uses to gate approval. A remote
 tool's `ToolAnnotations` (`readOnlyHint`, ...) are hints per the MCP spec, not guarantees. So
 `load_remote_tools`'s `capability_overrides`, supplied by the LOCAL caller, is the ONLY source of a remote
 tool's capability, and a tool it doesn't name defaults to `"outward"` (the same fail-closed default as

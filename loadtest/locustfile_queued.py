@@ -177,7 +177,7 @@ class ChatTurnUser(HttpUser):
     def token_budget_exceeded(self) -> None:
         # Always the FIRST turn of a brand new thread — compact_history
         # short-circuits on a thread's very first turn regardless of size
-        # (app/agent/graph/core.py), so this reaches should_continue's token
+        # (app/agent/graph/core.py), so this reaches graph_edge_route_after_agent's token
         # check unsummarized either way; fresh thread keeps that guaranteed
         # rather than incidental.
         self._post_chat(

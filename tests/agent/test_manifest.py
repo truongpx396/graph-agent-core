@@ -136,7 +136,7 @@ class TestSecondDomainProvesReuse:
         assert g.manifest.system_prompt != ECORP_MANIFEST.system_prompt
 
     async def test_mandatory_capability_gate_pauses_for_the_widget_domains_own_tool(self):
-        """The load-bearing behavioral proof: should_continue's mandatory
+        """The load-bearing behavioral proof: graph_edge_route_after_agent's mandatory
         human_approval gate (GRAPH_PATTERNS.md pattern 15) — unmodified,
         same function every Ecorp turn uses — correctly treats
         open_ticket as mutating using THIS domain's tool_capabilities,

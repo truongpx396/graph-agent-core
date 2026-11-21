@@ -22,9 +22,13 @@ with no branching and no default. Ecorp is one entry in `app/domains/registry.py
 
 This is the composition root, so the one module that imports every node; nothing a node imports imports it
 back, which is why no graph module needs a deferred import.
+
+Names (GRAPH_PATTERNS.md "Naming"): `graph_node_<node>` is the function of the node registered as `"<node>"` and `make_graph_node_<node>` the
+factory that builds it; `graph_edge_route_after_<node>` is the router of that node's conditional edge. The registered string is the node's
+identity (traces, metrics, checkpoints); `EDGE_CHANNEL_NAMES` is the edge's.
 """
 import functools
-from collections.abc import Awaitable, Callable, Hashable
+from collections.abc import Awaitable, Callable, Hashable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -36,37 +40,44 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 
-from app.agent.graph.agent_node import make_agent_node
+from app.agent.graph.agent_node import make_graph_node_agent
 from app.agent.graph.cache import (
-    make_check_semantic_cache_node,
-    make_write_semantic_cache_node,
-    route_after_cache,
+    graph_edge_route_after_check_semantic_cache,
+    make_graph_node_check_semantic_cache,
+    make_graph_node_write_semantic_cache,
 )
-from app.agent.graph.compaction import make_compact_history_node
+from app.agent.graph.compaction import make_graph_node_compact_history
 from app.agent.graph.core import (
     AGENT_RETRY_POLICY,
-    context_window_exceeded,
-    moderate_input,
-    reject_context,
-    reject_input,
-    reject_moderation,
-    route_after_compaction,
-    route_after_moderation,
-    route_after_validation,
-    validate_input,
+    graph_edge_route_after_compact_history,
+    graph_edge_route_after_moderate_input,
+    graph_edge_route_after_validate_input,
+    graph_node_context_window_exceeded,
+    graph_node_moderate_input,
+    graph_node_reject_context,
+    graph_node_reject_input,
+    graph_node_reject_moderation,
+    graph_node_validate_input,
 )
-from app.agent.graph.followups import make_suggest_followups_node
-from app.agent.graph.hitl import make_human_approval_node, route_after_approval
+from app.agent.graph.followups import make_graph_node_suggest_followups
+from app.agent.graph.hitl import (
+    graph_edge_route_after_human_approval,
+    make_graph_node_human_approval,
+)
 from app.agent.graph.links import cannot_open_links
-from app.agent.graph.model_route import make_route_model_node
+from app.agent.graph.model_route import make_graph_node_route_model
 from app.agent.graph.output_checks import parse_checks_off_on_routed_tiers
-from app.agent.graph.retrieval import make_retrieve_context_node
+from app.agent.graph.retrieval import make_graph_node_retrieve_context
 from app.agent.graph.retry import (
-    make_no_answer_fallback_node,
-    make_retry_exhausted_node,
-    retry_output,
+    graph_node_retry_output,
+    make_graph_node_no_answer,
+    make_graph_node_retry_exhausted,
 )
-from app.agent.graph.routing import check_output, route_after_check, should_continue
+from app.agent.graph.routing import (
+    graph_edge_route_after_agent,
+    graph_edge_route_after_check_output,
+    graph_node_check_output,
+)
 from app.agent.graph.skill_guards import SKILL_REQUIRED_TOOL_MARKERS
 from app.agent.graph.state import (
     HISTORY_TOKEN_CEILING,
@@ -81,8 +92,15 @@ from app.agent.graph.stream_events import (
     replaced_the_answer,
     trimmed_the_history,
 )
-from app.agent.graph.tool_guards import tool_batch_guard
-from app.agent.graph.utils import NodeFn, friendly_tool_error, instrumented, make_llm
+from app.agent.graph.tool_guards import graph_node_tool_batch_guard
+from app.agent.graph.utils import (
+    NodeFn,
+    RouterFn,
+    friendly_tool_error,
+    instrumented,
+    make_llm,
+    named_edge,
+)
 from app.agent.tools import builtin
 from app.core.config import (
     CHAT_MODEL,
@@ -109,7 +127,7 @@ async def default_cache_set(ctx: SecurityCtx | None, query: str, answer: str, ci
 async def default_search(query: str, ctx: SecurityCtx | None) -> tuple[str, list[dict[str, Any]]]:
     """Thin wrapper over `builtin.gather_context` matching the
     `Callable[[str, SecurityCtx | None], Awaitable[tuple[str, list[dict]]]]`
-    shape `make_retrieve_context_node` expects, so tests can pass a plain
+    shape `make_graph_node_retrieve_context` expects, so tests can pass a plain
     fake function to the factory.
 
     `ctx` flows straight through — the same value search_docs/remember read
@@ -128,7 +146,7 @@ async def default_search(query: str, ctx: SecurityCtx | None) -> tuple[str, list
 class GraphDeps:
     """Bundle of the graph's swappable external clients, built once at the
     composition root (build_graph) and threaded into the node factories
-    that need them — see make_agent_node, make_retrieve_context_node.
+    that need them — see make_graph_node_agent, make_graph_node_retrieve_context.
     Unset fields fall back to the real clients inside build_graph(); tests
     set individual fields to inject fakes instead of monkeypatching module
     globals (see tests/agent/graph/test_agent_node.py, tests/agent/graph/test_nodes.py).
@@ -206,6 +224,23 @@ SUBAGENT_PROFILE = GraphProfile(
 )
 
 
+# The name a checkpoint records for each node's conditional edge (source node -> name), which is what a turn a worker left mid-flight is
+# resumed through (GRAPH_PATTERNS.md 16). These are the names the graph had before routers became `graph_edge_route_after_<node>`, held
+# unchanged on purpose: `named_edge` registers each router under its entry, so renaming a router function cannot strand a turn. Three
+# edges are `route` because `then()` builds their router, and `agent`'s is `condition` because its router is a `functools.partial`.
+# A new conditional edge gets `graph_edge_route_after_<node>` here. `tests/agent/graph/test_edge_channel_names.py` holds the table
+# equal to the compiled graph; changing an entry is a topology change, so drain the workers first.
+EDGE_CHANNEL_NAMES: Mapping[str, str] = {
+    "validate_input": "route_after_validation",
+    "moderate_input": "route",
+    "check_semantic_cache": "route",
+    "compact_history": "route",
+    "agent": "condition",
+    "human_approval": "route_after_approval",
+    "check_output": "route_after_check_bound",
+}
+
+
 def build_graph(
     manifest: "AgentManifest",
     domain: "DomainPlugin",
@@ -261,25 +296,25 @@ def build_graph(
     # they stay directly callable from tests with just `state` (and the domain's values), and
     # each is checked against the capability mapping / tool set / prompt the graph was ACTUALLY
     # built with (pattern 23).
-    domain_should_continue = functools.partial(
-        should_continue,
+    graph_edge_route_after_agent_bound = functools.partial(
+        graph_edge_route_after_agent,
         tool_capabilities=tool_capabilities,
         valid_tool_names=valid_tool_names,
         max_iterations=max_iterations if max_iterations is not None else MAX_ITERATIONS,
         max_tokens=max_tokens_per_turn if max_tokens_per_turn is not None else MAX_TOKENS_PER_TURN,
         max_cost_usd=max_cost_usd_per_turn if max_cost_usd_per_turn is not None else MAX_COST_USD_PER_TURN,
     )
-    domain_check_output = functools.partial(
-        check_output,
+    graph_node_check_output_bound = functools.partial(
+        graph_node_check_output,
         system_prompt=manifest.system_prompt,
         enforce_citations=profile.enforce_citations,
         skill_required_tools=skill_required_tools,
         # Validated here, at build, so a typo or a protected check stops the process at start-up instead of leaving a check running that the operator thinks is off.
         skip_on_routed_tiers=parse_checks_off_on_routed_tiers(OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS),
     )
-    domain_tool_batch_guard = functools.partial(tool_batch_guard, valid_tool_names=valid_tool_names)
+    graph_node_tool_batch_guard_bound = functools.partial(graph_node_tool_batch_guard, valid_tool_names=valid_tool_names)
 
-    agent = make_agent_node(
+    graph_node_agent = make_graph_node_agent(
         llm_client,
         model_alias=model_alias,
         kind=deps.meter_kind,
@@ -288,7 +323,7 @@ def build_graph(
         cannot_open_links=cannot_open_links(valid_tool_names),
         system_prompt=manifest.system_prompt,
     )
-    retrieve_context = make_retrieve_context_node(deps.search_docs or default_search)
+    graph_node_retrieve_context = make_graph_node_retrieve_context(deps.search_docs or default_search)
 
     # Error recovery: a failing tool (e.g. Qdrant unreachable) doesn't crash the run —
     # handle_tool_errors turns the exception into a ToolMessage so `agent` can react on the next
@@ -298,7 +333,7 @@ def build_graph(
     # its result (messages, or Commands from a tool like run_subagent) is returned unchanged.
     tool_node = ToolNode(domain_tools, handle_tool_errors=friendly_tool_error)
 
-    async def run_tools(state: State, config: RunnableConfig) -> Any:
+    async def graph_node_tools(state: State, config: RunnableConfig) -> Any:
         return await tool_node.ainvoke(state, config)
 
     builder = StateGraph(State)
@@ -309,29 +344,29 @@ def build_graph(
     def add(name: str, fn: NodeFn, **kwargs: Any) -> None:
         builder.add_node(name, instrumented(name)(fn), **kwargs)
 
-    add("validate_input", validate_input)
-    add("reject_input", reject_input)
-    add("reject_context", reject_context)
-    add("moderate_input", moderate_input)
-    add("reject_moderation", reject_moderation)
+    add("validate_input", graph_node_validate_input)
+    add("reject_input", graph_node_reject_input)
+    add("reject_context", graph_node_reject_context)
+    add("moderate_input", graph_node_moderate_input)
+    add("reject_moderation", graph_node_reject_moderation)
     prefetches = manifest.prefetch == "always"  # "never": the node is not in the graph at all (R29)
     if prefetches:
-        add("retrieve_context", retrieve_context)
+        add("retrieve_context", graph_node_retrieve_context)
     # Reliability policy: retry a transient LLM-endpoint failure a few times before giving up —
     # see AGENT_RETRY_POLICY. Nothing else here gets one: `tools` recovers via handle_tool_errors
     # above, and every other node is a pure function of state where a retry would just repeat the
     # same bug (pattern 7).
-    add("agent", agent, retry=AGENT_RETRY_POLICY)
-    add("tools", run_tools)
-    add("human_approval", make_human_approval_node(deps.interrupt or interrupt))
-    add("tool_batch_guard", domain_tool_batch_guard)
+    add("agent", graph_node_agent, retry=AGENT_RETRY_POLICY)
+    add("tools", graph_node_tools)
+    add("human_approval", make_graph_node_human_approval(deps.interrupt or interrupt))
+    add("tool_batch_guard", graph_node_tool_batch_guard_bound)
     # These four announce what the client should see (`stream_events.py`) instead of the runtime recognising them by name.
-    add("check_output", announcing(domain_check_output, replaced_the_answer))
-    add("retry_output", announcing(retry_output, rejected_the_answer))
-    add("retry_exhausted", announcing(make_retry_exhausted_node(emit_message=emit_no_answer_message), replaced_the_answer))
+    add("check_output", announcing(graph_node_check_output_bound, replaced_the_answer))
+    add("retry_output", announcing(graph_node_retry_output, rejected_the_answer))
+    add("retry_exhausted", announcing(make_graph_node_retry_exhausted(emit_message=emit_no_answer_message), replaced_the_answer))
     add(
         "no_answer",
-        make_no_answer_fallback_node(
+        make_graph_node_no_answer(
             emit_message=emit_no_answer_message,
             system_prompt=manifest.system_prompt,
             enforce_citations=profile.enforce_citations,
@@ -347,11 +382,11 @@ def build_graph(
         # SEMANTIC_CACHE_ENABLED false makes both nodes return at once; they stay in the graph so the topology does not depend on a setting.
         add(
             "check_semantic_cache",
-            make_check_semantic_cache_node(deps.cache_get or functools.partial(default_cache_get, domain=manifest.name), enabled=SEMANTIC_CACHE_ENABLED),
+            make_graph_node_check_semantic_cache(deps.cache_get or functools.partial(default_cache_get, domain=manifest.name), enabled=SEMANTIC_CACHE_ENABLED),
         )
         add(
             "write_semantic_cache",
-            make_write_semantic_cache_node(
+            make_graph_node_write_semantic_cache(
                 deps.cache_set or functools.partial(default_cache_set, domain=manifest.name), tool_capabilities, enabled=SEMANTIC_CACHE_ENABLED
             ),
         )
@@ -361,7 +396,7 @@ def build_graph(
         add(
             "compact_history",
             announcing(
-                make_compact_history_node(
+                make_graph_node_compact_history(
                     llm_client,
                     ceiling=history_token_ceiling if history_token_ceiling is not None else HISTORY_TOKEN_CEILING,
                     floor=history_token_floor if history_token_floor is not None else HISTORY_TOKEN_FLOOR,
@@ -370,14 +405,14 @@ def build_graph(
                 trimmed_the_history,
             ),
         )
-        add("context_window_exceeded", context_window_exceeded)
+        add("context_window_exceeded", graph_node_context_window_exceeded)
     # The profile says whether this KIND of graph has the step; the manifest and the setting say whether this domain, in this deployment, wants it.
     suggests_followups = profile.include_followups and manifest.suggest_followups and FOLLOWUPS_ENABLED
     if suggests_followups:
         # Same: a tool-bound client asked a plain question just answers it.
-        add("suggest_followups", make_suggest_followups_node(llm_client, model_alias=model_alias))
+        add("suggest_followups", make_graph_node_suggest_followups(llm_client, model_alias=model_alias))
     if profile.include_router:
-        add("route_model", make_route_model_node())
+        add("route_model", make_graph_node_route_model())
 
     # The stage before `agent` is the model router and retrieval, side by side: neither reads what the other writes (`route_model` reads the person's message
     # and writes `model_route`; `retrieve_context` writes `context`, `citations` and `context_anchor_index`), so they are one superstep and `agent` waits for
@@ -401,14 +436,19 @@ def build_graph(
         if present
     ]
 
-    def route_after_check_bound(state: State) -> Hashable | list[Hashable]:
-        route = route_after_check(state)
+    def graph_edge_route_after_check_output_bound(state: State) -> Hashable | list[Hashable]:
+        route = graph_edge_route_after_check_output(state)
         if route != "finish":
             return route
         return [*finish_steps] if finish_steps else END  # a list display: LangGraph's router type is list[Hashable]
 
+    # The edge counterpart of `add`: a conditional edge is registered under its entry in EDGE_CHANNEL_NAMES, never under its router's
+    # Python name, so a checkpoint written before a rename still finds its pending node (`named_edge`).
+    def add_edges_after(source: str, router: RouterFn, path_map: dict[Hashable, str] | None = None) -> None:
+        builder.add_conditional_edges(source, named_edge(router, EDGE_CHANNEL_NAMES[source]), path_map)
+
     builder.add_edge(START, "validate_input")
-    builder.add_conditional_edges("validate_input", route_after_validation)
+    add_edges_after("validate_input", graph_edge_route_after_validate_input)
     builder.add_edge("reject_input", END)
     builder.add_edge("reject_context", END)
 
@@ -426,27 +466,27 @@ def build_graph(
         return {name: name for target in targets for name in ([target] if isinstance(target, str) else target)}
 
     moderation_targets: dict[str, str | list[str]] = {"reject_moderation": "reject_moderation", "check_semantic_cache": after_moderation}
-    builder.add_conditional_edges("moderate_input", then(route_after_moderation, moderation_targets), identity(*moderation_targets.values()))
+    add_edges_after("moderate_input", then(graph_edge_route_after_moderate_input, moderation_targets), identity(*moderation_targets.values()))
     builder.add_edge("reject_moderation", END)
 
     if profile.include_cache:
         cache_targets: dict[str, str | list[str]] = {"check_output": "check_output", "compact_history": after_cache_miss}
-        builder.add_conditional_edges("check_semantic_cache", then(route_after_cache, cache_targets), identity(*cache_targets.values()))
+        add_edges_after("check_semantic_cache", then(graph_edge_route_after_check_semantic_cache, cache_targets), identity(*cache_targets.values()))
     if profile.include_compaction:
         compaction_targets: dict[str, str | list[str]] = {"retrieve_context": retrieval_stage, "context_window_exceeded": "context_window_exceeded"}
-        builder.add_conditional_edges("compact_history", then(route_after_compaction, compaction_targets), identity(*compaction_targets.values()))
+        add_edges_after("compact_history", then(graph_edge_route_after_compact_history, compaction_targets), identity(*compaction_targets.values()))
         builder.add_edge("context_window_exceeded", END)
     # `agent` waits for every node of the stage (a barrier: checked on the pinned LangGraph, which waits for ALL the listed nodes).
     if before_agent:
         builder.add_edge(before_agent if len(before_agent) > 1 else before_agent[0], "agent")
-    builder.add_conditional_edges("agent", domain_should_continue)
-    builder.add_conditional_edges("human_approval", route_after_approval)
+    add_edges_after("agent", graph_edge_route_after_agent_bound)
+    add_edges_after("human_approval", graph_edge_route_after_human_approval)
     builder.add_edge("tools", "agent")
     builder.add_edge("tool_batch_guard", "agent")
 
-    builder.add_conditional_edges(
+    add_edges_after(
         "check_output",
-        route_after_check_bound,
+        graph_edge_route_after_check_output_bound,
         {
             "retry_output": "retry_output",
             "retry_exhausted": "retry_exhausted",

@@ -10,12 +10,12 @@ OllamaChatCompletionResponseIterator.chunk_parser assigning duplicate
 "index":0 across separate stream chunks — see deploy/litellm/patches/
 sitecustomize.py and graph/utils.py's make_llm comment for the full writeup). A
 fake-model test (tests/agent/graph/test_graph_integration.py's
-TestMandatoryCapabilityGate) already covers should_continue/human_approval's
+TestMandatoryCapabilityGate) already covers graph_edge_route_after_agent/human_approval's
 OWN batch-handling logic in isolation; this proves the real model's real
 streamed output survives the round trip into that logic at all.
 
 calculator (read_only) + add_note (mutating) is a deliberate pair: mixing
-capabilities forces should_continue's mandatory gate (mandatory_gate_reason)
+capabilities forces graph_edge_route_after_agent's mandatory gate (mandatory_gate_reason)
 to route the WHOLE batch to human_approval, exercising the exact "one
 approve/reject decision covers every call in the batch" behavior the removal
 comment documents as a deliberate trade-off, not just "the model can emit two

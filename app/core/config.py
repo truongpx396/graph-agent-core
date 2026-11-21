@@ -235,7 +235,7 @@ class Settings(BillingSettings):
     # (pattern 74). The tools' own validation is the same either way.
     tool_calls_strict: bool = False
 
-    # Per-run cost ceiling (graph/routing.py::should_continue, pattern 35) —
+    # Per-run cost ceiling (graph/routing.py::graph_edge_route_after_agent, pattern 35) —
     # a HARD stop before the next tool/LLM call, independent of
     # MAX_TOKENS_PER_TURN (a token cap bounds work; a dollar cap bounds what
     # that work costs on the configured model tier). $0 for local Ollama

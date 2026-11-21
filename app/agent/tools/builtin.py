@@ -492,7 +492,7 @@ def skill_tools_first(
 # --- Tool capability declarations -------------------------------------------
 # Each tool declares its exposure "leg": read_only (safe immediately),
 # mutating (writes persisted state), or outward (reaches outside the
-# corpus). app/agent/graph/routing.py's should_continue routes ANY
+# corpus). app/agent/graph/routing.py's graph_edge_route_after_agent routes ANY
 # non-read_only tool call through human_approval unconditionally (mandatory,
 # not the opt-in require_approval gate) — a RAG agent's context is untrusted
 # on essentially every turn (GRAPH_PATTERNS.md pattern 12), so mutating or

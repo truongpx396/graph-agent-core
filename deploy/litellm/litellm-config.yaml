@@ -161,7 +161,7 @@ model_list:
   # model this session tried (moondream, qwen2.5vl:3b — both pulled and
   # tested directly against this deployment's real Ollama) supports
   # Ollama's native tool-calling ("does not support tools", from Ollama
-  # itself) — and make_agent_node's agent() always binds this app's tools
+  # itself) — and make_graph_node_agent's agent() always binds this app's tools
   # to CHAT_MODEL regardless of whether a given turn attaches an image, so
   # BOTH failed through this app's actual agent loop despite each working
   # correctly called directly (outside this app, with no tools bound).

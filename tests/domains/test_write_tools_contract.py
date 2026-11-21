@@ -49,7 +49,7 @@ SAMPLE_ARGS: dict[str, dict] = {
 def _write_tools() -> list[tuple[str, object]]:
     """(`<domain>:<tool>`, tool) for every tool that is not `read_only`. A tool
     a plugin leaves out of its capability mapping counts as `outward` — the
-    same default `should_continue` applies — so it is in scope too."""
+    same default `graph_edge_route_after_agent` applies — so it is in scope too."""
     found = []
     for domain, (_manifest, plugin) in sorted(DOMAINS.items()):
         capabilities = plugin.tool_capabilities()

@@ -24,7 +24,7 @@ from app.agent.graph.core import AGENT_RETRY_POLICY
 from app.agent.graph.messages import CANNOT_HELP_MESSAGE, GATEWAY_REFUSAL_KEY
 from app.agent.runtime import stream as stream_module
 from app.core import metrics
-from tests.agent.fakes import cfg, make_agent_node, scripted_llm
+from tests.agent.fakes import cfg, make_graph_node_agent, scripted_llm
 from tests.conftest import metric_value
 from tests.ecorp import build_graph
 
@@ -297,7 +297,7 @@ class TestAnEmptyCompletionThatBilledTokens:
 
     @staticmethod
     async def _call(reply: AIMessage) -> None:
-        agent = make_agent_node(scripted_llm(lambda _messages: reply))
+        agent = make_graph_node_agent(scripted_llm(lambda _messages: reply))
         await agent({"messages": [HumanMessage(content="remember this")]})
 
     @staticmethod

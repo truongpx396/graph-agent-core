@@ -704,7 +704,7 @@ sentence and to the README's list. `deploy/README.md`: the cron line.
 
 **Problem.** `ResumeRequest` is `{thread_id, approved}`. The `approval_required` event and
 `GET /chat/sessions/{thread_id}/pending_approval` list each pending call as `{name, args}` with no identifier
-(`app/agent/graph/hitl.py::make_human_approval_node`). So a client cannot say *which* calls it approves, and the server
+(`app/agent/graph/hitl.py::make_graph_node_human_approval`). So a client cannot say *which* calls it approves, and the server
 cannot check. A stale approve (a second tab, a retry of the request, a click that arrives after the conversation was
 cancelled and paused again on a different action) approves a call the person never saw. The Telegram channel already
 binds a button to one pause (pattern 92); the HTTP API does not. And no record is kept of who decided what.
@@ -1091,7 +1091,7 @@ return a list, and `add_edge([...], "agent")` waits for every node in the list.
 
 ```python
 before_retrieval = ["route_model", "retrieve_context"] if profile.include_router else "retrieve_context"
-# route_after_cache / route_after_compaction keep returning their names; the path maps send
+# graph_edge_route_after_check_semantic_cache / graph_edge_route_after_compact_history keep returning their names; the path maps send
 # "retrieve_context" (and "compact_history" when compaction is off) to `before_retrieval`.
 # A path-map value cannot be a list, so wrap the two routers instead, as route_after_check_bound does:
 #   def to_retrieval(route): return before_retrieval if route == "retrieve_context" else route
@@ -1167,7 +1167,7 @@ pushes the current question and the reminders further from where the model gener
 already struggles with. Current practice is to clear stale tool results from what the model is sent and keep them in
 the stored record.
 
-**Change.** In `make_agent_node`'s `agent` function, next to where earlier turns' retry artifacts are dropped (the
+**Change.** In `make_graph_node_agent`'s `agent` function, next to where earlier turns' retry artifacts are dropped (the
 `turn_start` / `droppable` code), replace the content of each `ToolMessage` that is before `turn_start` and longer than
 a limit with a short note, **in the copy sent to the model only**:
 
@@ -1192,7 +1192,7 @@ def _without_stale_tool_results(messages, turn_start, max_chars):
 - Never write the result back to state. `state["messages"]` and the checkpoint keep the full results;
   `get_session_messages` and the compaction summary are unchanged.
 - New setting `stale_tool_result_max_chars: int = Field(default=2000, ge=0)` (0 = off) in `Settings` and
-  `.env.example`; `build_graph` passes it to `make_agent_node`.
+  `.env.example`; `build_graph` passes it to `make_graph_node_agent`.
 
 **Cost to state in the PR.** The provider's prompt cache keeps the prefix of the previous call. When a new turn
 starts, the previous turn's long results become notes, so the prefix changes once at that point. Within a turn the
@@ -1207,7 +1207,7 @@ the stored state still holds the full text; every `tool_call` still has its `Too
 
 ### R32. Output checks built for small models also run on strong ones
 
-**Established:** read from code (`app/agent/graph/output_checks.py`, `routing.py::check_output`, `agent_node.py`).
+**Established:** read from code (`app/agent/graph/output_checks.py`, `routing.py::graph_node_check_output`, `agent_node.py`).
 
 **Problem.** Many steps of a turn exist because a 3B or 7B local model drops instructions: inserting a missing
 citation marker, cutting a closing offer, detecting "I will do X" instead of doing it, detecting tool output the model

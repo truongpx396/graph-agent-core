@@ -1,6 +1,6 @@
 """Retry/give-up node family: `retry_output` (send the agent back with corrective feedback naming
-the SPECIFIC rejection reason), `make_retry_exhausted_node` (route_after_check giving up on a stuck
-retry loop — MAX_CONSECUTIVE_SAME_RETRY_REASON), and `make_no_answer_fallback_node` (should_continue's
+the SPECIFIC rejection reason), `make_graph_node_retry_exhausted` (graph_edge_route_after_check_output giving up on a stuck
+retry loop — MAX_CONSECUTIVE_SAME_RETRY_REASON), and `make_graph_node_no_answer` (graph_edge_route_after_agent's
 own four safety-net exits — max iterations/tokens/cost, no-progress). The reasons, their feedback and
 their fallback text are the registry in `graph/output_checks.py`.
 """
@@ -11,7 +11,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from app.agent.graph.messages import RETRY_ARTIFACT_KEY, reject_tool_calls
 from app.agent.graph.output_checks import check_for, fallback_message, trusts_content
-from app.agent.graph.routing import check_output
+from app.agent.graph.routing import graph_node_check_output
 from app.agent.graph.state import State
 from app.core import metrics
 
@@ -32,9 +32,9 @@ def _as_retry_artifact(message: BaseMessage | None) -> list[BaseMessage]:
     ]
 
 
-def retry_output(state: State) -> dict[str, Any]:
+def graph_node_retry_output(state: State) -> dict[str, Any]:
     """Send the agent back with corrective feedback instead of looping on
-    the same messages; MAX_ITERATIONS in should_continue still bounds the
+    the same messages; MAX_ITERATIONS in graph_edge_route_after_agent still bounds the
     total number of retries.
 
     The feedback names the SPECIFIC rejection reason `check_output` recorded
@@ -63,14 +63,14 @@ def retry_output(state: State) -> dict[str, Any]:
     }
 
 
-# --- Node: retry loop gave up — reached via route_after_check when the SAME
+# --- Node: retry loop gave up — reached via graph_edge_route_after_check_output when the SAME
 # rejection reason repeats MAX_CONSECUTIVE_SAME_RETRY_REASON times in a row.
 # Sibling of no_answer_fallback below (same emit_message-gated shape for
 # run_subagent), but check_output HAS already judged this content here, so
 # trust is reason-dependent (OutputCheck.trust_on_exhaust) rather than
 # always-trusted the way no_answer_fallback's orphaned content is. ---
-def make_retry_exhausted_node(*, emit_message: bool = True) -> Callable[[State], dict[str, Any]]:
-    def retry_exhausted(state: State) -> dict[str, Any]:
+def make_graph_node_retry_exhausted(*, emit_message: bool = True) -> Callable[[State], dict[str, Any]]:
+    def graph_node_retry_exhausted(state: State) -> dict[str, Any]:
         last = state["messages"][-1] if state.get("messages") else None
         content = getattr(last, "content", "") or ""
         if trusts_content(state.get("last_retry_reason")) and (isinstance(content, str) and content.strip()):
@@ -93,10 +93,10 @@ def make_retry_exhausted_node(*, emit_message: bool = True) -> Callable[[State],
             "ungrounded_claims_count": 0,
         }
 
-    return retry_exhausted
+    return graph_node_retry_exhausted
 
 
-# --- Node: top-level "no answer" fallback — reached only via should_continue's
+# --- Node: top-level "no answer" fallback — reached only via graph_edge_route_after_agent's
 # four safety-net exits (max iterations/tokens/cost, no-progress), never
 # from check_output's normal path — so state["messages"][-1] may be an
 # empty AIMessage (a small model can burn all its tokens failing to produce
@@ -110,14 +110,14 @@ def make_retry_exhausted_node(*, emit_message: bool = True) -> Callable[[State],
 # AIMessage (no pending tool calls and some text, else "budget_exceeded") —
 # filling in prose here would make that check wrongly see real text and
 # report the run as completed. ---
-def make_no_answer_fallback_node(
+def make_graph_node_no_answer(
     *,
     emit_message: bool = True,
     system_prompt: str,
     enforce_citations: bool = True,
     skill_required_tools: tuple[str, ...] = (),
 ) -> Callable[[State], dict[str, Any]]:
-    def no_answer_fallback(state: State) -> dict[str, Any]:
+    def graph_node_no_answer(state: State) -> dict[str, Any]:
         last = state["messages"][-1]
         # A safety net can trip on the very round whose AIMessage is asking for tools. Those calls
         # will never run, and a call with no ToolMessage fails the next LLM call on this thread
@@ -135,7 +135,7 @@ def make_no_answer_fallback_node(
             return {"messages": rejections} if rejections else {}
         content = getattr(last, "content", "") or ""
         # Freshly runs check_output's OWN validity logic on THIS content,
-        # not a stale state["last_retry_reason"] — should_continue routed
+        # not a stale state["last_retry_reason"] — graph_edge_route_after_agent routed
         # here via a safety-net exit, so check_output never ran on this
         # round at all. Real bug, found live: this used to trust any
         # non-blank content unconditionally, silently bypassing every
@@ -145,7 +145,7 @@ def make_no_answer_fallback_node(
         # this way (Langfuse trace `633eee2b`, 2026-09-08). Recomputing
         # fresh here means every current AND future check_output check
         # automatically applies.
-        fresh = check_output(
+        fresh = graph_node_check_output(
             state,
             system_prompt=system_prompt,
             enforce_citations=enforce_citations,
@@ -180,4 +180,4 @@ def make_no_answer_fallback_node(
         # computed over content already paid for.
         return updates
 
-    return no_answer_fallback
+    return graph_node_no_answer

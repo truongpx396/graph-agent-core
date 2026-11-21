@@ -1,4 +1,4 @@
-"""Human-in-the-loop pause/resume: `make_human_approval_node` / `route_after_approval` (the
+"""Human-in-the-loop pause/resume: `make_graph_node_human_approval` / `graph_edge_route_after_human_approval` (the
 opt-in-or-mandatory approval gate, GRAPH_PATTERNS.md pattern 8/15/36) and
 `resumability_error_async` / `_resumability_error_from_state` / `CANCEL_SENTINEL` (safety checks
 before resuming a paused thread, pattern 16/36).
@@ -113,10 +113,10 @@ async def paused_approval_async(graph: CompiledStateGraph, config: RunnableConfi
 CANCEL_SENTINEL = "cancelled"  # app/agent/runtime/stream.py::cancel_run resumes a paused run with this value
 
 
-def make_human_approval_node(interrupt_fn: Callable[[Any], Any]) -> Callable[[State], dict[str, Any]]:
+def make_graph_node_human_approval(interrupt_fn: Callable[[Any], Any]) -> Callable[[State], dict[str, Any]]:
     """Factory over the function that pauses the graph (see the module docstring)."""
 
-    def human_approval(state: State) -> dict[str, Any]:
+    def graph_node_human_approval(state: State) -> dict[str, Any]:
         """Pause the graph and ask a human to approve pending tool calls.
 
         `interrupt()` suspends execution here; the caller resumes with
@@ -125,7 +125,7 @@ def make_human_approval_node(interrupt_fn: Callable[[Any], Any]) -> Callable[[St
         not two (pattern 36): approved, rejected (model sees a ToolMessage
         and can react), and CANCELLED (`runtime/stream.py::cancel_run`) — a
         caller-initiated abort, deliberately distinct from rejection:
-        `route_after_approval` sends a cancelled run straight to `__end__`,
+        `graph_edge_route_after_human_approval` sends a cancelled run straight to `__end__`,
         never back to `agent`.
         """
         last_ai = cast(AIMessage, state["messages"][-1])
@@ -149,10 +149,10 @@ def make_human_approval_node(interrupt_fn: Callable[[Any], Any]) -> Callable[[St
         rejections = reject_tool_calls(tool_calls, "Rejected by human reviewer.")
         return {"messages": rejections, "approved": False}
 
-    return human_approval
+    return graph_node_human_approval
 
 
-def route_after_approval(state: State) -> Literal["tools", "agent", "__end__"]:
+def graph_edge_route_after_human_approval(state: State) -> Literal["tools", "agent", "__end__"]:
     if state.get("cancelled"):
         # Cancellation ends the run outright — never back to `agent`, since
         # that would give the model a chance to react to a caller-initiated
