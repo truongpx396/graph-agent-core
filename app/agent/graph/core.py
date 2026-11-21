@@ -1,9 +1,9 @@
 """The turn-entry gating nodes and the per-node reliability policy.
 
 `validate_input` stamps the turn (`ctx` from config, the per-turn resets) and is the one entry point of every
-`graph.invoke()`; `route_after_validation` fails closed on a bad `ctx` (`reject_context`) before looking at
-the message (`reject_input`). `moderate_input` / `route_after_moderation` / `reject_moderation` screen the
-text before anything that spends (pattern 25). `route_after_compaction` / `context_window_exceeded` end a turn
+`graph.invoke()`; `graph_edge_route_after_validate_input` fails closed on a bad `ctx` (`reject_context`) before looking at
+the message (`reject_input`). `moderate_input` / `graph_edge_route_after_moderate_input` / `reject_moderation` screen the
+text before anything that spends (pattern 25). `graph_edge_route_after_compact_history` / `context_window_exceeded` end a turn
 whose history summary outgrew its budget. `AGENT_RETRY_POLICY` is the retry policy for the one node that talks
 to the model (pattern 7).
 
@@ -11,7 +11,7 @@ Nodes and routers are module-level (not nested in build_graph) so they're unit-t
 graph or calling an LLM. Where things are:
 - `graph/state.py`: `State`, `STATE_SCHEMA_VERSION` and the safety-budget constants (a leaf)
 - `graph/build.py`: `GraphDeps`, `GraphProfile` and `build_graph`, the composition root
-- `graph/routing.py`: `should_continue`, `check_output`, `route_after_check`
+- `graph/routing.py`: `graph_edge_route_after_agent`, `check_output`, `graph_edge_route_after_check_output`
 - `graph/agent_node.py`, `retrieval.py`, `cache.py`, `compaction.py`, `followups.py`, `retry.py`, `hitl.py`:
   one node (or node family) each
 - `graph/tool_guards.py`, `loop_guards.py`, `skill_guards.py`, `output_guardrails.py`, `citations.py`: the
@@ -114,9 +114,9 @@ def _graph_version() -> str:
 #
 # `ctx` is read from config["configurable"]["ctx"] (never state or message
 # content) and stamped ONCE, here — the ONLY node that writes state["ctx"];
-# everything else reads it read-only. route_after_validation fails closed
+# everything else reads it read-only. graph_edge_route_after_validate_input fails closed
 # on an invalid one before retrieve_context ever runs.
-def validate_input(state: State, config: RunnableConfig) -> dict[str, Any]:
+def graph_node_validate_input(state: State, config: RunnableConfig) -> dict[str, Any]:
     updates: dict[str, Any] = {
         "iterations": 0,
         "total_tokens": 0,
@@ -125,7 +125,7 @@ def validate_input(state: State, config: RunnableConfig) -> dict[str, Any]:
         # writing `[]` through a concatenating reducer would be a no-op.
         "subagent_spend": None,
         # A cancel on one turn must not decide the routing of a LATER turn's
-        # approval: `route_after_approval` tests `cancelled` before `approved`,
+        # approval: `graph_edge_route_after_human_approval` tests `cancelled` before `approved`,
         # and nothing else clears either field. Reset here, never on a resume
         # (a resume re-enters inside human_approval and skips this node).
         "cancelled": False,
@@ -157,7 +157,7 @@ def validate_input(state: State, config: RunnableConfig) -> dict[str, Any]:
     return updates
 
 
-def route_after_validation(
+def graph_edge_route_after_validate_input(
     state: State,
 ) -> Literal["moderate_input", "reject_input", "reject_context"]:
     """Checks ctx first, then the message. A missing/malformed ctx routes
@@ -167,7 +167,7 @@ def route_after_validation(
     label (see runtime/stream.py::_turn_outcome).
 
     A valid turn goes straight to moderate_input, and compaction runs
-    LATER, only on a semantic-cache miss (route_after_cache). Compaction is
+    LATER, only on a semantic-cache miss (graph_edge_route_after_check_semantic_cache). Compaction is
     an LLM call (a summary of the trimmed turns), so it follows pattern
     25's "moderation before any spend": a screened-out turn and a cache-hit
     turn must not pay for a summarization. The cost of that order is that
@@ -185,7 +185,7 @@ def route_after_validation(
 # --- Node: input moderation (GRAPH_PATTERNS.md pattern 25) — runs BEFORE
 # the semantic cache lookup or retrieval, so a screened-out input never
 # reaches either. ---
-async def moderate_input(state: State) -> dict[str, Any]:
+async def graph_node_moderate_input(state: State) -> dict[str, Any]:
     """Screens the TEXT only (`human_text`) — app/core/moderation.py is a pattern
     screen + ML classifier over that text, neither can inspect an image's
     actual content. An image-only message has empty `human_text`, so it
@@ -201,13 +201,13 @@ async def moderate_input(state: State) -> dict[str, Any]:
     return {"moderation_blocked": not result.allowed}
 
 
-def route_after_moderation(
+def graph_edge_route_after_moderate_input(
     state: State,
 ) -> Literal["reject_moderation", "check_semantic_cache"]:
     return "reject_moderation" if state.get("moderation_blocked") else "check_semantic_cache"
 
 
-def reject_moderation(state: State) -> dict[str, Any]:
+def graph_node_reject_moderation(state: State) -> dict[str, Any]:
     """Screened out by moderate_input — short-circuits BEFORE the
     semantic cache, retrieval, or any LLM call, same as reject_input/
     reject_context above it in the turn."""
@@ -218,7 +218,7 @@ def reject_moderation(state: State) -> dict[str, Any]:
     }
 
 
-def reject_input(state: State) -> dict[str, Any]:
+def graph_node_reject_input(state: State) -> dict[str, Any]:
     # AIMessage, not HumanMessage: the *system* is producing this text,
     # not the user.
     return {
@@ -228,9 +228,9 @@ def reject_input(state: State) -> dict[str, Any]:
     }
 
 
-def reject_context(state: State) -> dict[str, Any]:
+def graph_node_reject_context(state: State) -> dict[str, Any]:
     """Fail closed on a missing/malformed SecurityCtx — before any
-    retrieval, any tool call, any spend. See route_after_validation."""
+    retrieval, any tool call, any spend. See graph_edge_route_after_validate_input."""
     metrics.agent_missing_ctx_total.inc()
     return {
         "messages": [
@@ -242,7 +242,7 @@ def reject_context(state: State) -> dict[str, Any]:
     }
 
 
-def route_after_compaction(
+def graph_edge_route_after_compact_history(
     state: State,
 ) -> Literal["retrieve_context", "context_window_exceeded"]:
     """AR-015a's edge case as a NAMED terminal state, not silent
@@ -256,8 +256,8 @@ def route_after_compaction(
     return "retrieve_context"
 
 
-def context_window_exceeded(state: State) -> dict[str, Any]:
-    """Terminal node for route_after_compaction's over-budget branch — a
+def graph_node_context_window_exceeded(state: State) -> dict[str, Any]:
+    """Terminal node for graph_edge_route_after_compact_history's over-budget branch — a
     dead-end conversation, not a crash: the thread's history_summary grew
     past MAX_HISTORY_SUMMARY_CHARS even after compact_history just tried
     to shrink it, so this ends the turn with an explicit message rather

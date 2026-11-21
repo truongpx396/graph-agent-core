@@ -168,13 +168,13 @@ class TestApprovalAfterAnEarlierCancel:
     async def test_an_approval_on_a_later_turn_still_runs_after_an_earlier_cancel_on_the_same_thread(self):
         """Real bug (reproduced before this fix): `human_approval` sets
         `State.cancelled = True` on a cancel and nothing ever cleared it.
-        `route_after_approval` checks `cancelled` BEFORE `approved`, so on a
+        `graph_edge_route_after_human_approval` checks `cancelled` BEFORE `approved`, so on a
         LATER pause in the same thread — even one the person APPROVED — the
         run went straight to `__end__`: the approved tool never ran, the last
         message was the assistant's own tool request with empty content (a
         dangling tool_call the next provider call would reject), and the turn
         reported finished. The existing cancel tests cover the cancel itself
-        and `route_after_approval` in isolation; none ran a second approval on
+        and `graph_edge_route_after_human_approval` in isolation; none ran a second approval on
         the same thread."""
         from app.agent.graph.hitl import CANCEL_SENTINEL
 
@@ -323,7 +323,7 @@ class TestHistorySummarization:
         # Turn N_TURNS + 1 pushes the estimated token count over ceiling:
         # turn 1 falls out of the window, so compact_history calls the LLM
         # once (consumed BEFORE agent's own call, since compact_history
-        # runs earlier in the graph — see route_after_validation) ...
+        # runs earlier in the graph — see graph_edge_route_after_validate_input) ...
         summary_response = AIMessage(content="The user first asked question 1.")
         # ... then agent answers the new turn as usual.
         final_response = AIMessage(
@@ -348,7 +348,7 @@ class TestHistorySummarization:
         assert "question 2?" in remaining_contents
 
     async def test_an_oversized_summary_ends_the_turn_without_ever_reaching_agent(self):
-        """route_after_compaction's over-budget branch (context_window_exceeded)
+        """graph_edge_route_after_compact_history's over-budget branch (context_window_exceeded)
         — no further agent response is queued, so if the graph reached
         `agent` anyway this would raise StopIteration instead of ending
         cleanly (same "would raise if invoked" proof as TestRejectPath)."""
@@ -374,7 +374,7 @@ class TestHistorySummarization:
         assert "too long" in result["messages"][-1].content.lower()
 
     async def test_a_summary_that_stays_within_budget_never_ends_the_turn(self):
-        """route_after_compaction's over-budget branch (context_window_exceeded)
+        """graph_edge_route_after_compact_history's over-budget branch (context_window_exceeded)
         must not fire on an ordinary, well-within-budget summary."""
         agent_responses = [
             AIMessage(content=f"Answer number {i}, long enough to pass the length check.")
@@ -422,7 +422,7 @@ class TestRetryExhaustedPath:
     """MAX_CONSECUTIVE_SAME_RETRY_REASON (app/agent/graph/core.py) — real bug,
     found live via Langfuse: a turn stuck narrating tool intent instead of
     calling one, round after round, burned 6 full LLM calls (and ~18k
-    tokens) before should_continue's own, much blunter
+    tokens) before graph_edge_route_after_agent's own, much blunter
     MAX_TOKENS_PER_TURN cap finally cut it off, landing on the exact same
     "couldn't answer" fallback it could have reached in 2 rounds."""
 
@@ -717,7 +717,7 @@ class TestUseSkillWithoutSearchGate:
 
 class TestMandatoryCapabilityGate:
     """A mutating tool call must pause at human_approval even when the
-    caller never set require_approval=True — see should_continue's
+    caller never set require_approval=True — see graph_edge_route_after_agent's
     docstring and app/domains/ecorp/tools.py::TOOL_CAPABILITIES. Contrast with
     TestHumanApprovalPath above, which exercises the pre-existing *opt-in*
     gate via a read_only tool."""
@@ -1244,7 +1244,7 @@ class TestRetryFeedbackIsNotConversation:
 async def test_invalid_tool_call_never_calls_a_real_domain_tool_nonexistent():
     """Real bug: `invalid_tool_call` named the bad tools against Ecorp's tool list, so in a
     support-style domain a batch of [create_ticket, crate_tiket] told the model its real
-    `create_ticket` didn't exist. `should_continue` routed using the domain's own list."""
+    `create_ticket` didn't exist. `graph_edge_route_after_agent` routed using the domain's own list."""
 
     @tool
     async def create_ticket(subject: str) -> str:

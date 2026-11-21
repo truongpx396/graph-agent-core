@@ -11,7 +11,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from app.agent.graph import build as graph_build
 from app.agent.graph.build import GraphDeps
 from app.agent.graph.output_checks import CHECKS, parse_checks_off_on_routed_tiers
-from app.agent.graph.routing import check_output
+from app.agent.graph.routing import graph_node_check_output
 from app.core import metrics
 from tests.conftest import metric_value
 from tests.ecorp import ECORP_SYSTEM_PROMPT, build_graph
@@ -34,7 +34,7 @@ def _fired(check, tier):
 def test_every_finding_is_counted_under_the_tier_that_wrote_the_answer(route, tier):
     before = _fired("too_short", tier)
 
-    result = check_output(_state(route), ECORP_SYSTEM_PROMPT)
+    result = graph_node_check_output(_state(route), ECORP_SYSTEM_PROMPT)
 
     assert "too_short" in result["output_findings"]
     assert _fired("too_short", tier) == before + 1
@@ -43,7 +43,7 @@ def test_every_finding_is_counted_under_the_tier_that_wrote_the_answer(route, ti
 def test_the_existing_per_check_counters_still_count_because_alerts_and_dashboards_read_them():
     before = metric_value(metrics.agent_deferred_instead_of_acting_total)
 
-    result = check_output(_state("strong", "I will use the search_docs tool to look up the refund policy for you."), ECORP_SYSTEM_PROMPT)
+    result = graph_node_check_output(_state("strong", "I will use the search_docs tool to look up the refund policy for you."), ECORP_SYSTEM_PROMPT)
 
     assert "deferred" in result["output_findings"]
     assert metric_value(metrics.agent_deferred_instead_of_acting_total) == before + 1
@@ -53,7 +53,7 @@ def test_a_listed_check_does_not_fire_on_a_strong_or_medium_turn():
     for tier in ("medium", "strong"):
         before = _fired("too_short", tier)
 
-        result = check_output(_state(tier), ECORP_SYSTEM_PROMPT, skip_on_routed_tiers=frozenset({"too_short"}))
+        result = graph_node_check_output(_state(tier), ECORP_SYSTEM_PROMPT, skip_on_routed_tiers=frozenset({"too_short"}))
 
         assert "too_short" not in result["output_findings"] and result["last_retry_reason"] is None
         assert _fired("too_short", tier) == before, "a check that did not run is not counted as having fired"
@@ -61,13 +61,13 @@ def test_a_listed_check_does_not_fire_on_a_strong_or_medium_turn():
 
 def test_a_listed_check_still_fires_on_the_local_tier_whether_the_router_is_off_or_kept_it_local():
     for route in (None, "local"):
-        result = check_output(_state(route), ECORP_SYSTEM_PROMPT, skip_on_routed_tiers=frozenset({"too_short"}))
+        result = graph_node_check_output(_state(route), ECORP_SYSTEM_PROMPT, skip_on_routed_tiers=frozenset({"too_short"}))
 
         assert "too_short" in result["output_findings"]
 
 
 def test_a_check_that_is_not_listed_still_fires_on_a_strong_turn():
-    result = check_output(_state("strong"), ECORP_SYSTEM_PROMPT, skip_on_routed_tiers=frozenset({"uncited"}))
+    result = graph_node_check_output(_state("strong"), ECORP_SYSTEM_PROMPT, skip_on_routed_tiers=frozenset({"uncited"}))
 
     assert "too_short" in result["output_findings"]
 

@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from app.agent.graph.agent_node import CITATION_REMINDER
 from app.agent.graph.build import GraphDeps
 from app.agent.graph.links import LINK_REMINDER, cannot_open_links, mentions_link
-from tests.agent.fakes import cfg, make_agent_node, scripted_llm
+from tests.agent.fakes import cfg, make_graph_node_agent, scripted_llm
 from tests.agent.graph.test_agent_node import _RecordingFakeLLM
 from tests.ecorp import build_graph
 
@@ -39,7 +39,7 @@ async def test_the_reminder_is_the_last_thing_the_model_reads_after_the_question
     fake_llm = _RecordingFakeLLM(messages=iter([AIMessage(content="answer")]))
     state = {"messages": [HumanMessage(content=URL_QUESTION)], "context": "[1] Qdrant stores vectors.", "context_anchor_index": 0}
 
-    await make_agent_node(fake_llm, cannot_open_links=True)(state)
+    await make_graph_node_agent(fake_llm, cannot_open_links=True)(state)
 
     text = fake_llm.seen_messages[0].content
     assert text.endswith(LINK_REMINDER)
@@ -49,7 +49,7 @@ async def test_the_reminder_is_the_last_thing_the_model_reads_after_the_question
 async def test_it_is_there_with_no_retrieved_context_too():
     fake_llm = _RecordingFakeLLM(messages=iter([AIMessage(content="answer")]))
 
-    await make_agent_node(fake_llm, cannot_open_links=True)({"messages": [HumanMessage(content=URL_QUESTION)]})
+    await make_graph_node_agent(fake_llm, cannot_open_links=True)({"messages": [HumanMessage(content=URL_QUESTION)]})
 
     assert fake_llm.seen_messages[0].content == f"{URL_QUESTION}\n\n{LINK_REMINDER}"
 
@@ -57,7 +57,7 @@ async def test_it_is_there_with_no_retrieved_context_too():
 async def test_no_link_no_reminder():
     fake_llm = _RecordingFakeLLM(messages=iter([AIMessage(content="answer")]))
 
-    await make_agent_node(fake_llm, cannot_open_links=True)({"messages": [HumanMessage(content="what is a checkpointer?")]})
+    await make_graph_node_agent(fake_llm, cannot_open_links=True)({"messages": [HumanMessage(content="what is a checkpointer?")]})
 
     assert fake_llm.seen_messages[0].content == "what is a checkpointer?"
 
@@ -65,7 +65,7 @@ async def test_no_link_no_reminder():
 async def test_a_domain_that_can_open_links_is_never_told_it_cannot():
     fake_llm = _RecordingFakeLLM(messages=iter([AIMessage(content="answer")]))
 
-    await make_agent_node(fake_llm, cannot_open_links=False)({"messages": [HumanMessage(content=URL_QUESTION)]})
+    await make_graph_node_agent(fake_llm, cannot_open_links=False)({"messages": [HumanMessage(content=URL_QUESTION)]})
 
     assert fake_llm.seen_messages[0].content == URL_QUESTION
 
@@ -81,7 +81,7 @@ async def test_an_earlier_turns_link_does_not_trigger_it():
         ]
     }
 
-    await make_agent_node(fake_llm, cannot_open_links=True)(state)
+    await make_graph_node_agent(fake_llm, cannot_open_links=True)(state)
 
     assert fake_llm.seen_messages[0].content == URL_QUESTION
     assert fake_llm.seen_messages[2].content == "what is a checkpointer?"

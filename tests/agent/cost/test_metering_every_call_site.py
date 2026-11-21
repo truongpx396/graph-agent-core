@@ -15,9 +15,9 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.agent.cost import pricing
 from app.agent.graph.build import GraphDeps
-from app.agent.graph.compaction import _estimate_tokens, make_compact_history_node
-from app.agent.graph.followups import make_suggest_followups_node
-from tests.agent.fakes import make_agent_node
+from app.agent.graph.compaction import _estimate_tokens, make_graph_node_compact_history
+from app.agent.graph.followups import make_graph_node_suggest_followups
+from tests.agent.fakes import make_graph_node_agent
 from tests.agent.graph.test_graph_integration import TestHistorySummarization, _config
 from tests.conftest import TEST_CTX
 from tests.ecorp import build_graph
@@ -73,7 +73,7 @@ class TestFollowUps:
     async def test_one_call_is_one_event_with_its_tokens_and_cost(self, usage_event_sink):
         llm = _llm(_reply("What next?\nAnd then?", input_tokens=200, output_tokens=20))
 
-        result = await make_suggest_followups_node(llm)(_grounded_state(), CONFIG)
+        result = await make_graph_node_suggest_followups(llm)(_grounded_state(), CONFIG)
 
         assert result == {"followups": ["What next?", "And then?"]}
         (event,) = usage_event_sink
@@ -83,19 +83,19 @@ class TestFollowUps:
         assert event["cost_usd"] == pytest.approx(0.24)  # 200*0.001 + 20*0.002
 
     async def test_it_is_recorded_under_the_alias_it_was_built_for(self, usage_event_sink):
-        await make_suggest_followups_node(_llm(_reply("Q?", 100, 10)), model_alias="special-alias")(
+        await make_graph_node_suggest_followups(_llm(_reply("Q?", 100, 10)), model_alias="special-alias")(
             _grounded_state(), CONFIG
         )
 
         assert [e["model_alias"] for e in usage_event_sink] == ["special-alias"]
 
     async def test_it_does_not_touch_the_turns_running_totals(self):
-        result = await make_suggest_followups_node(_llm(_reply("Q?", 200, 20)))(_grounded_state(), CONFIG)
+        result = await make_graph_node_suggest_followups(_llm(_reply("Q?", 200, 20)))(_grounded_state(), CONFIG)
 
         assert "total_tokens" not in result and "total_cost_usd" not in result
 
     async def test_a_cache_hit_makes_no_call_and_so_records_nothing(self, usage_event_sink):
-        await make_suggest_followups_node(_llm())({**_grounded_state(), "cache_hit": True}, CONFIG)
+        await make_graph_node_suggest_followups(_llm())({**_grounded_state(), "cache_hit": True}, CONFIG)
 
         assert usage_event_sink == []
 
@@ -103,7 +103,7 @@ class TestFollowUps:
 class TestCompaction:
     async def test_one_call_is_one_event_with_its_tokens_and_cost(self, usage_event_sink):
         messages = _history()
-        node = make_compact_history_node(
+        node = make_graph_node_compact_history(
             _llm(_reply("a running summary", input_tokens=1500, output_tokens=40)),
             ceiling=_tripped_ceiling(messages),
             floor=1,
@@ -121,7 +121,7 @@ class TestCompaction:
         """Compaction can summarise thousands of tokens. Adding that to the turn's token or cost budget
         could stop a perfectly good answer, so it is recorded separately and never added to them."""
         messages = _history()
-        node = make_compact_history_node(
+        node = make_graph_node_compact_history(
             _llm(_reply("a summary", input_tokens=50_000, output_tokens=500)), ceiling=_tripped_ceiling(messages), floor=1
         )
 
@@ -132,7 +132,7 @@ class TestCompaction:
 
     async def test_a_turn_that_does_not_compact_makes_no_call(self, usage_event_sink):
         messages = _history(1)
-        node = make_compact_history_node(_llm(), ceiling=_estimate_tokens(messages) + 100, floor=1)
+        node = make_graph_node_compact_history(_llm(), ceiling=_estimate_tokens(messages) + 100, floor=1)
 
         assert await node({"messages": messages}, CONFIG) == {}
         assert usage_event_sink == []
@@ -142,7 +142,7 @@ class TestEveryCallIsCountedExactlyOnce:
     async def test_the_agent_nodes_call_is_one_event_whose_cost_is_the_turns_running_total(self, usage_event_sink):
         """One event per model call; its cost is what joins the turn's running total, which the per-turn ceiling reads.
         The two come from one pricing, so the ceiling and the bill cannot disagree about what the call cost."""
-        state = await make_agent_node(_llm(_reply("the answer", 100, 50)))({"messages": [HumanMessage(content="q")]}, CONFIG)
+        state = await make_graph_node_agent(_llm(_reply("the answer", 100, 50)))({"messages": [HumanMessage(content="q")]}, CONFIG)
 
         (event,) = usage_event_sink
         assert event["kind"] == "chat"
@@ -150,14 +150,14 @@ class TestEveryCallIsCountedExactlyOnce:
 
     async def test_a_turn_with_an_answer_a_summary_and_follow_ups_adds_up_with_no_gap_and_no_overlap(self, usage_event_sink):
         messages = _history()
-        compaction = make_compact_history_node(
+        compaction = make_graph_node_compact_history(
             _llm(_reply("a summary", 1500, 40)), ceiling=_tripped_ceiling(messages), floor=1
         )
         await compaction({"messages": messages}, CONFIG)
-        state = await make_agent_node(_llm(_reply("The final answer.", 300, 60)))(
+        state = await make_graph_node_agent(_llm(_reply("The final answer.", 300, 60)))(
             {"messages": [HumanMessage(content="q")]}, CONFIG
         )
-        await make_suggest_followups_node(_llm(_reply("Q1?\nQ2?", 120, 15)))(_grounded_state(), CONFIG)
+        await make_graph_node_suggest_followups(_llm(_reply("Q1?\nQ2?", 120, 15)))(_grounded_state(), CONFIG)
 
         by_kind: dict[str, float] = {}
         for event in usage_event_sink:
@@ -170,7 +170,7 @@ class TestEveryCallIsCountedExactlyOnce:
 
 class TestACallWithNoTenantIsNeverRecorded:
     async def test_without_a_ctx_no_event_is_written(self, usage_event_sink):
-        await make_suggest_followups_node(_llm(_reply("Q?", 100, 10)))(_grounded_state(), None)
+        await make_graph_node_suggest_followups(_llm(_reply("Q?", 100, 10)))(_grounded_state(), None)
 
         assert usage_event_sink == []
 
@@ -203,13 +203,13 @@ def test_build_graph_hands_the_clients_alias_to_the_follow_up_node(monkeypatch):
     from app.agent.graph import build as graph_build
 
     seen = {}
-    real = graph_build.make_suggest_followups_node
+    real = graph_build.make_graph_node_suggest_followups
 
     def capture(llm, model_alias=None):
         seen["alias"] = model_alias
         return real(llm, model_alias=model_alias)
 
-    monkeypatch.setattr(graph_build, "make_suggest_followups_node", capture)
+    monkeypatch.setattr(graph_build, "make_graph_node_suggest_followups", capture)
 
     build_graph(GraphDeps(llm=_llm(), model_alias="special-alias"))
 

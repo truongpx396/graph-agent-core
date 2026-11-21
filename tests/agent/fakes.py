@@ -81,6 +81,6 @@ class Domain:
         return None
 
 
-def make_agent_node(llm, *args, system_prompt="", **kwargs):
-    """`make_agent_node` for tests of message assembly: no system prompt unless the test gives one."""
-    return _agent_node.make_agent_node(llm, *args, system_prompt=system_prompt, **kwargs)
+def make_graph_node_agent(llm, *args, system_prompt="", **kwargs):
+    """`make_graph_node_agent` for tests of message assembly: no system prompt unless the test gives one."""
+    return _agent_node.make_graph_node_agent(llm, *args, system_prompt=system_prompt, **kwargs)

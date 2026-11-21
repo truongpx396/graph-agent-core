@@ -16,10 +16,10 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agent.graph.build import GraphDeps
-from app.agent.graph.hitl import make_human_approval_node
-from app.agent.graph.retrieval import make_retrieve_context_node
-from app.agent.graph.retry import retry_output
-from app.agent.graph.tool_guards import tool_batch_guard
+from app.agent.graph.hitl import make_graph_node_human_approval
+from app.agent.graph.retrieval import make_graph_node_retrieve_context
+from app.agent.graph.retry import graph_node_retry_output
+from app.agent.graph.tool_guards import graph_node_tool_batch_guard
 from app.core import metrics
 from tests import ecorp
 from tests.conftest import TEST_CTX
@@ -43,11 +43,11 @@ def _tool_call_message(name, args, call_id="call_1"):
 class TestNodeLevelMetrics:
     def test_retry_output_increments_retry_counter(self):
         before = _count(metrics.agent_retry_total)
-        retry_output({"messages": [], "last_retry_reason": "too_short"})
+        graph_node_retry_output({"messages": [], "last_retry_reason": "too_short"})
         assert _count(metrics.agent_retry_total) == before + 1
 
     def test_human_approval_approved_increments_with_correct_label(self, monkeypatch):
-        human_approval = make_human_approval_node(lambda payload: True)
+        human_approval = make_graph_node_human_approval(lambda payload: True)
         before = _count(metrics.agent_human_approval_total, decision="approved")
         ai = _tool_call_message("calculator", {"expression": "1+1"})
         human_approval({"messages": [ai]})
@@ -57,7 +57,7 @@ class TestNodeLevelMetrics:
         )
 
     def test_human_approval_rejected_increments_with_correct_label(self, monkeypatch):
-        human_approval = make_human_approval_node(lambda payload: False)
+        human_approval = make_graph_node_human_approval(lambda payload: False)
         before = _count(metrics.agent_human_approval_total, decision="rejected")
         ai = _tool_call_message("calculator", {"expression": "1+1"})
         human_approval({"messages": [ai]})
@@ -75,28 +75,28 @@ class TestNodeLevelMetrics:
                 for i in range(6)
             ],
         )
-        tool_batch_guard({"messages": [ai]}, ecorp.ECORP_TOOL_NAMES)
+        graph_node_tool_batch_guard({"messages": [ai]}, ecorp.ECORP_TOOL_NAMES)
         assert _count(metrics.agent_tool_budget_exceeded_total) == before + 1
 
     def test_an_invalid_tool_call_increments_its_own_counter_not_the_budget_one(self):
         before_invalid = _count(metrics.agent_invalid_tool_call_total)
         before_budget = _count(metrics.agent_tool_budget_exceeded_total)
         ai = AIMessage(content="", tool_calls=[{"name": "crate_tiket", "args": {}, "id": "c1"}])
-        tool_batch_guard({"messages": [ai]}, ecorp.ECORP_TOOL_NAMES)
+        graph_node_tool_batch_guard({"messages": [ai]}, ecorp.ECORP_TOOL_NAMES)
         assert _count(metrics.agent_invalid_tool_call_total) == before_invalid + 1
         assert _count(metrics.agent_tool_budget_exceeded_total) == before_budget
 
     def test_use_skill_before_a_search_increments_its_own_counter(self):
         before = _count(metrics.agent_use_skill_without_search_total)
         ai = AIMessage(content="", tool_calls=[{"name": "use_skill", "args": {"name": "x"}, "id": "c1"}])
-        tool_batch_guard({"messages": [HumanMessage(content="q"), ai]}, ecorp.ECORP_TOOL_NAMES)
+        graph_node_tool_batch_guard({"messages": [HumanMessage(content="q"), ai]}, ecorp.ECORP_TOOL_NAMES)
         assert _count(metrics.agent_use_skill_without_search_total) == before + 1
 
     async def test_retrieve_context_failure_increments_degraded_counter(self):
         async def failing_search_docs(query, ctx):
             raise RuntimeError("boom")
 
-        retrieve_context = make_retrieve_context_node(failing_search_docs)
+        retrieve_context = make_graph_node_retrieve_context(failing_search_docs)
         before = _count(metrics.agent_context_retrieval_degraded_total)
         await retrieve_context({"messages": [HumanMessage(content="hi")], "ctx": TEST_CTX})
         assert _count(metrics.agent_context_retrieval_degraded_total) == before + 1
@@ -104,7 +104,7 @@ class TestNodeLevelMetrics:
     async def test_history_trim_increments_compacted_counter(self):
         from app.agent.graph.compaction import (
             _estimate_tokens,
-            make_compact_history_node,
+            make_graph_node_compact_history,
         )
 
         messages = [
@@ -115,7 +115,7 @@ class TestNodeLevelMetrics:
         # HISTORY_TOKEN_CEILING production constant (which would need
         # thousands of tokens of placeholder content to actually trip).
         ceiling = _estimate_tokens(messages) - 1
-        compact_history = make_compact_history_node(
+        compact_history = make_graph_node_compact_history(
             GenericFakeChatModel(messages=iter([AIMessage(content="a summary")])),
             ceiling=ceiling,
             floor=1,
@@ -138,7 +138,7 @@ class TestNodeLevelMetrics:
                 )
             ],
         }
-        assert ecorp.should_continue(state) == "human_approval"
+        assert ecorp.graph_edge_route_after_agent(state) == "human_approval"
         assert (
             _count(metrics.agent_capability_gate_total, capability="mutating")
             == before + 1
@@ -160,7 +160,7 @@ class TestNodeLevelMetrics:
                 )
             ],
         }
-        assert ecorp.should_continue(state) == "human_approval"
+        assert ecorp.graph_edge_route_after_agent(state) == "human_approval"
         assert (
             _count(metrics.agent_capability_gate_total, capability="mutating")
             == before

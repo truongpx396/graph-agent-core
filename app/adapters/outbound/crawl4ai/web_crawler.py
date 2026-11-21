@@ -2,7 +2,7 @@
 a headless-Chromium render for SPAs, client-rendered sites and JS-redirect gates, unlike the bare `httpx.get`
 + HTML-strip of `ingestor.py::ingest_url` (static pages).
 
-Backs three "outward" domain tools (they reach the open internet, so `should_continue` forces human approval):
+Backs three "outward" domain tools (they reach the open internet, so `graph_edge_route_after_agent` forces human approval):
 `sales/tools.py::enrich_lead_from_website`, `support/tools.py::fetch_external_reference`,
 `ops/tools.py::check_vendor_status_page`.
 

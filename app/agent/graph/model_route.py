@@ -127,8 +127,8 @@ async def _decide(state: State) -> _Result:
     return _Result(outcome, decision, labelled)
 
 
-def make_route_model_node() -> Callable[..., Awaitable[dict[str, Any]]]:
-    async def route_model(state: State, config: RunnableConfig | None = None) -> dict[str, Any]:
+def make_graph_node_route_model() -> Callable[..., Awaitable[dict[str, Any]]]:
+    async def graph_node_route_model(state: State, config: RunnableConfig | None = None) -> dict[str, Any]:
         if ROUTER_MODE == "off":
             metrics.agent_model_route_total.labels(outcome="disabled").inc()  # a switched-off router adds nothing to a turn, so no latency and no log either
             return {"model_route": "local"}
@@ -166,4 +166,4 @@ def make_route_model_node() -> Callable[..., Awaitable[dict[str, Any]]]:
         # `shadow` made the decision above and counted it; the turn it describes runs on the default model.
         return {"model_route": decision.tier if decision is not None and ROUTER_MODE == "on" else "local"}
 
-    return route_model
+    return graph_node_route_model

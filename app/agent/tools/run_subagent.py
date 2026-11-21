@@ -204,7 +204,7 @@ class SubagentResult:
     nested run's own `total_tokens`/`total_cost_usd`, needed so the calling
     `run_subagent` tool can fold them into the PARENT turn's live budget via
     `Command(update={"subagent_spend": [...]})` (see app/agent/graph/core.py's
-    `State`/`should_continue`, GRAPH_PATTERNS.md pattern 46's disclosed
+    `State`/`graph_edge_route_after_agent`, GRAPH_PATTERNS.md pattern 46's disclosed
     "spend isn't live-folded" gap)."""
 
     answer: str
@@ -383,7 +383,7 @@ async def run_subagent_impl(
     # it as theirs. Its prompt says to use none; this removes any that slipped through, and
     # leaves an index like `items[0]` alone (see `strip_citation_markers`).
     content = strip_citation_markers(content).strip()
-    # A missing/empty final answer means should_continue's "__end__" fired
+    # A missing/empty final answer means graph_edge_route_after_agent's "__end__" fired
     # from one of its safety-net checks (max iterations/tokens/cost, no-
     # progress — pattern 10) before reaching check_output. Rather than
     # re-deriving which budget tripped, treat "no answer" as one robust signal.

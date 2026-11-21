@@ -62,8 +62,11 @@ they delete volumes or kill running processes.
 - `app/agent/` — the agent, in four packages and one file. `graph/` is the LangGraph: `state.py` is the leaf
   that holds `State`, `STATE_SCHEMA_VERSION` and the budgets; `build.py` is the one builder (`build_graph`,
   with a `GraphProfile` and `GraphDeps`) and the only module that imports every node; `core.py` the turn-entry
-  gates; `routing.py` is `should_continue`/`check_output`, whose reasons are the registry in `output_checks.py`;
-  `hitl.py` is the approval gate, the rest are one concern each. `runtime/` is the durable singleton and the
+  gates; `routing.py` is `graph_edge_route_after_agent`/`graph_node_check_output`, whose reasons are the registry in `output_checks.py`;
+  `hitl.py` is the approval gate, the rest are one concern each. Names are a rule (GRAPH_PATTERNS.md "Naming", held by
+  `tests/agent/graph/test_graph_naming.py`): `graph_node_<node>` (factory `make_graph_node_<node>`) is the function of the node registered as
+  `"<node>"`, and `graph_edge_route_after_<node>` the router of that node's conditional edge. The registered string is the node's identity and
+  `EDGE_CHANNEL_NAMES` the edge's, so renaming a function never moves a checkpoint. `runtime/` is the durable singleton and the
   streaming turns (`core.py`, `stream.py`) plus the session directory. `tools/` is `builtin.py` (the tools
   several domains share, with `SHARED_TOOL_CAPABILITIES`), `idempotency.py`, the skill and subagent catalogs
   (one shared `frontmatter.py` loader) and `run_subagent`. `cost/` is the spend meter and caps

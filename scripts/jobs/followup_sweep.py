@@ -4,7 +4,7 @@ concierge's own voice for each, and post the draft to the team channel for
 a human to review and send.
 
 Same "fixed pipeline, not an agent turn" shape as scripts/jobs/ops_digest.py:
-an unattended cron run can never satisfy should_continue's mandatory
+an unattended cron run can never satisfy graph_edge_route_after_agent's mandatory
 human_approval gate, so this never calls schedule_followup/
 handoff_to_human/log_lead_interaction through the real agent loop — those
 are for the interactive sales domain (a human actually present, via

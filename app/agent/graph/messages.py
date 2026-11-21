@@ -31,7 +31,7 @@ from langchain_core.messages import (
 CANNOT_HELP_MESSAGE = "I can't help with that request."
 
 # Marks the AIMessage `agent` writes when the gateway's guardrail refused the call (`additional_kwargs`,
-# like RETRY_ARTIFACT_KEY below). `should_continue` ends the turn on it, through `no_answer`, so the
+# like RETRY_ARTIFACT_KEY below). `graph_edge_route_after_agent` ends the turn on it, through `no_answer`, so the
 # refusal is the answer: no retry, no follow-ups, no cache write.
 GATEWAY_REFUSAL_KEY = "gateway_refusal"
 
@@ -174,7 +174,7 @@ def human_has_content(message: BaseMessage | None) -> bool:
     """True if this message has SOME real content — non-empty text OR at
     least one image part. A plain `human_text(message).strip()` check
     alone would wrongly reject a genuine image-only question as empty
-    input in route_after_validation."""
+    input in graph_edge_route_after_validate_input."""
     if message is None:
         return False
     content = message.content

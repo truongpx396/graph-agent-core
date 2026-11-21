@@ -1,7 +1,7 @@
 """The Ecorp domain as the default fixture for graph tests.
 
 The graph is domain-agnostic: `build_graph` takes the manifest and the domain plugin, and the
-generic guards (`should_continue`, `check_output`, `invalid_tool_call`, ...) take the calling
+generic guards (`graph_edge_route_after_agent`, `check_output`, `invalid_tool_call`, ...) take the calling
 domain's tool capabilities, tool names and system prompt as arguments, with no default. Most graph
 tests only need *a* domain, and Ecorp's is the richest one (retrieval, a calculator, a mutating
 tool, a read-only directory), so these wrappers bind the generic functions to it.
@@ -33,14 +33,14 @@ __all__ = [
     "ECORP_TOOL_NAMES",
     "build_graph",
     "build_subagent_graph",
-    "check_output",
+    "graph_edge_route_after_agent",
+    "graph_node_check_output",
     "invalid_tool_call",
     "invalid_tool_call_names",
-    "make_no_answer_fallback_node",
-    "make_write_semantic_cache_node",
+    "make_graph_node_no_answer",
+    "make_graph_node_write_semantic_cache",
     "mandatory_gate_reason",
     "run_subagent_impl",
-    "should_continue",
     "tool_capability",
 ]
 
@@ -57,14 +57,14 @@ def build_subagent_graph(deps=None, checkpointer=None, manifest=None, domain=Non
     )
 
 
-def should_continue(
+def graph_edge_route_after_agent(
     state, tool_capabilities=ECORP_TOOL_CAPABILITIES, valid_tool_names=ECORP_TOOL_NAMES, *args, **kwargs
 ):
-    return _routing.should_continue(state, tool_capabilities, valid_tool_names, *args, **kwargs)
+    return _routing.graph_edge_route_after_agent(state, tool_capabilities, valid_tool_names, *args, **kwargs)
 
 
-def check_output(state, system_prompt=ECORP_SYSTEM_PROMPT, enforce_citations=True, skill_required_tools=()):
-    return _routing.check_output(
+def graph_node_check_output(state, system_prompt=ECORP_SYSTEM_PROMPT, enforce_citations=True, skill_required_tools=()):
+    return _routing.graph_node_check_output(
         state, system_prompt, enforce_citations=enforce_citations, skill_required_tools=skill_required_tools
     )
 
@@ -85,12 +85,12 @@ def mandatory_gate_reason(tool_calls, tool_capabilities=ECORP_TOOL_CAPABILITIES)
     return _loop_guards.mandatory_gate_reason(tool_calls, tool_capabilities)
 
 
-def make_write_semantic_cache_node(cache_set, tool_capabilities=ECORP_TOOL_CAPABILITIES):
-    return _cache.make_write_semantic_cache_node(cache_set, tool_capabilities)
+def make_graph_node_write_semantic_cache(cache_set, tool_capabilities=ECORP_TOOL_CAPABILITIES):
+    return _cache.make_graph_node_write_semantic_cache(cache_set, tool_capabilities)
 
 
-def make_no_answer_fallback_node(emit_message=True, *, system_prompt=ECORP_SYSTEM_PROMPT, enforce_citations=True):
-    return _retry.make_no_answer_fallback_node(
+def make_graph_node_no_answer(emit_message=True, *, system_prompt=ECORP_SYSTEM_PROMPT, enforce_citations=True):
+    return _retry.make_graph_node_no_answer(
         emit_message=emit_message, system_prompt=system_prompt, enforce_citations=enforce_citations
     )
 

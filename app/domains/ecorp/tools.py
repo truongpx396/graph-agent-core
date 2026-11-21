@@ -73,7 +73,7 @@ async def add_note(
     This WRITES to the knowledge base — unlike search_docs/calculator, this
     changes what other users and future turns will see. It is declared
     "mutating" in TOOL_CAPABILITIES, which means app/agent/graph/core.py's
-    should_continue routes it through human_approval every time, regardless
+    graph_edge_route_after_agent routes it through human_approval every time, regardless
     of whether the caller opted into require_approval.
     """
     ctx = ctx_or_refuse(config, "write_note")

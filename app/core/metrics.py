@@ -161,7 +161,7 @@ agent_human_approval_total = Counter(
 )  # decision: approved | rejected
 
 agent_retry_total = Counter(
-    "agent_retry_total", "Output-quality retries triggered by route_after_check"
+    "agent_retry_total", "Output-quality retries triggered by graph_edge_route_after_check_output"
 )
 
 agent_stream_restarted_total = Counter(
@@ -189,7 +189,7 @@ agent_zero_citations_total = Counter(
     "Directional only, like ungrounded_claims_count: a legitimate "
     "general-knowledge or calculator-only answer looks identical, since "
     "retrieve_context always returns its top-K docs regardless of "
-    "relevance — not acted on by route_after_check, just observed.",
+    "relevance — not acted on by graph_edge_route_after_check_output, just observed.",
 )
 
 agent_misattributed_citations_total = Counter(
@@ -200,7 +200,7 @@ agent_misattributed_citations_total = Counter(
     "\"misattributed\" check) — a real marker attached to unsupported content, as opposed "
     "to a fabricated marker (ungrounded_claims_count) or a real source used "
     "with no marker at all (the opposite failure, the \"uncited\" check). "
-    "Acted on by route_after_check: unlike zero_citations/ungrounded_claims, "
+    "Acted on by graph_edge_route_after_check_output: unlike zero_citations/ungrounded_claims, "
     "this one triggers a retry.",
 )
 
@@ -244,7 +244,7 @@ agent_deferred_instead_of_acting_total = Counter(
     "(check_output's defers_instead_of_acting) — real bug, found live: a "
     "3B model repeating this across several turns on the same thread, "
     "each 'yes' reply just restarting the identical unresolved cycle since "
-    "no real tool_calls were ever made. Acted on by route_after_check: "
+    "no real tool_calls were ever made. Acted on by graph_edge_route_after_check_output: "
     "triggers a retry with feedback to call the tool now, not describe it.",
 )
 
@@ -257,7 +257,7 @@ agent_fabricated_tool_output_total = Counter(
     "it never did. Real bug, found live: after a sandbox approval was "
     "declined once, the model invented both a script and its output, whose "
     "own fabricated arithmetic didn't even match its own fabricated code. "
-    "Acted on by route_after_check: triggers a retry with feedback that "
+    "Acted on by graph_edge_route_after_check_output: triggers a retry with feedback that "
     "the tool was never actually called.",
 )
 
@@ -272,7 +272,7 @@ agent_skipped_required_tool_total = Counter(
     "number by hand, and the model estimated it by hand anyway — correct "
     "that one specific time, but nothing enforced it, and every other "
     "live freehand attempt at the same math landed on a wrong number. "
-    "Acted on by route_after_check: triggers a retry with feedback to "
+    "Acted on by graph_edge_route_after_check_output: triggers a retry with feedback to "
     "actually call the tool the skill named.",
 )
 
@@ -284,7 +284,7 @@ agent_system_prompt_leak_total = Counter(
     "screening: an injection phrased in a way moderation's known-pattern "
     "regexes don't catch can still be caught here if it actually succeeds "
     "in getting the model to recite its instructions back. Acted on by "
-    "route_after_check: triggers a retry, same as the other "
+    "graph_edge_route_after_check_output: triggers a retry, same as the other "
     "check_output-computed rejection reasons.",
 )
 
@@ -296,7 +296,7 @@ agent_retry_exhausted_total = Counter(
     "rounds — the model wasn't converging, just repeating. Routes to "
     "retry_exhausted instead of another retry_output round: real bug, "
     "found live — a stuck deferral loop burned 6 full retry rounds and "
-    "~18k tokens before should_continue's own (much blunter) "
+    "~18k tokens before graph_edge_route_after_agent's own (much blunter) "
     "MAX_TOKENS_PER_TURN cap finally cut it off, landing on the exact same "
     "outcome this metric's own routing now reaches in 2 rounds.",
 )
@@ -640,12 +640,12 @@ agent_memory_deletion_total = Counter(
 agent_no_progress_total = Counter(
     "agent_no_progress_total",
     "Turns ended early for repeating an identical tool-call batch "
-    "MAX_REPEATED_ACTIONS times in a row (app/agent/graph/routing.py::should_continue)",
+    "MAX_REPEATED_ACTIONS times in a row (app/agent/graph/routing.py::graph_edge_route_after_agent)",
 )
 
 agent_cost_ceiling_exceeded_total = Counter(
     "agent_cost_ceiling_exceeded_total",
-    "Turns ended early for exceeding MAX_COST_USD_PER_TURN (app/agent/graph/routing.py::should_continue)",
+    "Turns ended early for exceeding MAX_COST_USD_PER_TURN (app/agent/graph/routing.py::graph_edge_route_after_agent)",
 )
 
 agent_cancellation_total = Counter(
@@ -673,7 +673,7 @@ agent_context_window_exceeded_total = Counter(
     "agent_context_window_exceeded_total",
     "Turns ended at the context_window_exceeded terminal node: the cumulative "
     "history_summary stayed over MAX_HISTORY_SUMMARY_CHARS even after "
-    "compact_history just updated it (app/agent/graph/core.py::route_after_compaction, "
+    "compact_history just updated it (app/agent/graph/core.py::graph_edge_route_after_compact_history, "
     "GRAPH_PATTERNS.md pattern 41)",
 )
 

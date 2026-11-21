@@ -58,7 +58,7 @@ TRACE_ANSWER_2 = (
 
 def _check(content, citations=(SUPPORT_SOURCE, ABOUT_SOURCE), **kwargs):
     state = {"messages": [AIMessage(content=content, id="m1")], "citations": list(citations)}
-    return ecorp.check_output(state, **kwargs)
+    return ecorp.graph_node_check_output(state, **kwargs)
 
 
 class TestSplitSentences:

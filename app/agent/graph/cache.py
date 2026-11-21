@@ -1,7 +1,7 @@
 """Semantic-cache node pair (GRAPH_PATTERNS.md pattern 22):
-`make_check_semantic_cache_node`/`route_after_cache` (read side — a hit
+`make_graph_node_check_semantic_cache`/`graph_edge_route_after_check_semantic_cache` (read side — a hit
 short-circuits to a final answer, no LLM call, no retrieval) and
-`make_write_semantic_cache_node` (write-through side, skipped on a hit).
+`make_graph_node_write_semantic_cache` (write-through side, skipped on a hit).
 
 The cache read/write callables are injected (`GraphDeps.cache_get`/`cache_set`, defaulting to
 `graph/build.py`'s `default_cache_get`/`default_cache_set`), so this module imports nothing from the
@@ -41,17 +41,17 @@ def _is_the_conversations_first_question(messages: list[Any]) -> bool:
 
 
 # --- Node: semantic cache lookup (GRAPH_PATTERNS.md pattern 22) ---
-def make_check_semantic_cache_node(
+def make_graph_node_check_semantic_cache(
     cache_get: Callable[["SecurityCtx | None", str], Awaitable[tuple[str, list[dict[str, Any]]] | None]],
     *,
     enabled: bool = True,
 ) -> Callable[[State], Awaitable[dict[str, Any]]]:
-    """Factory, same rationale as make_retrieve_context_node: needs an
+    """Factory, same rationale as make_graph_node_retrieve_context: needs an
     injected client so tests can fake it (see tests/agent/graph/test_nodes.py) instead
     of monkeypatching app.adapters.outbound.redis.semantic_cache directly.
     """
 
-    async def check_semantic_cache(state: State) -> dict[str, Any]:
+    async def graph_node_check_semantic_cache(state: State) -> dict[str, Any]:
         """A hit short-circuits to a final AIMessage — no LLM call, no
         retrieval — the entire point of a semantic cache. `cache_hit` lets
         write_semantic_cache skip re-caching an answer already served
@@ -78,10 +78,10 @@ def make_check_semantic_cache_node(
             "cache_hit": True,
         }
 
-    return check_semantic_cache
+    return graph_node_check_semantic_cache
 
 
-def route_after_cache(state: State) -> Literal["compact_history", "check_output"]:
+def graph_edge_route_after_check_semantic_cache(state: State) -> Literal["compact_history", "check_output"]:
     """A hit is already an answer and goes straight to check_output. A miss is the first point
     a turn is known to need the model, so it is where history compaction (an LLM call) runs,
     before retrieval: after moderation and the cache, never before them (pattern 25)."""
@@ -101,18 +101,18 @@ def _turn_acted(state: State, tool_capabilities: Mapping[str, str]) -> bool:
 
 
 # --- Node: semantic cache write-through (GRAPH_PATTERNS.md pattern 22) ---
-def make_write_semantic_cache_node(
+def make_graph_node_write_semantic_cache(
     cache_set: Callable[["SecurityCtx | None", str, str, list[dict[str, Any]]], Awaitable[None]],
     tool_capabilities: Mapping[str, str],
     *,
     enabled: bool = True,
 ) -> Callable[[State], Awaitable[dict[str, Any]]]:
-    """Factory, same rationale as make_check_semantic_cache_node.
+    """Factory, same rationale as make_graph_node_check_semantic_cache.
     `tool_capabilities` is the calling domain's own tier map (`build_graph`
     passes it), used to tell a turn that merely answered from one that acted."""
 
-    async def write_semantic_cache(state: State) -> dict[str, Any]:
-        """Only reached once a turn is confirmed final (route_after_check's
+    async def graph_node_write_semantic_cache(state: State) -> dict[str, Any]:
+        """Only reached once a turn is confirmed final (graph_edge_route_after_check_output's
         non-retry branch) — never caches an answer about to be retried.
 
         Skips the write when `cache_hit` is set: nothing new to learn from
@@ -144,4 +144,4 @@ def make_write_semantic_cache_node(
         )
         return {}
 
-    return write_semantic_cache
+    return graph_node_write_semantic_cache

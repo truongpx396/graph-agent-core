@@ -1,6 +1,6 @@
-"""The two conditional-edge gate functions — `should_continue` (after `agent`: tool call, final
+"""The two conditional-edge gate functions — `graph_edge_route_after_agent` (after `agent`: tool call, final
 answer, or safety budget?) and `check_output` (is the final answer good enough to end on?) — plus
-`route_after_check`, which routes on check_output's result.
+`graph_edge_route_after_check_output`, which routes on check_output's result.
 
 Their helpers: `graph/loop_guards.py` (tool-call fingerprinting and repeat detection, the
 mandatory-approval gate), `graph/tool_guards.py` (`batch_problem`, the malformed-batch check),
@@ -42,7 +42,7 @@ from app.core.config import MAX_COST_USD_PER_TURN
 
 
 # --- Edge fn: after agent, route to tools / output check / abort ---
-def should_continue(
+def graph_edge_route_after_agent(
     state: State,
     tool_capabilities: Mapping[str, str],
     valid_tool_names: frozenset[str],
@@ -134,7 +134,7 @@ def should_continue(
 # `system_prompt` is the calling domain's own, bound by build_graph via
 # functools.partial, so `reveals_system_prompt` checks an answer against the prompt
 # it was ACTUALLY seeded with. ---
-def check_output(
+def graph_node_check_output(
     state: State,
     system_prompt: str,
     *,
@@ -188,7 +188,7 @@ def check_output(
         # general-knowledge/calculator-only answer looks IDENTICAL to a
         # silently dropped mandatory citation (retrieve_context always
         # returns its top-K docs regardless of relevance, and the prompt
-        # allows citing nothing for either case). route_after_check
+        # allows citing nothing for either case). graph_edge_route_after_check_output
         # deliberately doesn't retry on this.
         metrics.agent_zero_citations_total.inc()
 
@@ -242,7 +242,7 @@ def check_output(
     }
 
 
-def route_after_check(
+def graph_edge_route_after_check_output(
     state: State,
 ) -> Literal["retry_output", "retry_exhausted", "finish"]:
     """Retry, give up, or `"finish"`: the answer stands, and `build_graph` fans out to whichever

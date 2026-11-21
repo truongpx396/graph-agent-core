@@ -23,7 +23,7 @@ from app.agent.graph.build import GraphDeps
 from app.domains.sales import store
 from app.domains.sales.domain import SALES_DOMAIN_PLUGIN, SALES_MANIFEST
 from tests.conftest import TEST_CTX
-from tests.ecorp import build_graph, make_write_semantic_cache_node
+from tests.ecorp import build_graph, make_graph_node_write_semantic_cache
 from tests.fakes.web import use_page_renderer
 
 CONTACT = "jordan@example.com"
@@ -135,7 +135,7 @@ async def _written_for(state, tool_capabilities=None):
         seen.append((query, answer))
 
     kwargs = {} if tool_capabilities is None else {"tool_capabilities": tool_capabilities}
-    node = make_write_semantic_cache_node(cache_set, **kwargs)
+    node = make_graph_node_write_semantic_cache(cache_set, **kwargs)
     await node(state)
     return seen
 

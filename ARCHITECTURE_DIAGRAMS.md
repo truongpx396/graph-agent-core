@@ -253,7 +253,7 @@ flowchart TD
 ```
 
 - **Order is cost order.** Moderation runs before anything that spends, the cache before compaction (an LLM call), compaction before the router, so a refused or cached turn pays for none of them (patterns 25, 22, 41, 68).
-- **`should_continue` checks the budgets first**, whatever the model said: iterations, tokens, dollars and repeated identical calls all end in `no_answer` (patterns 10, 34, 35). Anything not `read_only` goes to `human_approval` and no flag skips it (patterns 8, 15).
+- **`graph_edge_route_after_agent` checks the budgets first**, whatever the model said: iterations, tokens, dollars and repeated identical calls all end in `no_answer` (patterns 10, 34, 35). Anything not `read_only` goes to `human_approval` and no flag skips it (patterns 8, 15).
 - **`check_output` is a registry of checks** (leaked prompt, too short, fabricated, uncited, a skipped required tool, ...), and `retry_output` loops back to `agent` with a corrective message tagged as a retry artifact so it is never mistaken for the person's words (pattern 5).
 - **The two finish steps run in parallel**, and the cache write is skipped when the turn called a non-read-only tool (pattern 22).
 - A nested `run_subagent` run builds the same graph with `SUBAGENT_PROFILE`: no cache pair, follow-ups, compaction or router. `GraphProfile` is in `app/agent/graph/build.py`.
@@ -285,7 +285,7 @@ Three principles in the [constitution](.specify/memory/constitution.md) cannot b
 | Principle | The layers, outermost first |
 |---|---|
 | **I. Tenant isolation** fails closed | The caller is the front door's signed identity, and `X-Tenant-Id` is ignored in `identity` mode (`app/adapters/inbound/api/deps.py::get_ctx`). A thread belongs to whoever sent on it first, and anyone else gets the 404 an unknown id gets (`app/adapters/inbound/api/routers/chat.py::_require_conversation_owner`). `SecurityCtx` is stamped from request config, never from message text, and every tool re-checks it (`app/core/tool_runtime.py::ctx_or_refuse`). `Policy.lower` turns it into an `AccessScope` that the store applies inside the query as a pre-filter (`app/adapters/outbound/qdrant/qdrant_store.py::scope_filter`, `WHERE tenant = %s`), never as a Python filter afterwards |
-| **II. Approval** is mandatory | Every tool declares `read_only`, `mutating` or `outward`, and an undeclared one counts as `outward`. `should_continue` routes any non-`read_only` call to `human_approval`, which pauses with `interrupt()` and persists the pause in the checkpoint (`app/agent/graph/routing.py::should_continue`, `app/agent/graph/hitl.py::make_human_approval_node`). Unattended callers decline and never approve; subagents get `read_only` tools only; the routing model can write `State.model_route` and nothing else |
+| **II. Approval** is mandatory | Every tool declares `read_only`, `mutating` or `outward`, and an undeclared one counts as `outward`. `graph_edge_route_after_agent` routes any non-`read_only` call to `human_approval`, which pauses with `interrupt()` and persists the pause in the checkpoint (`app/agent/graph/routing.py::graph_edge_route_after_agent`, `app/agent/graph/hitl.py::make_graph_node_human_approval`). Unattended callers decline and never approve; subagents get `read_only` tools only; the routing model can write `State.model_route` and nothing else |
 | **IV. Exactly-once** side effects | `idempotent()` claims the `tool_call_id` before a write runs (`app/core/tool_idempotency.py::idempotent`). The domain store backs it with `tool_call_id UNIQUE` and `ON CONFLICT DO NOTHING`. A crashed turn is continued from its checkpoint, never restarted, so no new ids are minted. A timeout tells the agent to verify before retrying. A resubmitted request is deduplicated at the API |
 
 The others, briefly: **III** tools are fixed and typed, with closed vocabularies and ids derived by code (no text-to-SQL); **V** failure is bounded by nine independent budgets and every degrade path is counted; **VI** retrieved or crawled text is framed as data, never instructions (`app/core/untrusted.py::frame_untrusted`).
@@ -483,7 +483,7 @@ sequenceDiagram
     Note over C,T: Phase 1, the turn pauses
     W->>G: run the turn
     G->>G: agent proposes a mutating or outward call
-    G->>G: should_continue sends any non-read_only call to human_approval
+    G->>G: graph_edge_route_after_agent sends any non-read_only call to human_approval
     G->>K: interrupt() saves the paused state
     G-->>W: approval_required with the tool and its arguments
     W->>R: release the lock, publish approval_required (terminal), XACK and XDEL
@@ -687,7 +687,7 @@ sequenceDiagram
             ME->>P: INSERT one usage_events row, ON CONFLICT DO NOTHING
             ME->>BP: record_usage_in, in the same transaction
             ME-->>G: response and cost
-            G->>G: should_continue checks the token and dollar ceilings first
+            G->>G: graph_edge_route_after_agent checks the token and dollar ceilings first
         end
         W->>P: release the hold, always, in a finally
     end

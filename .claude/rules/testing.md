@@ -17,7 +17,7 @@ Constitution Principle VII applies. The default suite must stay hermetic and fas
   `mock_classification` (the model router's /v1/decide call), `no_real_web_search` (an empty `SERPER_API_KEY`, so `web_search` never spends a credit whatever the developer's `.env` says), and `header_auth_mode` (the API's default is identity mode; the hermetic suite says header mode once, and a test of identity mode asks for `identity_mode`; it patches the pytest process only, so a fixture that starts the API as a SUBPROCESS puts `AUTH_MODE=headers` in the child's own environment). A test's result must not depend on which
   containers happen to be running. If you add a live-service call on the turn path, add an
   autouse mock for it there. Inject a specific fake with `GraphDeps(search_docs=fake)` or the
-  node-level `make_*_node(fake)` factories — that bypasses the default mock.
+  node-level `make_graph_node_*(fake)` factories — that bypasses the default mock.
 - Patch a module's OWN `get_connection` binding (`usage_ledger.get_connection`), not
   `sql_store.get_connection` — `from X import Y` makes a separate reference.
 - `asyncio_mode = "auto"`: write `async def test_...` and `await` directly. Don't wrap bodies in

@@ -6,20 +6,20 @@ deterministic way it deserves.
 """
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from app.agent.graph.cache import route_after_cache
+from app.agent.graph.cache import graph_edge_route_after_check_semantic_cache
 from app.agent.graph.core import (
-    route_after_compaction,
-    route_after_moderation,
-    route_after_validation,
+    graph_edge_route_after_compact_history,
+    graph_edge_route_after_moderate_input,
+    graph_edge_route_after_validate_input,
 )
-from app.agent.graph.hitl import route_after_approval
+from app.agent.graph.hitl import graph_edge_route_after_human_approval
 from app.agent.graph.loop_guards import (
     _tool_call_fingerprint,
     consecutive_repeat_count,
     use_skill_called_without_search,
 )
 from app.agent.graph.messages import reject_tool_calls
-from app.agent.graph.routing import route_after_check
+from app.agent.graph.routing import graph_edge_route_after_check_output
 from app.agent.graph.skill_guards import pending_skill_required_tool
 from app.agent.graph.state import (
     MAX_CONSECUTIVE_SAME_RETRY_REASON,
@@ -31,8 +31,8 @@ from app.agent.graph.tool_guards import batch_problem
 from tests.conftest import TEST_CTX
 from tests.ecorp import (
     ECORP_TOOL_NAMES,
+    graph_edge_route_after_agent,
     mandatory_gate_reason,
-    should_continue,
     tool_capability,
 )
 
@@ -47,22 +47,22 @@ def _tool_call(name, call_id="1"):
 class TestRouteAfterValidation:
     def test_empty_input_rejected(self):
         state = {"messages": [HumanMessage(content="")], "ctx": TEST_CTX}
-        assert route_after_validation(state) == "reject_input"
+        assert graph_edge_route_after_validate_input(state) == "reject_input"
 
     def test_whitespace_only_input_rejected(self):
         state = {"messages": [HumanMessage(content="   ")], "ctx": TEST_CTX}
-        assert route_after_validation(state) == "reject_input"
+        assert graph_edge_route_after_validate_input(state) == "reject_input"
 
     def test_no_human_message_rejected(self):
         state = {"messages": [AIMessage(content="hello")], "ctx": TEST_CTX}
-        assert route_after_validation(state) == "reject_input"
+        assert graph_edge_route_after_validate_input(state) == "reject_input"
 
     def test_valid_input_goes_to_moderation_first_and_compaction_waits_for_a_cache_miss(self):
         state = {
             "messages": [HumanMessage(content="What is our refund policy?")],
             "ctx": TEST_CTX,
         }
-        assert route_after_validation(state) == "moderate_input"
+        assert graph_edge_route_after_validate_input(state) == "moderate_input"
 
     def test_uses_last_human_message(self):
         state = {
@@ -73,7 +73,7 @@ class TestRouteAfterValidation:
                 HumanMessage(content="a real question"),
             ]
         }
-        assert route_after_validation(state) == "moderate_input"
+        assert graph_edge_route_after_validate_input(state) == "moderate_input"
 
 
 def _tc_batch(*name_args_pairs, call_id_prefix="c"):
@@ -150,88 +150,88 @@ class TestNoProgressDetection:
         }
 
     def test_ends_the_turn_once_max_repeated_actions_is_reached(self):
-        assert should_continue(self._repeating_state(MAX_REPEATED_ACTIONS)) == "no_answer"
+        assert graph_edge_route_after_agent(self._repeating_state(MAX_REPEATED_ACTIONS)) == "no_answer"
 
     def test_does_not_end_below_the_threshold(self):
-        assert should_continue(self._repeating_state(MAX_REPEATED_ACTIONS - 1)) == "tools"
+        assert graph_edge_route_after_agent(self._repeating_state(MAX_REPEATED_ACTIONS - 1)) == "tools"
 
 
 class TestRouteAfterModeration:
     def test_blocked_routes_to_reject_moderation(self):
-        assert route_after_moderation({"moderation_blocked": True}) == "reject_moderation"
+        assert graph_edge_route_after_moderate_input({"moderation_blocked": True}) == "reject_moderation"
 
     def test_allowed_routes_to_check_semantic_cache(self):
-        assert route_after_moderation({"moderation_blocked": False}) == "check_semantic_cache"
+        assert graph_edge_route_after_moderate_input({"moderation_blocked": False}) == "check_semantic_cache"
 
     def test_absent_flag_defaults_to_allowed(self):
-        assert route_after_moderation({}) == "check_semantic_cache"
+        assert graph_edge_route_after_moderate_input({}) == "check_semantic_cache"
 
 
 class TestRouteAfterCompaction:
-    """AR-015a's edge case (app/agent/graph/core.py's route_after_compaction) — a
+    """AR-015a's edge case (app/agent/graph/core.py's graph_edge_route_after_compact_history) — a
     history_summary still over MAX_HISTORY_SUMMARY_CHARS after
     compact_history just updated it ends the turn instead of feeding a
     runaway summary into agent() on every future call."""
 
     def test_within_budget_proceeds_to_retrieval(self):
-        assert route_after_compaction({"history_summary": "short"}) == "retrieve_context"
+        assert graph_edge_route_after_compact_history({"history_summary": "short"}) == "retrieve_context"
 
     def test_absent_summary_proceeds_to_retrieval(self):
-        assert route_after_compaction({}) == "retrieve_context"
+        assert graph_edge_route_after_compact_history({}) == "retrieve_context"
 
     def test_over_budget_ends_at_context_window_exceeded(self):
         state = {"history_summary": "x" * (MAX_HISTORY_SUMMARY_CHARS + 1)}
-        assert route_after_compaction(state) == "context_window_exceeded"
+        assert graph_edge_route_after_compact_history(state) == "context_window_exceeded"
 
     def test_at_exactly_the_limit_still_proceeds(self):
         state = {"history_summary": "x" * MAX_HISTORY_SUMMARY_CHARS}
-        assert route_after_compaction(state) == "retrieve_context"
+        assert graph_edge_route_after_compact_history(state) == "retrieve_context"
 
 
 class TestRouteAfterCache:
     def test_hit_skips_straight_to_check_output(self):
-        assert route_after_cache({"cache_hit": True}) == "check_output"
+        assert graph_edge_route_after_check_semantic_cache({"cache_hit": True}) == "check_output"
 
     def test_miss_proceeds_to_compaction_which_precedes_retrieval(self):
-        assert route_after_cache({"cache_hit": False}) == "compact_history"
+        assert graph_edge_route_after_check_semantic_cache({"cache_hit": False}) == "compact_history"
 
     def test_absent_flag_defaults_to_a_miss(self):
-        assert route_after_cache({}) == "compact_history"
+        assert graph_edge_route_after_check_semantic_cache({}) == "compact_history"
 
 
 class TestRouteAfterValidationCtx:
     """SecurityCtx is checked before the message itself — see
-    route_after_validation's docstring in app/agent/graph/core.py for why a missing
+    graph_edge_route_after_validate_input's docstring in app/agent/graph/core.py for why a missing
     ctx gets its own outcome (reject_context) rather than being folded
     into reject_input's "you typed nothing.\""""
 
     def test_missing_ctx_rejected(self):
         state = {"messages": [HumanMessage(content="a real question")]}
-        assert route_after_validation(state) == "reject_context"
+        assert graph_edge_route_after_validate_input(state) == "reject_context"
 
     def test_none_ctx_rejected(self):
         state = {"messages": [HumanMessage(content="a real question")], "ctx": None}
-        assert route_after_validation(state) == "reject_context"
+        assert graph_edge_route_after_validate_input(state) == "reject_context"
 
     def test_ctx_missing_tenant_rejected(self):
         state = {
             "messages": [HumanMessage(content="a real question")],
             "ctx": {"tenant": "", "principal": "u1", "claims": {}},
         }
-        assert route_after_validation(state) == "reject_context"
+        assert graph_edge_route_after_validate_input(state) == "reject_context"
 
     def test_ctx_missing_principal_rejected(self):
         state = {
             "messages": [HumanMessage(content="a real question")],
             "ctx": {"tenant": "ecorp", "principal": "", "claims": {}},
         }
-        assert route_after_validation(state) == "reject_context"
+        assert graph_edge_route_after_validate_input(state) == "reject_context"
 
     def test_missing_ctx_checked_before_empty_message(self):
         """Both are invalid here — a missing ctx must win, since it's the
         more fundamental "who is asking" gate (see the docstring)."""
         state = {"messages": [HumanMessage(content="")]}
-        assert route_after_validation(state) == "reject_context"
+        assert graph_edge_route_after_validate_input(state) == "reject_context"
 
 
 class TestShouldContinue:
@@ -240,14 +240,14 @@ class TestShouldContinue:
             "iterations": MAX_ITERATIONS,
             "messages": [AIMessage(content="still going")],
         }
-        assert should_continue(state) == "no_answer"
+        assert graph_edge_route_after_agent(state) == "no_answer"
 
     def test_over_iteration_limit_ends(self):
         state = {
             "iterations": MAX_ITERATIONS + 5,
             "messages": [AIMessage(content="still going")],
         }
-        assert should_continue(state) == "no_answer"
+        assert graph_edge_route_after_agent(state) == "no_answer"
 
     def test_tool_call_routes_to_tools(self):
         state = {
@@ -261,7 +261,7 @@ class TestShouldContinue:
                 )
             ],
         }
-        assert should_continue(state) == "tools"
+        assert graph_edge_route_after_agent(state) == "tools"
 
     def test_tool_call_with_require_approval_routes_to_human_approval(self):
         state = {
@@ -276,15 +276,15 @@ class TestShouldContinue:
                 )
             ],
         }
-        assert should_continue(state) == "human_approval"
+        assert graph_edge_route_after_agent(state) == "human_approval"
 
     def test_final_answer_routes_to_check_output(self):
         state = {"iterations": 1, "messages": [AIMessage(content="The answer is 42.")]}
-        assert should_continue(state) == "check_output"
+        assert graph_edge_route_after_agent(state) == "check_output"
 
     def test_missing_iterations_defaults_to_zero(self):
         state = {"messages": [AIMessage(content="The answer is 42.")]}
-        assert should_continue(state) == "check_output"
+        assert graph_edge_route_after_agent(state) == "check_output"
 
 
 class TestShouldContinueSubagent:
@@ -295,7 +295,7 @@ class TestShouldContinueSubagent:
         ::_resolve_subagent_tools), so a call to it must route exactly like
         search_docs — never through human_approval."""
         state = {"iterations": 1, "messages": [_tool_call("run_subagent")]}
-        assert should_continue(state) == "tools"
+        assert graph_edge_route_after_agent(state) == "tools"
 
     def test_run_subagent_call_with_require_approval_unset_still_routes_to_tools(self):
         """Confirms it's not merely an unset require_approval hiding the
@@ -305,11 +305,11 @@ class TestShouldContinueSubagent:
             "require_approval": False,
             "messages": [_tool_call("run_subagent")],
         }
-        assert should_continue(state) == "tools"
+        assert graph_edge_route_after_agent(state) == "tools"
 
 
 class TestShouldContinueBudgetOverrides:
-    """should_continue's max_iterations/max_tokens/max_cost_usd params
+    """graph_edge_route_after_agent's max_iterations/max_tokens/max_cost_usd params
     (GRAPH_PATTERNS.md pattern 46) — the mechanism
     app/agent/tools/run_subagent_domain.py::run_subagent relies on, via
     build_graph(max_iterations=..., ...), to bind a nested subagent run to
@@ -318,18 +318,18 @@ class TestShouldContinueBudgetOverrides:
 
     def test_custom_max_iterations_ends_a_run_the_default_would_still_allow(self):
         state = {"iterations": 3, "messages": [AIMessage(content="still going")]}
-        assert should_continue(state) == "check_output"  # module default: not yet capped
-        assert should_continue(state, max_iterations=3) == "no_answer"
+        assert graph_edge_route_after_agent(state) == "check_output"  # module default: not yet capped
+        assert graph_edge_route_after_agent(state, max_iterations=3) == "no_answer"
 
     def test_custom_max_tokens_ends_a_run_the_default_would_still_allow(self):
         state = {"iterations": 1, "total_tokens": 500, "messages": [AIMessage(content="still going")]}
-        assert should_continue(state) == "check_output"
-        assert should_continue(state, max_tokens=500) == "no_answer"
+        assert graph_edge_route_after_agent(state) == "check_output"
+        assert graph_edge_route_after_agent(state, max_tokens=500) == "no_answer"
 
     def test_custom_max_cost_ends_a_run_the_default_would_still_allow(self):
         state = {"iterations": 1, "total_cost_usd": 0.05, "messages": [AIMessage(content="still going")]}
-        assert should_continue(state) == "check_output"
-        assert should_continue(state, max_cost_usd=0.05) == "no_answer"
+        assert graph_edge_route_after_agent(state) == "check_output"
+        assert graph_edge_route_after_agent(state, max_cost_usd=0.05) == "no_answer"
 
 
 class TestToolCapability:
@@ -363,7 +363,7 @@ class TestMandatoryGateReason:
 class TestShouldContinueMandatoryGate:
     """A mutating/outward tool call must route to human_approval even when
     require_approval is False (the default) — mandatory, not opt-in. See
-    app/domains/ecorp/tools.py::TOOL_CAPABILITIES and should_continue's docstring."""
+    app/domains/ecorp/tools.py::TOOL_CAPABILITIES and graph_edge_route_after_agent's docstring."""
 
     def test_mutating_tool_gates_even_without_require_approval(self):
         state = {
@@ -371,7 +371,7 @@ class TestShouldContinueMandatoryGate:
             "require_approval": False,
             "messages": [_tool_call("add_note")],
         }
-        assert should_continue(state) == "human_approval"
+        assert graph_edge_route_after_agent(state) == "human_approval"
 
     def test_undeclared_tool_gates_even_without_require_approval(self):
         """A tool that's genuinely registered (in valid_tool_names — i.e. it was actually bound to the LLM and is
@@ -384,7 +384,7 @@ class TestShouldContinueMandatoryGate:
             "messages": [_tool_call("some_new_tool_nobody_registered")],
         }
         assert (
-            should_continue(
+            graph_edge_route_after_agent(
                 state, valid_tool_names=frozenset({"some_new_tool_nobody_registered"})
             )
             == "human_approval"
@@ -399,7 +399,7 @@ class TestShouldContinueMandatoryGate:
             "require_approval": False,
             "messages": [_tool_call("calculator")],
         }
-        assert should_continue(state) == "tools"
+        assert graph_edge_route_after_agent(state) == "tools"
 
     def test_mixed_batch_with_one_mutating_call_gates_the_whole_batch(self):
         state = {
@@ -415,7 +415,7 @@ class TestShouldContinueMandatoryGate:
                 )
             ],
         }
-        assert should_continue(state) == "human_approval"
+        assert graph_edge_route_after_agent(state) == "human_approval"
 
 
 class TestShouldContinueInvalidToolCall:
@@ -431,7 +431,7 @@ class TestShouldContinueInvalidToolCall:
             "messages": [_tool_call("search_docscalculatoradd_note")],
         }
         names = frozenset({"search_docs", "calculator"})
-        assert should_continue(state, valid_tool_names=names) == "tool_batch_guard"
+        assert graph_edge_route_after_agent(state, valid_tool_names=names) == "tool_batch_guard"
         assert batch_problem(state["messages"][-1].tool_calls, state["messages"], names) == "invalid_tool_call"
 
     def test_checked_before_the_mandatory_capability_gate(self):
@@ -443,7 +443,7 @@ class TestShouldContinueInvalidToolCall:
             "require_approval": False,
             "messages": [_tool_call("add_note_but_typo")],
         }
-        assert should_continue(state, valid_tool_names=frozenset({"add_note"})) == "tool_batch_guard"
+        assert graph_edge_route_after_agent(state, valid_tool_names=frozenset({"add_note"})) == "tool_batch_guard"
 
     def test_registered_name_is_unaffected(self):
         state = {
@@ -452,7 +452,7 @@ class TestShouldContinueInvalidToolCall:
             "messages": [_tool_call("calculator")],
         }
         assert (
-            should_continue(state, valid_tool_names=frozenset({"search_docs", "calculator"}))
+            graph_edge_route_after_agent(state, valid_tool_names=frozenset({"search_docs", "calculator"}))
             == "tools"
         )
 
@@ -529,14 +529,14 @@ class TestShouldContinueUseSkillWithoutSearch:
                 ),
             ],
         }
-        assert should_continue(state) == "tool_batch_guard"
+        assert graph_edge_route_after_agent(state) == "tool_batch_guard"
         assert batch_problem(state["messages"][-1].tool_calls, state["messages"], ECORP_TOOL_NAMES) == "use_skill_without_search"
 
     def test_checked_before_human_approval_even_when_require_approval_is_set(self):
         """use_skill is read_only (never reaches human_approval on its own
         merits anyway), but this proves the ordering is still correct
         relative to the invalid-name check right above it in
-        should_continue."""
+        graph_edge_route_after_agent."""
         state = {
             "iterations": 1,
             "require_approval": True,  # would otherwise force human_approval
@@ -548,7 +548,7 @@ class TestShouldContinueUseSkillWithoutSearch:
                 ),
             ],
         }
-        assert should_continue(state) == "tool_batch_guard"
+        assert graph_edge_route_after_agent(state) == "tool_batch_guard"
 
     def test_use_skill_after_a_real_search_routes_normally(self):
         state = {
@@ -567,33 +567,33 @@ class TestShouldContinueUseSkillWithoutSearch:
                 ),
             ],
         }
-        assert should_continue(state) == "tools"
+        assert graph_edge_route_after_agent(state) == "tools"
 
 
 class TestRouteAfterApproval:
     def test_approved_routes_to_tools(self):
-        assert route_after_approval({"approved": True}) == "tools"
+        assert graph_edge_route_after_human_approval({"approved": True}) == "tools"
 
     def test_rejected_routes_to_agent(self):
-        assert route_after_approval({"approved": False}) == "agent"
+        assert graph_edge_route_after_human_approval({"approved": False}) == "agent"
 
     def test_missing_approved_defaults_to_agent(self):
-        assert route_after_approval({}) == "agent"
+        assert graph_edge_route_after_human_approval({}) == "agent"
 
     def test_cancelled_routes_straight_to_end_never_agent(self):
         """A cancellation is a caller-initiated abort, not feedback for
         another attempt — it must never loop back to `agent` the way a
         rejection does (GRAPH_PATTERNS.md pattern 36)."""
-        assert route_after_approval({"cancelled": True, "approved": False}) == "__end__"
+        assert graph_edge_route_after_human_approval({"cancelled": True, "approved": False}) == "__end__"
 
     def test_cancelled_wins_even_if_approved_is_somehow_also_true(self):
         """cancelled is checked FIRST — an inconsistent state (both set)
         must still fail toward "stop," never toward "run the tool"."""
-        assert route_after_approval({"cancelled": True, "approved": True}) == "__end__"
+        assert graph_edge_route_after_human_approval({"cancelled": True, "approved": True}) == "__end__"
 
 
 class TestRouteAfterCheck:
-    """route_after_check is now a pure READER of check_output's own
+    """graph_edge_route_after_check_output is now a pure READER of check_output's own
     last_retry_reason/retry_reason_repeat_count — it no longer re-derives
     a reason from raw message content or the individual
     likely_uncited_citations/likely_misattributed_citations/
@@ -608,42 +608,42 @@ class TestRouteAfterCheck:
 
     def test_no_reason_finishes(self):
         state = {"last_retry_reason": None}
-        assert route_after_check(state) == "finish"
+        assert graph_edge_route_after_check_output(state) == "finish"
 
     def test_first_occurrence_of_a_reason_retries(self):
         state = {"last_retry_reason": "too_short", "retry_reason_repeat_count": 1}
-        assert route_after_check(state) == "retry_output"
+        assert graph_edge_route_after_check_output(state) == "retry_output"
 
     def test_missing_repeat_count_defaults_to_retrying(self):
         """A reason with no repeat count at all (shouldn't happen once
         check_output has run, but defensive against a hand-built state)
         defaults to 0 — well under the threshold — rather than crashing."""
         state = {"last_retry_reason": "uncited"}
-        assert route_after_check(state) == "retry_output"
+        assert graph_edge_route_after_check_output(state) == "retry_output"
 
     def test_reason_repeated_up_to_but_not_over_threshold_still_retries(self):
         state = {
             "last_retry_reason": "deferred",
             "retry_reason_repeat_count": MAX_CONSECUTIVE_SAME_RETRY_REASON - 1,
         }
-        assert route_after_check(state) == "retry_output"
+        assert graph_edge_route_after_check_output(state) == "retry_output"
 
     def test_reason_repeated_at_threshold_gives_up(self):
-        """Real bug, found live: a stuck deferral loop burned 6 full retry rounds before should_continue's own,
+        """Real bug, found live: a stuck deferral loop burned 6 full retry rounds before graph_edge_route_after_agent's own,
         much blunter MAX_TOKENS_PER_TURN cap finally ended it.
         """
         state = {
             "last_retry_reason": "deferred",
             "retry_reason_repeat_count": MAX_CONSECUTIVE_SAME_RETRY_REASON,
         }
-        assert route_after_check(state) == "retry_exhausted"
+        assert graph_edge_route_after_check_output(state) == "retry_exhausted"
 
     def test_reason_repeated_past_threshold_also_gives_up(self):
         state = {
             "last_retry_reason": "misattributed",
             "retry_reason_repeat_count": MAX_CONSECUTIVE_SAME_RETRY_REASON + 5,
         }
-        assert route_after_check(state) == "retry_exhausted"
+        assert graph_edge_route_after_check_output(state) == "retry_exhausted"
 
     def test_giving_up_increments_the_retry_exhausted_metric(self):
         from app.core import metrics
@@ -654,7 +654,7 @@ class TestRouteAfterCheck:
             "last_retry_reason": "too_short",
             "retry_reason_repeat_count": MAX_CONSECUTIVE_SAME_RETRY_REASON,
         }
-        route_after_check(state)
+        graph_edge_route_after_check_output(state)
         assert metric_value(metrics.agent_retry_exhausted_total) == before + 1
 
 

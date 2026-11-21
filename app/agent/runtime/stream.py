@@ -306,7 +306,7 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
       - `check_output` itself, when it inserted a missing citation marker after the answer streamed: no
         `agent` call follows, so the announcement carries the corrected text too and it is forwarded as a
         "token" after the "retry";
-      - `retry_exhausted`: `route_after_check` gave up after MAX_CONSECUTIVE_SAME_RETRY_REASON and replaces
+      - `retry_exhausted`: `graph_edge_route_after_check_output` gave up after MAX_CONSECUTIVE_SAME_RETRY_REASON and replaces
         the message the same way, EXCEPT for checks marked `trust_on_exhaust` (a real answer merely missing
         its marker), where it announces nothing, since a "retry" would blank a good answer with nothing to follow.
       A nested `run_subagent` graph shares those node names, so every announcement tagged
@@ -616,7 +616,7 @@ async def astream_events_turn(
     _run_graph_stream for the full shape list).
 
     `ctx` is required (see stream_turn's docstring). `require_approval`
-    mirrors app/agent/graph/core.py's opt-in HITL gate (should_continue): a tool call
+    mirrors app/agent/graph/core.py's opt-in HITL gate (graph_edge_route_after_agent): a tool call
     pauses instead of executing, and the caller resumes via
     astream_events_resume(thread_id, approved=..., ctx=...) — see
     app/adapters/inbound/channels/cli/chat.py's `--hitl` mode, which does it through the queue

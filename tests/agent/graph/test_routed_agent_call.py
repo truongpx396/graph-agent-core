@@ -26,7 +26,7 @@ from app.agent.graph.model_route import routed_unreachable
 from app.core import gateway
 from app.domains.ecorp import tools as ecorp_tools
 from app.ports.outbound.classification import Labelled
-from tests.agent.fakes import call, cfg, make_agent_node, queue_llm
+from tests.agent.fakes import call, cfg, make_graph_node_agent, queue_llm
 from tests.conftest import TEST_CTX
 from tests.ecorp import build_graph
 from tests.fakes.ml import use_classifier
@@ -109,7 +109,7 @@ def answer(text="a sufficiently long answer to be a real answer"):
 
 
 def node(llm):
-    return make_agent_node(llm, model_alias=LOCAL, system_prompt="THE SYSTEM PROMPT")
+    return make_graph_node_agent(llm, model_alias=LOCAL, system_prompt="THE SYSTEM PROMPT")
 
 
 def turn(route="strong", **extra):
@@ -337,7 +337,7 @@ async def test_the_real_chat_client_sends_the_routed_alias_for_a_routed_turn_and
 async def test_the_system_prompt_and_the_whole_request_are_identical_under_all_three_routes(priced, routed):
     seen: list = []
     llm = queue_llm(answer(), answer(), answer(), seen=seen)
-    agent = make_agent_node(llm, model_alias=LOCAL, system_prompt="THE SYSTEM PROMPT")
+    agent = make_graph_node_agent(llm, model_alias=LOCAL, system_prompt="THE SYSTEM PROMPT")
 
     for route in ("strong", "medium", "local"):
         await agent(turn(route, context="some retrieved text"), CONFIG)

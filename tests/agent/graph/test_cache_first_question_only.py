@@ -7,8 +7,8 @@ cached answer belonged to another conversation. A first question is the only one
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from app.agent.graph.cache import (
-    make_check_semantic_cache_node,
-    make_write_semantic_cache_node,
+    make_graph_node_check_semantic_cache,
+    make_graph_node_write_semantic_cache,
 )
 from app.agent.graph.messages import COMPACTION_MARKER_KEY, RETRY_ARTIFACT_KEY
 from tests.conftest import TEST_CTX
@@ -42,7 +42,7 @@ def _follow_up(text="yes"):
 async def test_a_first_question_is_looked_up():
     cache = _Cache()
 
-    result = await make_check_semantic_cache_node(cache.get)(_first_question())
+    result = await make_graph_node_check_semantic_cache(cache.get)(_first_question())
 
     assert cache.asked == ["What is the refund policy?"] and result["cache_hit"] is True
 
@@ -51,14 +51,14 @@ async def test_a_follow_up_never_calls_the_cache_so_it_cannot_be_answered_from_a
     cache = _Cache()
 
     for text in ("yes", "do it", "more detail please", "and for March?"):
-        assert await make_check_semantic_cache_node(cache.get)(_follow_up(text)) == {}
+        assert await make_graph_node_check_semantic_cache(cache.get)(_follow_up(text)) == {}
 
     assert cache.asked == []
 
 
 async def test_a_follow_up_is_never_stored_and_a_first_question_still_is():
     cache = _Cache()
-    write = make_write_semantic_cache_node(cache.set, CAPS)
+    write = make_graph_node_write_semantic_cache(cache.set, CAPS)
 
     assert await write({**_follow_up(), "messages": _follow_up()["messages"] + [AIMessage(content="Here is the form.")]}) == {}
     assert cache.written == []
@@ -80,7 +80,7 @@ async def test_retry_feedback_is_not_an_earlier_question():
         "ctx": TEST_CTX,
     }
 
-    await make_check_semantic_cache_node(cache.get)(state)
+    await make_graph_node_check_semantic_cache(cache.get)(state)
 
     assert cache.asked == ["What is the refund policy?"]
 
@@ -96,7 +96,7 @@ async def test_a_thread_whose_earlier_turns_were_compacted_away_is_not_at_its_st
         "ctx": TEST_CTX,
     }
 
-    assert await make_check_semantic_cache_node(cache.get)(state) == {}
+    assert await make_graph_node_check_semantic_cache(cache.get)(state) == {}
     assert cache.asked == []
 
 
@@ -113,13 +113,13 @@ async def test_tool_messages_between_the_turns_do_not_make_a_follow_up_look_firs
         "ctx": TEST_CTX,
     }
 
-    assert await make_check_semantic_cache_node(cache.get)(state) == {}
+    assert await make_graph_node_check_semantic_cache(cache.get)(state) == {}
 
 
 async def test_with_the_setting_off_neither_node_touches_the_cache_even_for_a_first_question():
     cache = _Cache()
-    check = make_check_semantic_cache_node(cache.get, enabled=False)
-    write = make_write_semantic_cache_node(cache.set, CAPS, enabled=False)
+    check = make_graph_node_check_semantic_cache(cache.get, enabled=False)
+    write = make_graph_node_write_semantic_cache(cache.set, CAPS, enabled=False)
 
     assert await check(_first_question()) == {}
     assert await write({"messages": _first_question()["messages"] + [AIMessage(content="Thirty days.")], "ctx": TEST_CTX, "used_citations": []}) == {}

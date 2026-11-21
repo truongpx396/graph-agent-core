@@ -1,4 +1,4 @@
-"""`make_agent_node` — the node that calls the LLM, carrying the retrieved
+"""`make_graph_node_agent` — the node that calls the LLM, carrying the retrieved
 context, the history summary and the skill reminders as text around the
 turn's real question (`messages.with_turn_notes`, pattern 79).
 """
@@ -95,7 +95,7 @@ def without_stale_tool_results(messages: list[BaseMessage], max_chars: int) -> l
 def _refusal_update(state: State, block: ContentBlock) -> dict[str, Any]:
     """The turn's answer when the gateway's content guardrail refused the call.
 
-    The refusal is flagged (`GATEWAY_REFUSAL_KEY`) so `should_continue` ends the turn on it. If the
+    The refusal is flagged (`GATEWAY_REFUSAL_KEY`) so `graph_edge_route_after_agent` ends the turn on it. If the
     guardrail refused the REQUEST (`pre_call`), the person's message is replaced in the stored thread:
     the gateway scans every message on every call, so a refused message left in the thread refuses
     every later turn too (Langfuse trace `2c8e76a4`: "hey" was refused for an earlier message's
@@ -116,7 +116,7 @@ def _refusal_update(state: State, block: ContentBlock) -> dict[str, Any]:
 
 
 # --- Node: agent ---
-def make_agent_node(
+def make_graph_node_agent(
     llm: ChatModel,
     model_alias: str = CHAT_MODEL,
     kind: str = "chat",
@@ -128,7 +128,7 @@ def make_agent_node(
     stale_tool_result_max_chars: int | None = None,
 ) -> Callable[..., Awaitable[dict[str, Any]]]:
     """Factory, not a plain function, because `agent` needs an LLM client; tests build it with a fake (e.g.
-    GenericFakeChatModel) via `make_agent_node(fake_llm)(state)` to cover message assembly without a network
+    GenericFakeChatModel) via `make_graph_node_agent(fake_llm)(state)` to cover message assembly without a network
     call (test_agent_node.py).
 
     - `model_alias`: the LiteLLM alias `llm` is bound to, used only to price its calls. `build_graph` resolves
@@ -150,10 +150,10 @@ def make_agent_node(
       only to unit-test message assembly.
     """
 
-    async def agent(state: State, config: RunnableConfig | None = None) -> dict[str, Any]:
+    async def graph_node_agent(state: State, config: RunnableConfig | None = None) -> dict[str, Any]:
         """Call the LLM with the retrieved context carried by the turn's question.
 
-        The domain's system prompt goes first on every call (see `make_agent_node`);
+        The domain's system prompt goes first on every call (see `make_graph_node_agent`);
         beyond it this adds the per-turn retrieved context/history summary/reminders to the
         question itself, never as further system messages (pattern 79).
 
@@ -328,7 +328,7 @@ def make_agent_node(
         total_tokens = state.get("total_tokens", 0) + turn_tokens
 
         # Cost ceiling bookkeeping (pattern 35), applied HERE incrementally so
-        # should_continue can stop the run before the NEXT call.
+        # graph_edge_route_after_agent can stop the run before the NEXT call.
         total_cost_usd = state.get("total_cost_usd", 0.0) + call.cost_usd
 
         return {
@@ -338,4 +338,4 @@ def make_agent_node(
             "total_cost_usd": total_cost_usd,
         }
 
-    return agent
+    return graph_node_agent

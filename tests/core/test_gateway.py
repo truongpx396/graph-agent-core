@@ -24,13 +24,13 @@ from langchain_openai import ChatOpenAI
 
 from app.adapters.outbound.litellm.failures import OpenAiFailures
 from app.agent.graph.build import GraphDeps
-from app.agent.graph.compaction import _estimate_tokens, make_compact_history_node
+from app.agent.graph.compaction import _estimate_tokens, make_graph_node_compact_history
 from app.agent.graph.core import AGENT_RETRY_POLICY
-from app.agent.graph.followups import make_suggest_followups_node
+from app.agent.graph.followups import make_graph_node_suggest_followups
 from app.agent.runtime import stream as stream_module
 from app.core import gateway, metrics
 from app.core.errors import ErrorCode
-from tests.agent.fakes import make_agent_node
+from tests.agent.fakes import make_graph_node_agent
 from tests.agent.graph.test_graph_integration import _config
 from tests.conftest import TEST_CTX, metric_value
 from tests.ecorp import build_graph
@@ -358,7 +358,7 @@ class _RecordingLLM:
 class TestTheAgentNodeAttributesItsCalls:
     async def test_a_call_made_under_a_ctx_carries_the_tenants_identity(self):
         llm = _RecordingLLM(AIMessage(content="hello there"))
-        agent = make_agent_node(llm)
+        agent = make_graph_node_agent(llm)
 
         await agent({"messages": [HumanMessage(content="hi")]}, {"configurable": {"ctx": TEST_CTX}})
 
@@ -367,7 +367,7 @@ class TestTheAgentNodeAttributesItsCalls:
 
     async def test_a_call_made_in_a_conversation_names_it_to_the_gateway(self):
         llm = _RecordingLLM(AIMessage(content="hello there"))
-        agent = make_agent_node(llm)
+        agent = make_graph_node_agent(llm)
 
         await agent({"messages": [HumanMessage(content="hi")]}, {"configurable": {"ctx": TEST_CTX, "thread_id": "thread-3"}})
 
@@ -376,7 +376,7 @@ class TestTheAgentNodeAttributesItsCalls:
     async def test_a_direct_call_with_no_config_still_works_and_sends_no_identity(self):
         """Tests and scripts call the node with just a state."""
         llm = _RecordingLLM(AIMessage(content="hello there"))
-        agent = make_agent_node(llm)
+        agent = make_graph_node_agent(llm)
 
         await agent({"messages": [HumanMessage(content="hi")]})
 
@@ -437,7 +437,7 @@ class TestEveryNodeThatSpendsOnTheTenantsBehalfIsAttributed:
     async def test_follow_up_suggestions_carry_the_identity(self):
         llm = _RecordingLLM(AIMessage(content="What next?\nAnd then?"))
 
-        await make_suggest_followups_node(llm)(_followup_state(), _CONFIG)
+        await make_graph_node_suggest_followups(llm)(_followup_state(), _CONFIG)
 
         assert llm.kwargs == [gateway.call_identity(TEST_CTX)]
 
@@ -445,7 +445,7 @@ class TestEveryNodeThatSpendsOnTheTenantsBehalfIsAttributed:
         llm = _RecordingLLM(AIMessage(content="a summary"))
         messages = _history()
 
-        await make_compact_history_node(llm, ceiling=_tripped_ceiling(messages), floor=1)(
+        await make_graph_node_compact_history(llm, ceiling=_tripped_ceiling(messages), floor=1)(
             {"messages": messages}, _CONFIG
         )
 
@@ -459,7 +459,7 @@ class TestASwallowedBudgetStopIsStillCounted:
     async def test_follow_ups_degrade_and_the_stop_is_counted(self):
         before = _count()
 
-        result = await make_suggest_followups_node(_RaisingLLM(_budget_error()))(_followup_state(), _CONFIG)
+        result = await make_graph_node_suggest_followups(_RaisingLLM(_budget_error()))(_followup_state(), _CONFIG)
 
         assert result == {"followups": []}
         assert _count() == before + 1
@@ -467,7 +467,7 @@ class TestASwallowedBudgetStopIsStillCounted:
     async def test_compaction_degrades_and_the_stop_is_counted(self):
         before = _count()
         messages = _history()
-        compact = make_compact_history_node(
+        compact = make_graph_node_compact_history(
             _RaisingLLM(_budget_error()), ceiling=_tripped_ceiling(messages), floor=1
         )
 
@@ -481,10 +481,10 @@ class TestASwallowedBudgetStopIsStillCounted:
         before = _count()
         messages = _history()
 
-        await make_suggest_followups_node(_RaisingLLM(RuntimeError("model unreachable")))(
+        await make_graph_node_suggest_followups(_RaisingLLM(RuntimeError("model unreachable")))(
             _followup_state(), _CONFIG
         )
-        await make_compact_history_node(
+        await make_graph_node_compact_history(
             _RaisingLLM(RuntimeError("model unreachable")), ceiling=_tripped_ceiling(messages), floor=1
         )({"messages": messages}, _CONFIG)
 

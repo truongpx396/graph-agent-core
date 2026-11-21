@@ -1,4 +1,4 @@
-"""`make_suggest_followups_node` — suggests 2-3 follow-up questions from a grounded final answer
+"""`make_graph_node_suggest_followups` — suggests 2-3 follow-up questions from a grounded final answer
 (GRAPH_PATTERNS.md pattern 27).
 """
 import logging
@@ -25,17 +25,17 @@ _FOLLOWUP_PROMPT = (
 
 
 # --- Node: follow-up suggestions (GRAPH_PATTERNS.md pattern 27) ---
-def make_suggest_followups_node(llm: ChatModel, model_alias: str = CHAT_MODEL) -> Callable[..., Awaitable[dict[str, Any]]]:
-    """Factory, same rationale as make_agent_node: needs an LLM client.
+def make_graph_node_suggest_followups(llm: ChatModel, model_alias: str = CHAT_MODEL) -> Callable[..., Awaitable[dict[str, Any]]]:
+    """Factory, same rationale as make_graph_node_agent: needs an LLM client.
 
-    Only reached once a turn is confirmed final (route_after_check's
+    Only reached once a turn is confirmed final (graph_edge_route_after_check_output's
     non-retry branch), so it never runs on an answer about to be retried.
 
     Sends no tool schemas (`utils.without_tools`): one sentence in, a few questions out.
     """
     llm = without_tools(llm)
 
-    async def suggest_followups(state: State, config: RunnableConfig | None = None) -> dict[str, Any]:
+    async def graph_node_suggest_followups(state: State, config: RunnableConfig | None = None) -> dict[str, Any]:
         """Suggests follow-ups only for a GROUNDED answer (`used_citations`
         non-empty) — no citations means nothing to build from, which
         naturally suppresses this for a refusal, general-knowledge aside,
@@ -81,4 +81,4 @@ def make_suggest_followups_node(llm: ChatModel, model_alias: str = CHAT_MODEL) -
             )
             return {"followups": []}
 
-    return suggest_followups
+    return graph_node_suggest_followups

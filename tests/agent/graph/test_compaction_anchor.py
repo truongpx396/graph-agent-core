@@ -16,7 +16,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from app.agent.graph.build import GraphDeps
 from app.agent.graph.messages import COMPACTION_MARKER_KEY
-from app.agent.graph.retrieval import make_retrieve_context_node
+from app.agent.graph.retrieval import make_graph_node_retrieve_context
 from app.ports.outbound.domains import AgentManifest
 from tests.agent.fakes import cfg, scripted_llm
 from tests.ecorp import build_graph
@@ -34,7 +34,7 @@ async def test_the_anchor_is_the_question_not_a_breadcrumb_appended_after_it():
         queries.append(query)
         return "[1] REFUND POLICY TEXT", [{"marker": "[1]", "text": "REFUND POLICY TEXT"}]
 
-    retrieve_context = make_retrieve_context_node(search)
+    retrieve_context = make_graph_node_retrieve_context(search)
     messages = [
         HumanMessage(content="what is the refund policy for annual plans", id="h0"),
         AIMessage(content="Refunds are available within thirty days of purchase.", id="a0"),

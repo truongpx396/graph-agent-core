@@ -22,6 +22,11 @@ session; `GRAPH_PATTERNS.md` has the full story under the pattern number given.
 
 - `SYSTEM_PROMPT` stays a ctx-free constant (pattern 19). Never interpolate a tenant, principal,
   or timestamp; `tests/agent/graph/test_prompt_cache_stability.py` guards it.
+- Names follow one rule (GRAPH_PATTERNS.md "Naming", `tests/agent/graph/test_graph_naming.py`): the node registered as `"<node>"` is
+  `graph_node_<node>` (a factory is `make_graph_node_<node>`), and the router of its conditional edge is
+  `graph_edge_route_after_<node>`. The registered string is the node's identity (traces, metrics, checkpoints); a conditional edge is
+  stored under its entry in `EDGE_CHANNEL_NAMES`, never under its router's name (pattern 16), so a function can be renamed but that
+  table and a node's string cannot without draining the workers. A new conditional edge adds its table entry.
 - Nodes are wrapped by `instrumented` in `build_graph` at registration time, not in the node
   body. `human_approval`'s `interrupt()` is a pause (`node_paused`), not a failure — re-raise it.
   Never log message content or the `state` dict.
