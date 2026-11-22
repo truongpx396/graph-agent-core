@@ -2,7 +2,7 @@
 
 Maps of the whole system for someone who has not read the code yet: what runs where, how the code is layered, what one turn of the agent does, and the flows where a mistake would leak data, spend money or write twice.
 
-A diagram is a map, not the contract. The text under each one names the code that is the contract, and the other docs hold the reasoning: [ARCHITECTURE.md](ARCHITECTURE.md) (the layering and the tests that enforce it), [GRAPH_PATTERNS.md](GRAPH_PATTERNS.md) (the graph; each pattern has the bug behind it), [COST_GOVERNANCE.md](COST_GOVERNANCE.md) and the [constitution](../.specify/memory/constitution.md). Checked against the code on 2026-11-10. When a diagram and the code disagree, the code is right, and a change that alters a flow fixes its diagram.
+A diagram is a map, not the contract. The text under each one names the code that is the contract, and the other docs hold the reasoning: [ARCHITECTURE.md](ARCHITECTURE.md) (the layering and the tests that enforce it), [GRAPH_PATTERNS.md](GRAPH_PATTERNS.md) (the graph; each pattern has the bug behind it), [COST_GOVERNANCE.md](COST_GOVERNANCE.md) and the [constitution](../.specify/memory/constitution.md). Last re-checked on 2026-11-22: every file and function named here resolves (`tests/core/test_doc_references.py`), the graph's nodes are the ones `build.py` registers, and every diagram renders. When a diagram and the code disagree, the code is right, and a change that alters a flow fixes its diagram.
 
 | You want to know | Read |
 |---|---|
@@ -256,6 +256,7 @@ flowchart TD
 - **`graph_edge_route_after_agent` checks the budgets first**, whatever the model said: iterations, tokens, dollars and repeated identical calls all end in `no_answer` (patterns 10, 34, 35). Anything not `read_only` goes to `human_approval` and no flag skips it (patterns 8, 15).
 - **`check_output` is a registry of checks** (leaked prompt, too short, fabricated, uncited, a skipped required tool, ...), and `retry_output` loops back to `agent` with a corrective message tagged as a retry artifact so it is never mistaken for the person's words (pattern 5).
 - **The two finish steps run in parallel**, and the cache write is skipped when the turn called a non-read-only tool (pattern 22).
+- **`retrieve_context` is optional per domain:** a manifest with `prefetch="never"` leaves it out of that domain's graph (none does today), and the model then sees no pre-fetched documents or memories (pattern 20).
 - A nested `run_subagent` run builds the same graph with `SUBAGENT_PROFILE`: no cache pair, follow-ups, compaction or router. `GraphProfile` is in `app/agent/graph/build.py`.
 - The full routing detail, with every dead end, is in [GRAPH_PATTERNS.md](GRAPH_PATTERNS.md#graph-flow).
 

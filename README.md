@@ -1,6 +1,22 @@
-# 🤖 Graph Agent Core — Production-Shaped RAG Agent
+<div align="center">
 
-### A multi-tenant, multi-domain LangGraph agent with human-in-the-loop approval. Runs on any OpenAI-compatible LLM
+<h1>🤖 Graph Agent Core</h1>
+
+<h3>Production-Shaped RAG Agent</h3>
+
+<p>A multi-tenant, multi-domain LangGraph agent with human-in-the-loop approval.<br/>
+Runs on any OpenAI-compatible LLM.</p>
+
+[![CI](https://github.com/truongpx396/graph-agent-core/actions/workflows/ci.yml/badge.svg)](https://github.com/truongpx396/graph-agent-core/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.13-3776AB?logo=python&logoColor=white)](#-quickstart)
+[![Stack](https://img.shields.io/badge/Stack-LangGraph%20%C2%B7%20LiteLLM%20%C2%B7%20Qdrant%20%C2%B7%20Postgres%20%C2%B7%20Redis%20%C2%B7%20Langfuse-1f6feb)](#-architecture)
+[![LLM](https://img.shields.io/badge/LLM-any%20OpenAI--compatible%20via%20LiteLLM-2ea44f)](#-retrieval-models-and-routing)
+[![Isolation](https://img.shields.io/badge/Isolation-multi--tenant%20%2B%20principal-8250df)](#-safety-model)
+[![Domains](https://img.shields.io/badge/Domains-multi--domain%2C%20one%20graph-e36209)](#-example-domains)
+[![Writes](https://img.shields.io/badge/Writes-human--in--the--loop%20%2B%20exactly--once-d1242f)](#-safety-model)
+[![Spec Kit](https://img.shields.io/badge/Spec%20Kit-22%20specs-0969da)](specs/)
+
+</div>
 
 **Hybrid RAG with verified citations, human-in-the-loop approval for every write, exactly-once side effects and full
 observability**, run by scalable stateless workers off a Redis Streams queue, behind a Go edge-auth front door.
@@ -10,15 +26,6 @@ guardrails and Langfuse tracing (plus OpenTelemetry metrics). A new use case is 
 graph. The app talks only to LiteLLM, an OpenAI-compatible gateway, through tiered aliases (`chat`, `chat-medium`,
 `chat-strong`, `embed`), so moving to another model or provider, hosted or local (Ollama included), is a LiteLLM config
 change, not a code change.
-
-[![CI](https://github.com/truongpx396/graph-agent-core/actions/workflows/ci.yml/badge.svg)](https://github.com/truongpx396/graph-agent-core/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/python-3.13-3776AB?logo=python&logoColor=white)](#-quickstart)
-[![Stack](https://img.shields.io/badge/Stack-LangGraph%20%C2%B7%20LiteLLM%20%C2%B7%20Qdrant%20%C2%B7%20Postgres%20%C2%B7%20Redis%20%C2%B7%20Langfuse-1f6feb)](#-architecture)
-[![LLM](https://img.shields.io/badge/LLM-any%20OpenAI--compatible%20via%20LiteLLM-2ea44f)](#-retrieval-models-and-routing)
-[![Isolation](https://img.shields.io/badge/Isolation-multi--tenant%20%2B%20principal-8250df)](#-safety-model)
-[![Domains](https://img.shields.io/badge/Domains-multi--domain%2C%20one%20graph-e36209)](#-example-domains)
-[![Writes](https://img.shields.io/badge/Writes-human--in--the--loop%20%2B%20exactly--once-d1242f)](#-safety-model)
-[![Spec Kit](https://img.shields.io/badge/Spec%20Kit-18%20specs-0969da)](specs/)
 
 * * *
 
@@ -352,7 +359,7 @@ curl -s -N -X POST http://localhost:8000/chat/stream/queued \
 
 - 📜 **OpenAPI:** the running API serves it at `/openapi.json` (Swagger UI at `/docs`). Each HTTP service's document is also committed, beside its Dockerfile: [`openapi.json`](openapi.json) (this API), [`services/ml-service/openapi.json`](services/ml-service/openapi.json) and [`services/authlimit/openapi.json`](services/authlimit/openapi.json) (hand-written: authlimit's routing and body types are generated FROM it, `make authlimit-generate`). `make openapi` rewrites the first two from the code, and a test fails while a committed document is stale. They are also held to behaviour: every response the ML service's tests get, and every event the turn loop and the workers publish, must match its document (`tests/openapi_conformance.py`). The streaming routes document one event under `itemSchema`; the security scheme (a Bearer token for the front door) is held to the door's route table. CI's `openapi` job runs on every PR: `make openapi-breaking` fails a change that breaks a client of what main serves (a deliberate break is one line in [`.github/openapi-breaking-ignore.txt`](.github/openapi-breaking-ignore.txt) and still needs a new major version), and `make openapi-version` fails any change to the contract that left `info.version` where it was.
 - 🧪 **Bruno:** [`bruno/`](bruno/README.md) is every endpoint above as a [Bruno](https://www.usebruno.com) collection, with a `local` environment (this API alone) and a `door` one (behind the front door). A test keeps it in step with the routes.
-- 📡 **SSE events:** `token`, `tool_start`, `tool_end`, `citations` (just before `done`; only sources the answer cited), `approval_required`, `error`, `done`.
+- 📡 **SSE events:** `token`, `tool_start`, `tool_end`, `citations` and `followups` (just before `done`; only sources the answer cited), `approval_required`, `error`, `done`. Two are not terminal and a client must handle them: `retry` means discard everything streamed so far (the answer was rejected, replaced or restarted; fresh tokens follow), and `compacted` is informational (older history was summarised). A new message on a conversation whose earlier approval pause could not be resumed after an app update starts with a `system_note` saying so.
 - ✋ **Approvals:** `POST /chat/resume` approves or rejects an `approval_required` event; `POST /chat/cancel` stops the run.
 - 🧵 **Threads:** reuse a `thread_id` to continue a conversation (Langfuse groups traces by it). It belongs to whoever sends on it first (tenant + principal + domain); anyone else gets the same 404 an unknown id gets, so switching identity needs a new one. `telegram:<chat id>` ids are reserved. The check lives at the API; the worker doesn't repeat it (pattern 17).
 - 🔁 **Resubmits:** an identical `(thread_id, message, images)` within `CHAT_SUBMIT_DEDUP_TTL_SECONDS` (10) streams the first attempt's turn.
@@ -926,6 +933,7 @@ anyone who sets the right headers.
 
 | Document | What is in it |
 |---|---|
+| [`docs/`](docs/README.md) | The index of the design and reference documents below, and how their pattern numbers work |
 | [ARCHITECTURE_DIAGRAMS.md](docs/ARCHITECTURE_DIAGRAMS.md) · [ARCHITECTURE.md](docs/ARCHITECTURE.md) | The big picture as Mermaid diagrams (topology, layers, the graph, a sequence per critical flow) · the layering rules and the tests that enforce them |
 | [GRAPH_PATTERNS.md](docs/GRAPH_PATTERNS.md) | The graph's numbered design patterns, each with the bug that motivated it, and the honest list of what isn't built |
 | [COST_GOVERNANCE.md](docs/COST_GOVERNANCE.md) · [ENGINEERING_PATTERNS.md](docs/ENGINEERING_PATTERNS.md) | The spend meter and caps · repository-level lessons |
@@ -934,4 +942,4 @@ anyone who sets the right headers.
 | [`specs/`](specs/) · [Constitution](.specify/memory/constitution.md) | Spec Kit specs 001–022 · the non-negotiable rules (tenant isolation, mandatory approval and exactly-once side effects are principles I, II and IV) |
 | [deploy/README.md](deploy/README.md) · [evals/README.md](evals/README.md) | Deploy runbook: scaling, backups, rollback, teardown · judging a model swap |
 | [CLAUDE.md](CLAUDE.md) | Working rules for contributors and coding agents |
-| [PRODUCTION_REVIEW.md](docs/PRODUCTION_REVIEW.md) | The 2026-11-13 review of the whole system, written as work orders (R01 to R35): what to fix, where, how to test it, and what was left alone on purpose |
+| [PRODUCTION_REVIEW.md](docs/PRODUCTION_REVIEW.md) | The 2026-11-13 review of the whole system, written as work orders (R01 to R35; most are done, R12, R19 and R34 are open): what to fix, where, how to test it, and what was left alone on purpose |

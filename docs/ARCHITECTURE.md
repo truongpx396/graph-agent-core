@@ -29,7 +29,7 @@ when an import crosses the line the wrong way (`tests/core/test_architecture_lay
 | **ports** | `app/ports/` (`outbound/`, and `slot.py`), and each business module's own `app/domains/<module>/ports.py` | the standard library, `pydantic`, the kernel, other ports |
 | **kernel** | `app/core/*.py` | the kernel and the ports. No infrastructure client, nothing above it |
 | **application** | `app/agent/`, `app/domains/` (except the adapter files below), `app/ingestion/` | the kernel, the ports, LangGraph and LangChain core, OpenTelemetry/Langfuse/structlog. Never an infrastructure client, an adapter, an inbound adapter, or (from `app/agent`) a domain |
-| **adapters** | `app/adapters/` (`inbound/` and `outbound/`, below), `app/ingestion/`, `app/bootstrap.py`, `app/platform/` (the process plumbing that opens a connection or a socket: `sql_store`, `redis_client`, `internal_identity`, `telemetry`, `profiling`, `logging_config`, `job_runtime`), and a domain's `store.py`, `metrics_client.py` and `registry.py` | anything inward of them |
+| **adapters** | `app/adapters/` (`inbound/` and `outbound/`, below), `app/ingestion/`, `app/bootstrap.py`, `app/platform/` (the process plumbing that opens a connection or a socket: `sql_store`, `redis_client`, `internal_identity`, `self_healing_pool`, `telemetry`, `profiling`, `logging_config`, `job_runtime`, `worker_heartbeat`), and a domain's `store.py`, `metrics_client.py` and `registry.py` | anything inward of them |
 
 ## The business modules
 
@@ -112,6 +112,7 @@ slot raises `PortNotBoundError` naming the port. There is no default adapter, so
 | `models` | `ModelCatalog` | `app/adapters/outbound/litellm/model_catalog.py` | pricing and the unpriced-model policy |
 | `llm` | `ChatModels`, `LlmFailures` | `app/adapters/outbound/litellm/chat_model.py`, `failures.py` | the alias, the tool shape, never retrying a budget stop, answering a guardrail refusal |
 | `sessions`, `idempotency`, `checkpointing` | `SessionStore`, `ToolCallLedger`, `Checkpointing` | `app/adapters/outbound/postgres/` | ownership never defaults to yes; the exactly-once guard fails open and steers the agent to verify after a timeout |
+| `feedback` | `FeedbackStore` | `app/adapters/outbound/postgres/feedback.py` | one rating per person and answer; advisory, nothing the agent does depends on it |
 | `domains` | `DomainCatalog`, and the plugin contract `AgentManifest` / `DomainPlugin` | `app/domains/registry.py` | the graph is never forked for a domain |
 | `retrieval` | `DocumentIndex`, `DocumentWriter`, `Embedder`, `AnswerCache` | `app/adapters/outbound/qdrant/qdrant_store.py`, `app/adapters/outbound/embeddings/embeddings.py`, `app/adapters/outbound/redis/semantic_cache.py` | WHAT may be seen: every tenant search carries an `AccessScope` |
 | `classification`, `screening` | `RouteClassifier`, `InjectionScorer` | `app/adapters/outbound/mlservice/` | the routing decision and the moderation verdict (fail open on a failed check, closed on a real hit) |
@@ -165,7 +166,7 @@ usage-event store, the model catalog, the classifier and the injection scorer is
 ## Decisions
 
 - **A typed slot, not a constructor argument.** The code this was retrofitted onto is module-level functions called from graph nodes, tools and scripts, and the repo's own earlier port
-  (`billing_port.billing`) is "a module-level name read at call time". Threading a container through every call would have touched most of the 285 files; a slot reads the same and
+  (`billing_port.billing`) is "a module-level name read at call time". Threading a container through every call would have touched most of the files under `app/`; a slot reads the same and
   can be listed, checked and overridden. The price is an ambient lookup; the test that every entrypoint wires, and the one that every port has an adapter, are what pay it.
 - **LangGraph and LangChain core are in the application ring, and LangChain's messages are the graph's transport type.** `State.messages` is `list[BaseMessage]` under LangGraph's
   `add_messages` reducer, and that is what the checkpointer stores, so there is no second message model mirroring it. A graph node is the adapter: it reads the message and hands what the

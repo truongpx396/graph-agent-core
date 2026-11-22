@@ -9,13 +9,14 @@ Read these before changing behavior; they hold the reasoning this file deliberat
 - `docs/ARCHITECTURE_DIAGRAMS.md` — the whole system as Mermaid maps: runtime topology, the rings, the graph, and a sequence diagram for each critical flow (a turn, sign-in, approval, exactly-once, crash reclaim, retrieval, cost, ingestion, MCP, start-up). Start here for the big picture.
 - `.specify/memory/constitution.md` — the non-negotiable rules. Principles I, II and IV
   (tenant isolation, mandatory approval, exactly-once side effects) are NON-NEGOTIABLE.
-- `docs/GRAPH_PATTERNS.md` — the graph's numbered patterns (1-69 so far; 51 live there), each with the real bug
-  that motivated it. "Extending Further" is the honest list of what is and isn't built. A pattern that is
-  not about the graph moves out, leaves its number in a table here, and the number is never reused:
-  the spend meter and caps are in `docs/COST_GOVERNANCE.md`, three repository lessons in `docs/ENGINEERING_PATTERNS.md`,
+- `docs/GRAPH_PATTERNS.md` — the graph's numbered patterns, each with the real bug that motivated it. "Extending
+  Further" is the honest list of what is and isn't built. One number sequence is shared by every pattern document and a
+  number is never reused (74, 86 and 87 each ended up in two documents: cite the other with its file). A pattern that is
+  not about the graph moves out and leaves its number in a table here: the spend meter and caps are in
+  `docs/COST_GOVERNANCE.md`, the lessons about settings, tests, builds and measurements in `docs/ENGINEERING_PATTERNS.md`,
   and the billing package keeps its own (`packages/billing/docs/PATTERNS.md`, see the constitution's
   "Self-contained packages").
-- `docs/PRODUCTION_REVIEW.md` — the open work orders from the 2026-11-13 review (R01 to R35), each with its evidence, the change, the tests and the docs to update. Pick work from its table; mark the row done in the PR that closes it.
+- `docs/PRODUCTION_REVIEW.md` — the work orders from the 2026-11-13 review (R01 to R35), each with its evidence, the change, the tests and the docs to update; the evidence the pattern files leave out is here. Most are done; **R12, R19 and R34 are open**. Pick work from its table; mark the row done in the PR that closes it.
 - `README.md` — architecture, make targets, testing tiers. `docs/WORKER_CONCURRENCY.md` — worker sizing.
   `docs/BILLING_INTEGRATION.md` — the app's side of the billing seam; everything else about billing (patterns,
   runbook, roadmap, specs) is in `packages/billing/`.
