@@ -16,13 +16,13 @@ paths:
 # Graph, runtime, queue and observability gotchas
 
 Constitution Principles V and VI apply. Each item below exists because it cost a real debugging
-session; `GRAPH_PATTERNS.md` has the full story under the pattern number given.
+session; `docs/GRAPH_PATTERNS.md` has the full story under the pattern number given.
 
 ## Graph (`app/agent/graph/`)
 
 - `SYSTEM_PROMPT` stays a ctx-free constant (pattern 19). Never interpolate a tenant, principal,
   or timestamp; `tests/agent/graph/test_prompt_cache_stability.py` guards it.
-- Names follow one rule (GRAPH_PATTERNS.md "Naming", `tests/agent/graph/test_graph_naming.py`): the node registered as `"<node>"` is
+- Names follow one rule (docs/GRAPH_PATTERNS.md "Naming", `tests/agent/graph/test_graph_naming.py`): the node registered as `"<node>"` is
   `graph_node_<node>` (a factory is `make_graph_node_<node>`), and the router of its conditional edge is
   `graph_edge_route_after_<node>`. The registered string is the node's identity (traces, metrics, checkpoints); a conditional edge is
   stored under its entry in `EDGE_CHANNEL_NAMES`, never under its router's name (pattern 16), so a function can be renamed but that
@@ -68,7 +68,7 @@ session; `GRAPH_PATTERNS.md` has the full story under the pattern number given.
 - An ack is `streams.py::ack_and_delete` (`XACK` and `XDEL` in one MULTI), never a bare `xack`: `XACK` leaves the entry in the stream for good. Never bound a requests stream with `XADD ... MAXLEN` (under a backlog it deletes jobs nobody has run); the age trim is by `MINID` (pattern 43).
 - Retry a failed READ of a stream (`redis_client.UNAVAILABLE_ERRORS`), never a write, and never turn on redis-py's client-wide `retry=`: it would re-send an `XADD` the server already applied, and a second `turn` job runs as a second turn (pattern 43).
 - Three numbers must stay in order: the turn's limit, the conversation lock's lifetime, and the reclaim idle. `Settings` refuses a reclaim idle at or below the longest turn plus 30 s; a deployment that widens `REQUEST_TIMEOUT_SECONDS` sets `AGENT_WORKER_RECLAIM_IDLE_SECONDS` with it. A worker takes its free slots before it reads and asks for that many, so a claimed entry never waits for a slot (pattern 99).
-- The production queue Redis has `noeviction` and a `maxmemory`: when it is full a write is refused (a new turn fails to publish) and nothing is dropped; the answer cache is a different Redis (`SEMANTIC_CACHE_REDIS_URL`) that evicts. Never put the cache back on the queue's Redis, and never turn persistence on for a volume that has data without enabling it in the running server first (ENGINEERING_PATTERNS.md 100).
+- The production queue Redis has `noeviction` and a `maxmemory`: when it is full a write is refused (a new turn fails to publish) and nothing is dropped; the answer cache is a different Redis (`SEMANTIC_CACHE_REDIS_URL`) that evicts. Never put the cache back on the queue's Redis, and never turn persistence on for a volume that has data without enabling it in the running server first (docs/ENGINEERING_PATTERNS.md 100).
 - Every wait for a counterparty has a deadline (`read_results(first_event_deadline_seconds=...)`),
   and a claim that wins but whose publish fails is compensated (`release_submission_claim`).
 

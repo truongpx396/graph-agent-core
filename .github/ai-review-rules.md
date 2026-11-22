@@ -36,7 +36,7 @@ say what is missing instead of guessing.
    credential-scrubbed before reaching a prompt; user-supplied URLs go through the SSRF guard;
    the system prompt stays a constant with no per-request value interpolated.
 7. **Tests and docs match the change.** A bug fix needs a regression test that would fail
-   without it. A new pattern or closed gap updates `GRAPH_PATTERNS.md` / the README. A store test
+   without it. A new pattern or closed gap updates `docs/GRAPH_PATTERNS.md` / the README. A store test
    that only asserts SQL text proves statement shape, not a real constraint, and must not claim
    otherwise.
 

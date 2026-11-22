@@ -372,7 +372,7 @@ These are not patterns of the graph, so they live elsewhere. Their numbers are k
 |---|---|
 | 26, 51, 57, 58, 62, 63, 64: the usage meter, the spend limits, and retiring the per-turn ledger | [`COST_GOVERNANCE.md`](COST_GOVERNANCE.md) |
 | 59, 60: a settings error must not print its secret; re-applying a migration in a test | [`ENGINEERING_PATTERNS.md`](ENGINEERING_PATTERNS.md) |
-| 52-56, 61, 65, 66: the credit wallet, the webhooks, the export, the reconciliation, the provider adapters | [`packages/billing/docs/PATTERNS.md`](packages/billing/docs/PATTERNS.md) |
+| 52-56, 61, 65, 66: the credit wallet, the webhooks, the export, the reconciliation, the provider adapters | [`packages/billing/docs/PATTERNS.md`](../packages/billing/docs/PATTERNS.md) |
 
 ### 67. Embedding roles and identity: a question is not a passage, and the same size is not the same space
 Retrieval embeds two different things, a question and a stored passage, and one function (`embed_text`) served both in seven places. nomic-embed-text-v1.5 says its input "must include" `search_query: ` for a question and `search_document: ` for a passage; the app sent neither. Fixing that isn't a prefix setting, because **changing what you embed changes the space**, and Qdrant can't tell: two models of the same dimension (nomic and gte-modernbert-base are both 768-d) accept each other's queries and return confident nonsense with no error.
@@ -785,7 +785,7 @@ A nested `run_subagent` run (46) is `build_graph` with `SUBAGENT_PROFILE`: the s
 
 Two kinds of duplicate: a **replay** sees the same `tool_call_id` twice; a **re-ask** arrives under a new
 `tool_call_id`, which nothing keyed on the id can recognize. The layering is summarized in the
-[README](README.md#-safety-model); each row here is a defect found and closed.
+[README](../README.md#-safety-model); each row here is a defect found and closed.
 
 | Gap | Fix |
 |---|---|

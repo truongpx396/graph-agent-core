@@ -2,7 +2,7 @@
 
 The patterns behind the agent's own usage meter and spend limits: pricing a model call, recording one immutable usage event per call, the dollar caps that sum those events, the holds that keep concurrent turns honest, the gateway backstop, and the history of retiring the old per-turn ledger. They were written in `GRAPH_PATTERNS.md` and moved here so that file stays about the graph. They **keep their original numbers**, so every earlier reference ("pattern 58") resolves; a number is never reused or shifted.
 
-Not here: the billing half of the meter (rating a call in credits, the wallet, the export outbox, reconciliation) is the billing package's, in [`packages/billing/docs/PATTERNS.md`](packages/billing/docs/PATTERNS.md), and what the app hands it is in [`BILLING_INTEGRATION.md`](BILLING_INTEGRATION.md). The per-turn and token ceilings that end a run early are graph patterns (10, 34, 35). Operating it (sweeps, reconciliation) is in [`deploy/README.md`](deploy/README.md).
+Not here: the billing half of the meter (rating a call in credits, the wallet, the export outbox, reconciliation) is the billing package's, in [`packages/billing/docs/PATTERNS.md`](../packages/billing/docs/PATTERNS.md), and what the app hands it is in [`BILLING_INTEGRATION.md`](BILLING_INTEGRATION.md). The per-turn and token ceilings that end a run early are graph patterns (10, 34, 35). Operating it (sweeps, reconciliation) is in [`deploy/README.md`](../deploy/README.md).
 
 | Concern | Patterns |
 |---|---|

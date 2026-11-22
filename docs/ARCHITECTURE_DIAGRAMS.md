@@ -2,7 +2,7 @@
 
 Maps of the whole system for someone who has not read the code yet: what runs where, how the code is layered, what one turn of the agent does, and the flows where a mistake would leak data, spend money or write twice.
 
-A diagram is a map, not the contract. The text under each one names the code that is the contract, and the other docs hold the reasoning: [ARCHITECTURE.md](ARCHITECTURE.md) (the layering and the tests that enforce it), [GRAPH_PATTERNS.md](GRAPH_PATTERNS.md) (the graph; each pattern has the bug behind it), [COST_GOVERNANCE.md](COST_GOVERNANCE.md) and the [constitution](.specify/memory/constitution.md). Checked against the code on 2026-11-10. When a diagram and the code disagree, the code is right, and a change that alters a flow fixes its diagram.
+A diagram is a map, not the contract. The text under each one names the code that is the contract, and the other docs hold the reasoning: [ARCHITECTURE.md](ARCHITECTURE.md) (the layering and the tests that enforce it), [GRAPH_PATTERNS.md](GRAPH_PATTERNS.md) (the graph; each pattern has the bug behind it), [COST_GOVERNANCE.md](COST_GOVERNANCE.md) and the [constitution](../.specify/memory/constitution.md). Checked against the code on 2026-11-10. When a diagram and the code disagree, the code is right, and a change that alters a flow fixes its diagram.
 
 | You want to know | Read |
 |---|---|
@@ -78,8 +78,8 @@ flowchart LR
 ```
 
 - The API and the workers share no memory, only Redis and Postgres, so the tier that holds SSE connections and the tier that runs turns scale on their own (pattern 43).
-- The production compose file ships the same front door as the dev stack (pattern 98): Caddy on three real names, `authlimit`, Casdoor and its own Postgres, the MCP gateway, and the Telegram bot as an opt-in service, in front of `api`, `agent-worker`, `ingest-worker`, PgBouncer, Postgres, Redis, Qdrant, LiteLLM and `ml-service`. Langfuse, MinIO, crawl4ai and OpenSandbox are in the dev stack only. Both stacks' Caddyfiles import one routing file, `deploy/caddy/gateway.caddy` ([deploy/README.md](deploy/README.md)).
-- The README's [architecture diagram](README.md#-architecture) draws the same system at node level, including the upload pipeline.
+- The production compose file ships the same front door as the dev stack (pattern 98): Caddy on three real names, `authlimit`, Casdoor and its own Postgres, the MCP gateway, and the Telegram bot as an opt-in service, in front of `api`, `agent-worker`, `ingest-worker`, PgBouncer, Postgres, Redis, Qdrant, LiteLLM and `ml-service`. Langfuse, MinIO, crawl4ai and OpenSandbox are in the dev stack only. Both stacks' Caddyfiles import one routing file, `deploy/caddy/gateway.caddy` ([deploy/README.md](../deploy/README.md)).
+- The README's [architecture diagram](../README.md#-architecture) draws the same system at node level, including the upload pipeline.
 
 ### 2. The rings: ports and adapters
 
@@ -280,7 +280,7 @@ A turn keeps nothing in process memory, which is why any worker can take any job
 
 ### 6. Where the non-negotiable rules are enforced
 
-Three principles in the [constitution](.specify/memory/constitution.md) cannot be waived: I tenant isolation, II mandatory approval, IV exactly-once. Each is held by several independent layers, each closing a failure the one before it cannot see.
+Three principles in the [constitution](../.specify/memory/constitution.md) cannot be waived: I tenant isolation, II mandatory approval, IV exactly-once. Each is held by several independent layers, each closing a failure the one before it cannot see.
 
 | Principle | The layers, outermost first |
 |---|---|
@@ -338,9 +338,9 @@ flowchart LR
     loki --> graf
 ```
 
-- **The same code runs in dev and prod**; only configuration and the compose file differ ([README](README.md#-environments)).
-- **Schema changes are not applied by the deploy.** `postgres-init/*.sql` runs on a fresh volume only; the billing scripts have their own `make billing-migrate`, which runs before the code that needs them ([README](README.md#database-migrations)).
-- **A graph change needs the workers drained first**: a renamed router or node can hide a mid-flight turn's pending node (pattern 16). The runbook is [deploy/README.md](deploy/README.md).
+- **The same code runs in dev and prod**; only configuration and the compose file differ ([README](../README.md#-environments)).
+- **Schema changes are not applied by the deploy.** `postgres-init/*.sql` runs on a fresh volume only; the billing scripts have their own `make billing-migrate`, which runs before the code that needs them ([README](../README.md#database-migrations)).
+- **A graph change needs the workers drained first**: a renamed router or node can hide a mid-flight turn's pending node (pattern 16). The runbook is [deploy/README.md](../deploy/README.md).
 
 ## Part 2: Flows
 
@@ -855,7 +855,7 @@ sequenceDiagram
 | Every graph pattern, each with the bug that motivated it, and what is not built | [GRAPH_PATTERNS.md](GRAPH_PATTERNS.md) |
 | Spend, caps and the gateway backstop | [COST_GOVERNANCE.md](COST_GOVERNANCE.md) |
 | Sizing the worker pools and the connection budget | [WORKER_CONCURRENCY.md](WORKER_CONCURRENCY.md) |
-| The edge service: failure policy, route classes, key rotation | [services/authlimit/README.md](services/authlimit/README.md) |
+| The edge service: failure policy, route classes, key rotation | [services/authlimit/README.md](../services/authlimit/README.md) |
 | The billing package and its seam | [BILLING_INTEGRATION.md](BILLING_INTEGRATION.md) |
-| Running, deploying and operating it | [README.md](README.md), [deploy/README.md](deploy/README.md) |
-| The rules a change must keep | [constitution](.specify/memory/constitution.md), [CLAUDE.md](CLAUDE.md) |
+| Running, deploying and operating it | [README.md](../README.md), [deploy/README.md](../deploy/README.md) |
+| The rules a change must keep | [constitution](../.specify/memory/constitution.md), [CLAUDE.md](../CLAUDE.md) |
