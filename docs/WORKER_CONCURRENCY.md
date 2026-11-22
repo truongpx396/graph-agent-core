@@ -1,6 +1,6 @@
 # Worker concurrency: how we decided, what we built
 
-The reasoning behind scaling `app/adapters/inbound/workers/agent_worker.py` and `app/adapters/inbound/workers/ingest_worker.py` for concurrent requests, why both ended up on one concurrency model despite very different work, and how to size them. It's a scaling/ops decision record, so it lives apart from [GRAPH_PATTERNS.md](GRAPH_PATTERNS.md).
+The reasoning behind scaling `app/adapters/inbound/workers/agent_worker.py` and `app/adapters/inbound/workers/ingest_worker.py` for concurrent requests, why both ended up on one concurrency model despite very different work, and how to size them. It's a scaling/ops decision record, so it lives apart from the patterns ([RUNTIME_PATTERNS.md](RUNTIME_PATTERNS.md) has the queue's).
 
 ## The starting question
 
@@ -18,19 +18,19 @@ Provisioning to the burst peak when the ceiling is elsewhere just pays for idle 
 ## How to size worker capacity
 
 1. **A fixed baseline for steady-state load,** not burst peaks: a handful of replicas.
-2. **Autoscale on queue depth or consumer lag,** not request rate (`XLEN`/`XPENDING` on either stream): a growing backlog scales the service up (`docker compose --scale`, or an HPA equivalent), an empty queue scales it down. This reacts to *sustained* load, not a burst that clears in seconds. Nothing does this yet; it's the missing piece flagged in GRAPH_PATTERNS.md 43 (an orchestrator that scales on queue depth).
+2. **Autoscale on queue depth or consumer lag,** not request rate (`XLEN`/`XPENDING` on either stream): a growing backlog scales the service up (`docker compose --scale`, or an HPA equivalent), an empty queue scales it down. This reacts to *sustained* load, not a burst that clears in seconds. Nothing does this yet; it's the missing piece flagged in RUNTIME_PATTERNS.md 43 (an orchestrator that scales on queue depth).
 3. **A ceiling on scale-out** set by the real bottleneck (the embedding API's rate limit; the LLM backend's concurrency).
 4. Users see "N requests accepted instantly, processed over the next seconds or minutes" (why both endpoints stream per-job progress over SSE).
 
 ## One process per container
 
-Docker already gives independent restart-on-crash, resource accounting and trivial scaling *per container* (`restart: unless-stopped` is container-level, so a crashed process inside a multi-process container needs its own supervisor to be noticed at all). Both workers are one-process-per-container services in `docker-compose.yml`, scaled by replica count (`docker compose --profile app up -d --scale agent-worker=3` / `--scale ingest-worker=3`). Efficiency belongs *inside* the process (below), not in packing processes together. Each replica pushes its metrics over OTLP to one collector (GRAPH_PATTERNS.md 43), so scaling needs no scrape-config change either.
+Docker already gives independent restart-on-crash, resource accounting and trivial scaling *per container* (`restart: unless-stopped` is container-level, so a crashed process inside a multi-process container needs its own supervisor to be noticed at all). Both workers are one-process-per-container services in `docker-compose.yml`, scaled by replica count (`docker compose --profile app up -d --scale agent-worker=3` / `--scale ingest-worker=3`). Efficiency belongs *inside* the process (below), not in packing processes together. Each replica pushes its metrics over OTLP to one collector (RUNTIME_PATTERNS.md 43), so scaling needs no scrape-config change either.
 
 ## Domains per process
 
 One `agent_worker` process serves every domain in `AGENT_WORKER_DOMAINS` (names, or `all`), so the four example domains need one container, not four. The budget is the process's: `AGENT_WORKER_MAX_CONCURRENCY` turns at once **across all its domains**, over one checkpointer pool. Size it for the sum of the domains' load, not per domain.
 
-The cost is isolation. A flood on one domain can occupy every slot while another waits. If that matters, run separate pools, each with its own `AGENT_WORKER_DOMAINS` and replicas (`AGENT_WORKER_DOMAINS=support docker compose --profile app up -d --scale agent-worker=2`); streams and consumer groups are per domain, so the pools never share a job. GRAPH_PATTERNS.md 96 has the mechanics.
+The cost is isolation. A flood on one domain can occupy every slot while another waits. If that matters, run separate pools, each with its own `AGENT_WORKER_DOMAINS` and replicas (`AGENT_WORKER_DOMAINS=support docker compose --profile app up -d --scale agent-worker=2`); streams and consumer groups are per domain, so the pools never share a job. RUNTIME_PATTERNS.md 96 has the mechanics.
 
 ## Model 1: `agent_worker`, concurrency because turns mostly *wait*
 

@@ -21,7 +21,7 @@
 - [ ] New degrade-and-continue path → a metric, plus an alert rule if a human could be left
       unaware of committed business state
 - [ ] Prompt, model-alias or retrieval change → `make promptfoo` and `make eval` results noted
-- [ ] `docs/GRAPH_PATTERNS.md` / README updated; any gap this leaves open is disclosed there
+- [ ] the pattern document that owns it (`docs/README.md` maps the numbers) / README updated; any gap this leaves open is disclosed there
 - [ ] Touches a constitution principle (`.specify/memory/constitution.md`) → which one, and how
       it still holds
 - [ ] No secrets or `.env` / `CREDENTIALS.local.md` content in the diff or this description

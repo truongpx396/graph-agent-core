@@ -15,8 +15,9 @@ REPO = Path(__file__).resolve().parents[2]
 DOCS = [
     "README.md", "CLAUDE.md",
     *(f"docs/{name}.md" for name in (
-        "GRAPH_PATTERNS", "COST_GOVERNANCE", "ENGINEERING_PATTERNS", "WORKER_CONCURRENCY", "BILLING_INTEGRATION",
-        "ARCHITECTURE", "ARCHITECTURE_DIAGRAMS",
+        "GRAPH_PATTERNS", "RUNTIME_PATTERNS", "ACCESS_PATTERNS", "CHANNEL_PATTERNS", "TOOL_PATTERNS",
+        "RETRIEVAL_AND_MODEL_PATTERNS", "COST_GOVERNANCE", "ENGINEERING_PATTERNS", "WORKER_CONCURRENCY",
+        "BILLING_INTEGRATION", "ARCHITECTURE", "ARCHITECTURE_DIAGRAMS",
     )),
     *sorted(str(p.relative_to(REPO)) for p in (REPO / ".claude" / "rules").glob("*.md")),
 ]

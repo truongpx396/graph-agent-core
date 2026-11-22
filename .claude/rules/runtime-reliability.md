@@ -16,7 +16,7 @@ paths:
 # Graph, runtime, queue and observability gotchas
 
 Constitution Principles V and VI apply. Each item below exists because it cost a real debugging
-session; `docs/GRAPH_PATTERNS.md` has the full story under the pattern number given.
+session; the pattern documents (`docs/README.md` maps each number to its file) have the full story under the pattern number given.
 
 ## Graph (`app/agent/graph/`)
 

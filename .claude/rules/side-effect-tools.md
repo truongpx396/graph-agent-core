@@ -58,5 +58,5 @@ Constitution Principles I–IV apply. Use `app/domains/support/tools.py::create_
   params, `tool_call_id` is passed through, and a repeated id returns the original row / is a
   no-op. Note this proves statement shape only — say so rather than claiming constraint coverage.
 - Tool test: refuses with no ctx, declares the right tier, and goes through `idempotent()`.
-- Add or update the `docs/GRAPH_PATTERNS.md` entry (and "Extending Further" if you closed or left a
+- Add or update the entry in the pattern document that owns it (`docs/README.md` maps the numbers; `docs/TOOL_PATTERNS.md` for a tool) (and "Extending Further" if you closed or left a
   gap).
