@@ -23,8 +23,6 @@ DOCS = [
 # (document, reference) pairs that are MEANT not to resolve.
 INTENTIONAL = {
     ("CLAUDE.md", "tests/core/test_tool_idempotency.py::test_name"),  # the command example's placeholder
-    ("docs/COST_GOVERNANCE.md", "app/agent/usage_ledger.py"),  # the retired module, in text that says it is retired
-    ("docs/COST_GOVERNANCE.md", "scripts/usage_ledger_sweep.py"),  # likewise
 }
 REFERENCE = re.compile(r"(?<![\w/.-])((?:app|scripts|tests|packages)/[\w./-]+?\.py)(?:::(\w+))?")
 
