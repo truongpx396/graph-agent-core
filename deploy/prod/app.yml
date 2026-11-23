@@ -71,13 +71,8 @@ x-app-env: &app-env
   OPENSANDBOX_MCP_DOMAIN: ${OPENSANDBOX_MCP_DOMAIN:-}
   OPENSANDBOX_API_KEY: ${OPENSANDBOX_API_KEY:-}
 
-# Runtime hardening for the images this repo builds (nothing here changes what the app does):
-#   init                  a real PID 1: reaps the sandbox bridge's children and forwards SIGTERM, so `stop_grace_period` holds
-#   no-new-privileges     no privilege gain through a setuid binary
-#   cap_drop: ALL         the app runs as uid 1000 on a port above 1024: it needs no capability
-#   read_only + tmpfs     the image filesystem is never written. /tmp and $HOME (libraries create dot-directories there: crawl4ai makes
-#                         ~/.crawl4ai on import) are RAM, capped because tmpfs counts against the memory limit. ml-service keeps a named
-#                         volume for its models, so it overrides `tmpfs`.
+# Runtime hardening for the images this repo builds, as deploy/dev/app.yml explains it (nothing here changes what the app does): `init` (a real PID 1), no-new-privileges, `cap_drop: ALL`,
+# and a read-only image filesystem with capped RAM tmpfs for /tmp and $HOME. ml-service keeps a named volume for its models, so it overrides `tmpfs`.
 x-hardened: &hardened
   init: true
   security_opt:

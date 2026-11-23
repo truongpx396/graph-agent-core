@@ -69,11 +69,10 @@ x-hardened: &hardened
     - /home/appuser:size=64m,uid=1000,gid=1000
 
 services:
-  # --- ML service: the reranker (app/adapters/outbound/embeddings/embeddings.py `rerank`, on every retrieval), Llama Prompt Guard 2 (app/core/moderation.py), the
-  # embedding endpoint and the label sets, in one CPU container (design: services/ml-service/main.py).
-  # Rerank used to run in the worker's process and oversubscribed its threads and cores under a 50-turn burst. This service coalesces concurrent
-  # calls into one ONNX pass (batches of up to 256 pairs from ~12 callers) and served a 100-request burst with no rejections; Hugging Face TEI
-  # (bge-reranker-base) rejected ~94% of the same burst and idled at 2.26 GiB against 200-420 MiB here.
+  # --- ML service: the reranker (app/adapters/outbound/embeddings/embeddings.py `rerank`, on every retrieval), Llama Prompt Guard 2 (app/core/moderation.py), the embedding endpoint and the
+  # label sets, in one CPU container (design: services/ml-service/main.py). Rerank used to run in the worker's process and oversubscribed its threads under a 50-turn burst; this service
+  # coalesces concurrent calls into one ONNX pass and served a 100-request burst with no rejections, where Hugging Face TEI (bge-reranker-base) rejected ~94% of it and idled at 2.26 GiB
+  # against 200-420 MiB here.
   # Prompt Guard comes from gravitee-io's ONNX port: Meta's repo is gated behind the Llama 4 license, which an anonymous image build cannot accept.
   ml-service:
     <<: *hardened
@@ -98,9 +97,7 @@ services:
       retries: 12
       start_period: 45s   # covers a cold pull of BOTH models on first startup
 
-  # --- Containerized app roles (profile `app`; `make up-app`) ---
-  # The deployable artifact (see the Dockerfile header). Everyday dev runs `make serve`, `make agent-worker` and `make ingest-worker` as host
-  # processes instead.
+  # --- Containerized app roles (profile `app`; `make up-app`): the deployable artifact (see the Dockerfile header). Everyday dev runs them as host processes instead. ---
   api:
     <<: [*hardened, *crawler-network]
     build: *app-build

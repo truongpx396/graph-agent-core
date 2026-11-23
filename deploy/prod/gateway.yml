@@ -1,8 +1,5 @@
-# Production stack (droplet), part of docker-compose.yml: the front door.
-#
-# The front door (specs/018 T069, pattern 98): the same services, images and settings as the development stack's `gateway` profile (deploy/dev/gateway.yml), with
-# the local names replaced by the three real ones and the passwords required instead of defaulted.
-# deploy/dev/gateway.yml is the development counterpart.
+# Production stack (droplet), part of docker-compose.yml: the front door (specs/018 T069, pattern 98). The same services, images and settings as dev's `gateway` profile
+# (deploy/dev/gateway.yml), with the local names replaced by the three real ones and the passwords required instead of defaulted.
 
 services:
   # Casdoor's own Postgres: it migrates its schema on upgrade, so it does not share the app's (the dev stack does the same). Pinned by digest, like dev.

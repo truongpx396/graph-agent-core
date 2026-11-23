@@ -26,8 +26,9 @@ Read these before changing behavior; they hold the reasoning this file deliberat
 
 ## Commands
 
-The Makefile assumes an activated venv: `source .venv/bin/activate`. It holds the stack, tests and lint and includes `make/host.mk` (the app's processes on the host),
-`make/admin.mk` (back-office commands), `make/evals.mk`, `make/security.mk` and `make/test.mk` (tests, lint, load tests, smoke); target names are the same wherever they live. The env-example test scans `.mk` too.
+The Makefile assumes an activated venv: `source .venv/bin/activate`. It holds the shared settings, `make help` and the includes; the targets are in `make/`, one file per topic: `stack.mk` (start, stop, reset,
+observability), `data.mk` (models, the vector store), `host.mk` (the app's processes on the host), `gateway.mk` (the front door and its checks), `test.mk` (tests, lint, load tests, smoke), `evals.mk`, `security.mk`
+and `admin.mk` (back-office commands). `make help` groups them by `##@ Topic` markers. Every rule is phony by computation, so a new target needs no list entry. The env-example test scans `.mk` too.
 
 ```bash
 make lint            # ruff check .          (CI gate)

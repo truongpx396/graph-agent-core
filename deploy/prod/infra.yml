@@ -70,17 +70,17 @@ services:
       postgres:
         condition: service_healthy
 
-  # The work queue, the conversation locks, the cancel flags, the dedup claims, the front door's rate buckets and revocation list, and the Telegram state (PRODUCTION_REVIEW.md R15).
-  # Everything here must survive and none of it may be evicted, so:
+  # The work queue, conversation locks, cancel flags, dedup claims, the front door's rate buckets and revocation list, and the Telegram state (PRODUCTION_REVIEW.md R15). All of it must
+  # survive and none of it may be evicted, so:
   #   --appendonly yes --appendfsync everysec   a restart loses at most about a second of accepted jobs (it used to lose whatever the last snapshot missed: minutes)
-  #   --maxmemory 192mb --maxmemory-policy noeviction   when it is full a write is REFUSED (the API's publish fails and the caller sees an error), and nothing is dropped. That is
-  #       the correct failure: visible, and no lock or job silently gone. `RedisQueueMemoryHigh` (observability/prometheus/alerts.yml) fires at 80% so it is seen before it happens.
-  #       192mb is 75% of `mem_limit`, the rest being for the AOF rewrite and buffers: change the two together. Sized for the default droplet (s-4vcpu-8gb); the owner's number to set.
-  # The same image as `redis-cache`, not a plain Redis: the AOF a server of this image writes holds the search and JSON commands of the semantic cache that used to live here, and a
-  # plain server cannot load them. (Move both to `redis:8` after tests/integration/test_queue_real_redis.py and the semantic-cache tests pass against it.)
-  # Server flags reach this image through `REDIS_ARGS`: it has no entrypoint, so a `command:` would replace its start script.
-  # MIGRATING an existing deployment: switching the flags on a volume that holds only a snapshot starts EMPTY (Redis ignores `dump.rdb` once AOF is on), which would lose the queue
-  # and the front door's revocation list. deploy/README.md ("Redis") has the steps; do them before you pull this file.
+  #   --maxmemory 192mb --maxmemory-policy noeviction   when full a write is REFUSED (the API's publish fails and the caller sees an error) and nothing is dropped: visible, and no lock
+  #       or job silently gone. `RedisQueueMemoryHigh` (observability/prometheus/alerts.yml) fires at 80%. 192mb is 75% of `mem_limit`, the rest being for the AOF rewrite and buffers:
+  #       change the two together (sized for the default s-4vcpu-8gb droplet; the owner's number to set).
+  # The same image as `redis-cache`, not a plain Redis: the AOF this server writes holds the semantic cache's search and JSON commands, which a plain server cannot load (move both to
+  # `redis:8` only after tests/integration/test_queue_real_redis.py and the semantic-cache tests pass against it). Server flags go through `REDIS_ARGS`: the image has no entrypoint, so
+  # a `command:` would replace its start script.
+  # MIGRATING an existing deployment: switching the flags on a volume that holds only a snapshot starts EMPTY (Redis ignores `dump.rdb` once AOF is on), losing the queue and the
+  # revocation list. deploy/README.md ("Redis") has the steps; do them before you pull this file.
   redis:
     image: redis/redis-stack-server@sha256:798ab84d9f266936b034ab11c4d04a2b8e4b441884c5aa7d17ac951eefdf742a   # Redis 7.4.7 with search and JSON; pinned 2026-11-15
     restart: unless-stopped

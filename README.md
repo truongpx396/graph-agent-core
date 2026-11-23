@@ -807,7 +807,7 @@ until configured**.
 
 ## 🔧 Make targets
 
-`make help` lists everything. The `Makefile` holds the stack, tests and lint; the rest is in files it includes, under the same target names: `make/host.mk` (the app's processes on your machine), `make/admin.mk` (back-office operator commands), `make/evals.mk`, `make/security.mk` and `make/test.mk` (tests, lint, load tests, smoke checks). The ones you will use:
+`make help` lists everything. The `Makefile` holds the shared settings and the includes; the targets are in `make/`, one file per topic: `stack.mk` (start, stop, reset, observability), `data.mk` (models, the vector store), `host.mk` (the app's processes on your machine), `gateway.mk` (the front door and its checks), `test.mk` (tests, lint, load tests, smoke checks), `evals.mk`, `security.mk` and `admin.mk` (back-office operator commands). The ones you will use:
 
 | Target | Does |
 |---|---|

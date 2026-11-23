@@ -1,6 +1,5 @@
-# Production stack (droplet), part of docker-compose.yml: the exporters and agents that feed the observability droplet (the counterpart of deploy/dev/collectors.yml, which is an overlay there).
-# Observability sidecars: relay this droplet's metrics and logs to the observability droplet (observability.yml in this directory; its header has the
-# topology). None publishes a host port; only otel-collector-agent and promtail reach off-box (OTLP to OBS_COLLECTOR_ENDPOINT, Loki push to
+# Production stack (droplet), part of docker-compose.yml: the exporters and agents that relay this droplet's metrics and logs to the observability droplet (observability.yml here; dev's
+# counterpart, deploy/dev/collectors.yml, is an overlay). None publishes a host port; only otel-collector-agent and promtail reach off-box (OTLP to OBS_COLLECTOR_ENDPOINT, Loki push to
 # LOKI_PUSH_HOST, both in .env), so the firewall needed no new inbound rule.
 
 services:

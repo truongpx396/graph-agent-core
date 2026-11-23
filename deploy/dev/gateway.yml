@@ -1,7 +1,6 @@
-# Dev stack, part of docker-compose.yml: the front door, the `gateway` profile (`make mcp-gateway-up`). Casdoor issues the tokens, authlimit decides who may call
-# and how often, Caddy terminates TLS and asks authlimit about every request. The MCP gateway behind it, and the API (`make authlimit-up-app`), are app.yml.
-# Local only: *.localhost names, Caddy's own CA, one loopback port. deploy/prod/gateway.yml is the production counterpart: real names, ACME, and the same
-# routing (deploy/shared/caddy/gateway.caddy).
+# Dev stack, part of docker-compose.yml: the front door, profile `gateway` (`make mcp-gateway-up`). Casdoor issues the tokens, authlimit decides who may call and how often, Caddy
+# terminates TLS and asks authlimit about every request. Local only: *.localhost names, Caddy's own CA, one loopback port. The MCP gateway behind it and the API are app.yml;
+# deploy/prod/gateway.yml is the production counterpart (real names, ACME, the same routing in deploy/shared/caddy/gateway.caddy).
 
 # The authlimit service's own Dockerfile and context, shared by `authlimit` and its smoke-check stand-in `authlimit-echo`.
 x-authlimit-image: &authlimit-image
@@ -11,16 +10,13 @@ x-authlimit-image: &authlimit-image
 
 services:
   # --- MCP gateway (profile `gateway`; `make mcp-gateway-up`; specs/017) ---
-  # The published MCP servers (app/adapters/inbound/mcp/server.py, ops_server.py) over Streamable HTTP behind OAuth 2.1: caddy-gateway terminates TLS, mcp-gateway is
-  # the resource server, casdoor issues the tokens. Local only: *.localhost names, Caddy's own CA, one loopback port. A deployment swaps in real
-  # names, ACME and its own identity provider (the gateway needs only an issuer URL and a JWKS URL).
+  # The published MCP servers (app/adapters/inbound/mcp/server.py, ops_server.py) run over Streamable HTTP behind OAuth 2.1: caddy-gateway terminates TLS, mcp-gateway is the resource
+  # server, casdoor issues the tokens. A deployment swaps in real names, ACME and its own identity provider (the gateway needs only an issuer URL and a JWKS URL).
   #
-  # Casdoor is pinned by digest because it releases almost daily. To move it, take the new tag's digest, run `make mcp-gateway-up` and
-  # `make mcp-gateway-bootstrap`, and read the minted token (specs/017-mcp-gateway/research.md lists the claims this depends on).
-  # It gets its own Postgres: Casdoor migrates its schema on upgrade (as sonarqube-db does).
-  # The passwords come from `make mcp-gateway-up` (a second --env-file outside the repo) and default to EMPTY, not `${VAR:?}`: compose interpolates
-  # the whole file on every command, so a required variable would break `make up` for everyone. Empty fails safe: Postgres will not initialise
-  # without a password and Casdoor reports the admin password unset.
+  # Casdoor is pinned by digest because it releases almost daily. To move it, take the new tag's digest, run `make mcp-gateway-up` and `make mcp-gateway-bootstrap`, and read the minted
+  # token (specs/017-mcp-gateway/research.md lists the claims this depends on). It gets its own Postgres: Casdoor migrates its schema on upgrade (as sonarqube-db does).
+  # The passwords come from `make mcp-gateway-up` (a second --env-file outside the repo) and default to EMPTY, not `${VAR:?}`: compose interpolates the whole file on every command, so a
+  # required variable would break `make up` for everyone. Empty fails safe: Postgres will not initialise without a password and Casdoor reports the admin password unset.
   casdoor-db:
     image: postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36
     profiles: ["gateway"]
