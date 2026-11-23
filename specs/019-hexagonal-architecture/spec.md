@@ -1,6 +1,6 @@
 # Spec 019: ports and adapters
 
-**Status**: built, in one PR at the owner's request (a commit series, one port family per commit). The design record is [`ARCHITECTURE.md`](../../ARCHITECTURE.md);
+**Status**: built, in one PR at the owner's request (a commit series, one port family per commit). The design record is [`ARCHITECTURE.md`](../../docs/ARCHITECTURE.md);
 this file states what was required and how it was checked. No `plan.md` or `tasks.md` was generated: the work was one refactor with a measured worklist (below), not a feature.
 
 ## Why

@@ -18,10 +18,10 @@ Where to read the rest:
 
 | You want | Read |
 |---|---|
-| The contract the app calls | [`packages/billing/docs/port.md`](packages/billing/docs/port.md) |
-| Why each mechanism is built the way it is (patterns 52-56, 61, 65, 66, B1-B3) and where each lives now | [`packages/billing/docs/PATTERNS.md`](packages/billing/docs/PATTERNS.md) |
-| Operating it: turning it on, changing a wallet, reconciling, selling a pack with Stripe or Polar | [`packages/billing/docs/RUNBOOK.md`](packages/billing/docs/RUNBOOK.md) |
-| What is not built, in order | [`packages/billing/docs/ROADMAP.md`](packages/billing/docs/ROADMAP.md) |
+| The contract the app calls | [`packages/billing/docs/port.md`](../packages/billing/docs/port.md) |
+| Why each mechanism is built the way it is (patterns 52-56, 61, 65, 66, B1-B3) and where each lives now | [`packages/billing/docs/PATTERNS.md`](../packages/billing/docs/PATTERNS.md) |
+| Operating it: turning it on, changing a wallet, reconciling, selling a pack with Stripe or Polar | [`packages/billing/docs/RUNBOOK.md`](../packages/billing/docs/RUNBOOK.md) |
+| What is not built, in order | [`packages/billing/docs/ROADMAP.md`](../packages/billing/docs/ROADMAP.md) |
 
 ## How the app finds the package
 

@@ -1078,7 +1078,7 @@ write_semantic_cache} and another embedding + a Redis write; `done` waits for bo
    "log an incident" in the ops domain, whose tools do not use documents. The model can also call `search_docs`
    itself, so a turn that needs a search may pay for two.
 2. `route_model` runs before `retrieve_context`, but the two do not depend on each other. `route_model` reads only the
-   person's message ([model_route.py](app/agent/graph/model_route.py), it calls `human_text(last_human_message(...))`)
+   person's message ([model_route.py](../app/agent/graph/model_route.py), it calls `human_text(last_human_message(...))`)
    and writes only `model_route`. `retrieve_context` writes only `context`, `citations` and `context_anchor_index`.
    Running them one after the other adds the router's latency (up to `ROUTER_TIMEOUT_SECONDS`, 0.5 s) to every turn
    that has routing on.

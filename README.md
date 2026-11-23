@@ -1,6 +1,22 @@
-# 🤖 Graph Agent Core — Production-Shaped RAG Agent
+<div align="center">
 
-### A multi-tenant, multi-domain LangGraph agent with human-in-the-loop approval. Runs on any OpenAI-compatible LLM
+<h1>🤖 Graph Agent Core</h1>
+
+<h3>Production-Shaped RAG Agent</h3>
+
+<p>A multi-tenant, multi-domain LangGraph agent with human-in-the-loop approval.<br/>
+Runs on any OpenAI-compatible LLM.</p>
+
+[![CI](https://github.com/truongpx396/graph-agent-core/actions/workflows/ci.yml/badge.svg)](https://github.com/truongpx396/graph-agent-core/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.13-3776AB?logo=python&logoColor=white)](#-quickstart)
+[![Stack](https://img.shields.io/badge/Stack-LangGraph%20%C2%B7%20LiteLLM%20%C2%B7%20Qdrant%20%C2%B7%20Postgres%20%C2%B7%20Redis%20%C2%B7%20Langfuse-1f6feb)](#-architecture)
+[![LLM](https://img.shields.io/badge/LLM-any%20OpenAI--compatible%20via%20LiteLLM-2ea44f)](#-retrieval-models-and-routing)
+[![Isolation](https://img.shields.io/badge/Isolation-multi--tenant%20%2B%20principal-8250df)](#-safety-model)
+[![Domains](https://img.shields.io/badge/Domains-multi--domain%2C%20one%20graph-e36209)](#-example-domains)
+[![Writes](https://img.shields.io/badge/Writes-human--in--the--loop%20%2B%20exactly--once-d1242f)](#-safety-model)
+[![Spec Kit](https://img.shields.io/badge/Spec%20Kit-22%20specs-0969da)](specs/)
+
+</div>
 
 **Hybrid RAG with verified citations, human-in-the-loop approval for every write, exactly-once side effects and full
 observability**, run by scalable stateless workers off a Redis Streams queue, behind a Go edge-auth front door.
@@ -10,15 +26,6 @@ guardrails and Langfuse tracing (plus OpenTelemetry metrics). A new use case is 
 graph. The app talks only to LiteLLM, an OpenAI-compatible gateway, through tiered aliases (`chat`, `chat-medium`,
 `chat-strong`, `embed`), so moving to another model or provider, hosted or local (Ollama included), is a LiteLLM config
 change, not a code change.
-
-[![CI](https://github.com/truongpx396/graph-agent-core/actions/workflows/ci.yml/badge.svg)](https://github.com/truongpx396/graph-agent-core/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/python-3.13-3776AB?logo=python&logoColor=white)](#-quickstart)
-[![Stack](https://img.shields.io/badge/Stack-LangGraph%20%C2%B7%20LiteLLM%20%C2%B7%20Qdrant%20%C2%B7%20Postgres%20%C2%B7%20Redis%20%C2%B7%20Langfuse-1f6feb)](#-architecture)
-[![LLM](https://img.shields.io/badge/LLM-any%20OpenAI--compatible%20via%20LiteLLM-2ea44f)](#-retrieval-models-and-routing)
-[![Isolation](https://img.shields.io/badge/Isolation-multi--tenant%20%2B%20principal-8250df)](#-safety-model)
-[![Domains](https://img.shields.io/badge/Domains-multi--domain%2C%20one%20graph-e36209)](#-example-domains)
-[![Writes](https://img.shields.io/badge/Writes-human--in--the--loop%20%2B%20exactly--once-d1242f)](#-safety-model)
-[![Spec Kit](https://img.shields.io/badge/Spec%20Kit-18%20specs-0969da)](specs/)
 
 * * *
 
@@ -85,7 +92,7 @@ is why the limits, the signed identity, the per-thread lock, crash reclaim and t
 
 The code is laid out as **ports and adapters**: the agent and its domains reach Postgres, Qdrant, Redis, the LLM gateway, the ML service, the web and the sandbox
 only through `Protocol`s in `app/ports/`, the adapters implement them, and `app/bootstrap.py` binds the two when a process starts. A test fails the build when an import
-crosses a ring the wrong way or an entrypoint forgets to wire. [ARCHITECTURE.md](ARCHITECTURE.md) has the rings, the port catalogue and how to add one (pattern 90), and [ARCHITECTURE_DIAGRAMS.md](ARCHITECTURE_DIAGRAMS.md) draws the whole system and its critical flows.
+crosses a ring the wrong way or an entrypoint forgets to wire. [ARCHITECTURE.md](docs/ARCHITECTURE.md) has the rings, the port catalogue and how to add one (pattern 90), and [ARCHITECTURE_DIAGRAMS.md](docs/ARCHITECTURE_DIAGRAMS.md) draws the whole system and its critical flows.
 
 ```mermaid
 flowchart TB
@@ -201,7 +208,7 @@ flowchart TB
 - 🚪 **Front door**: `services/authlimit/` ([details](#front-door-authlimit)) turns a Casdoor login into the signed identity the API trusts, for the chat routes and the upload alike, whoever the client is: the web UI, the CLI (it signs in with a browser) and Telegram (one person per Telegram user). The production Caddyfile and compose are not wired to it yet ([Deploying](#-deploying-to-production)); with `make serve` (`AUTH_MODE=headers`) the web UI calls the API directly.
 - 🟥 **Redis** is one Redis Stack used three ways: **Streams** (turn requests, one results stream per request, dead letters, ingest jobs and progress), a **RediSearch vector index** (the semantic cache, pattern 22) and **plain keys** (per-thread lock, cancel flags, submit-dedup claims, Telegram's poll offset, the front door's token buckets).
 - 📡 **OTLP edge** stands for every process that pushes metrics: the API and each worker replica (pattern 43).
-- 🔀 **Graph flow**, including the refusal and dead-end exits (`reject_*`, `context_window_exceeded`, `retry_exhausted`): [GRAPH_PATTERNS.md](GRAPH_PATTERNS.md#graph-flow).
+- 🔀 **Graph flow**, including the refusal and dead-end exits (`reject_*`, `context_window_exceeded`, `retry_exhausted`): [GRAPH_PATTERNS.md](docs/GRAPH_PATTERNS.md#graph-flow).
 
 * * *
 
@@ -213,11 +220,11 @@ The same code runs in both; only configuration and the compose file differ.
 |---|---|---|
 | **LLM** | Native Ollama on the host (`qwen2.5:7b`, `nomic-embed-text`) via `litellm-config.yaml` | Any OpenAI-compatible endpoint via `litellm-config.prod.yaml`: `LLM_API_BASE`, `LLM_API_KEY`, `LLM_CHAT_MODEL`, `LLM_EMBED_MODEL` |
 | **Services** | Full stack: Langfuse, MinIO, open-webui, crawl4ai, opt-in app/sandbox/quality profiles; the exporters are the collectors file | `api`, `agent-worker`, `ingest-worker`, Postgres, Redis, Qdrant, LiteLLM, `ml-service`, behind Caddy (TLS) |
-| **Postgres access** | The containers reach `appdata` and `checkpointer` through PgBouncer (`:6432`, transaction mode, at most 18 server connections per database however many replicas run); LiteLLM and Langfuse connect directly; a host process (`make serve`) uses `:5432` unless pointed at `:6432` ([`.env.example`](.env.example)) | The same service, no published port; Postgres's `max_connections` is written down and a test checks the pooler fits inside it ([WORKER_CONCURRENCY.md](WORKER_CONCURRENCY.md)) |
+| **Postgres access** | The containers reach `appdata` and `checkpointer` through PgBouncer (`:6432`, transaction mode, at most 18 server connections per database however many replicas run); LiteLLM and Langfuse connect directly; a host process (`make serve`) uses `:5432` unless pointed at `:6432` ([`.env.example`](.env.example)) | The same service, no published port; Postgres's `max_connections` is written down and a test checks the pooler fits inside it ([WORKER_CONCURRENCY.md](docs/WORKER_CONCURRENCY.md)) |
 | **Object storage** | MinIO | DigitalOcean Spaces (any S3-compatible store) |
 | **Observability** | Optional `make obs-up` (backends and collectors) | Separate droplet, fed by sidecars over the private VPC |
 | **Config** | `.env` from `.env.example` | `/opt/graph-agent-core/.env` from `deploy/env/prod.env.example`, created once by hand, never touched by CI |
-| **Cost caps** | Local models cost $0 | `MAX_COST_USD_PER_TURN=0.50`, `MAX_COST_USD_PER_TENANT_PER_DAY=20.0`; monthly and per-person limits off at `0` ([COST_GOVERNANCE.md](COST_GOVERNANCE.md)) |
+| **Cost caps** | Local models cost $0 | `MAX_COST_USD_PER_TURN=0.50`, `MAX_COST_USD_PER_TENANT_PER_DAY=20.0`; monthly and per-person limits off at `0` ([COST_GOVERNANCE.md](docs/COST_GOVERNANCE.md)) |
 | **Credits, payments** | Off | Off until `CREDITS_PER_USD` is set (a price is your decision); `BILLING_PROVIDERS` enables a signed webhook ([Credit billing](#credit-billing-optional)) |
 | **Provisioning** | `make up` | Terraform (human-run) + `deploy.yml` (automatic after CI passes on `main`) |
 
@@ -352,7 +359,7 @@ curl -s -N -X POST http://localhost:8000/chat/stream/queued \
 
 - 📜 **OpenAPI:** the running API serves it at `/openapi.json` (Swagger UI at `/docs`). Each HTTP service's document is also committed, beside its Dockerfile: [`openapi.json`](openapi.json) (this API), [`services/ml-service/openapi.json`](services/ml-service/openapi.json) and [`services/authlimit/openapi.json`](services/authlimit/openapi.json) (hand-written: authlimit's routing and body types are generated FROM it, `make authlimit-generate`). `make openapi` rewrites the first two from the code, and a test fails while a committed document is stale. They are also held to behaviour: every response the ML service's tests get, and every event the turn loop and the workers publish, must match its document (`tests/openapi_conformance.py`). The streaming routes document one event under `itemSchema`; the security scheme (a Bearer token for the front door) is held to the door's route table. CI's `openapi` job runs on every PR: `make openapi-breaking` fails a change that breaks a client of what main serves (a deliberate break is one line in [`.github/openapi-breaking-ignore.txt`](.github/openapi-breaking-ignore.txt) and still needs a new major version), and `make openapi-version` fails any change to the contract that left `info.version` where it was.
 - 🧪 **Bruno:** [`bruno/`](bruno/README.md) is every endpoint above as a [Bruno](https://www.usebruno.com) collection, with a `local` environment (this API alone) and a `door` one (behind the front door). A test keeps it in step with the routes.
-- 📡 **SSE events:** `token`, `tool_start`, `tool_end`, `citations` (just before `done`; only sources the answer cited), `approval_required`, `error`, `done`.
+- 📡 **SSE events:** `token`, `tool_start`, `tool_end`, `citations` and `followups` (just before `done`; only sources the answer cited), `approval_required`, `error`, `done`. Two are not terminal and a client must handle them: `retry` means discard everything streamed so far (the answer was rejected, replaced or restarted; fresh tokens follow), and `compacted` is informational (older history was summarised). A new message on a conversation whose earlier approval pause could not be resumed after an app update starts with a `system_note` saying so.
 - ✋ **Approvals:** `POST /chat/resume` approves or rejects an `approval_required` event; `POST /chat/cancel` stops the run.
 - 🧵 **Threads:** reuse a `thread_id` to continue a conversation (Langfuse groups traces by it). It belongs to whoever sends on it first (tenant + principal + domain); anyone else gets the same 404 an unknown id gets, so switching identity needs a new one. `telegram:<chat id>` ids are reserved. The check lives at the API; the worker doesn't repeat it (pattern 17).
 - 🔁 **Resubmits:** an identical `(thread_id, message, images)` within `CHAT_SUBMIT_DEDUP_TTL_SECONDS` (10) streams the first attempt's turn.
@@ -425,8 +432,8 @@ Three chat tiers, each a gateway alias (the app names aliases, never a provider'
 | 🟡 medium | `chat-medium` | qwen2.5:7b, a local stand-in (same as `chat`) | `LLM_MEDIUM_*`; unset = `chat` | the router's middle tier; a specialist's `AGENT.md` `model:` |
 | 🔴 strong | `chat-strong` | qwen2.5:14b, local (`make pull-strong-model`) | `LLM_STRONG_*`; unset = `chat` | the router's top tier |
 
-- 💲 **Every local alias states a price** in `model_info` ($0.10 / $0.20 per million input / output tokens for the 7B, $0.20 / $0.40 for the 14B). They're shadow prices: without one LiteLLM reports a local model as unpriced or a flat $0, and no gateway budget can ever trip on $0. Change them if you like, but keep them above 0 ([pattern 74](COST_GOVERNANCE.md)).
-- 🔧 **Strict tool schemas** (`TOOL_CALLS_STRICT`, **off**): leave off on Ollama, where the smallest model calls tools measurably worse with it; turn on only for a provider that enforces strict calling, with `make probe-tools` before and after (GRAPH_PATTERNS.md pattern 74).
+- 💲 **Every local alias states a price** in `model_info` ($0.10 / $0.20 per million input / output tokens for the 7B, $0.20 / $0.40 for the 14B). They're shadow prices: without one LiteLLM reports a local model as unpriced or a flat $0, and no gateway budget can ever trip on $0. Change them if you like, but keep them above 0 ([pattern 74](docs/COST_GOVERNANCE.md)).
+- 🔧 **Strict tool schemas** (`TOOL_CALLS_STRICT`, **off**): leave off on Ollama, where the smallest model calls tools measurably worse with it; turn on only for a provider that enforces strict calling, with `make probe-tools` before and after ([docs/RETRIEVAL_AND_MODEL_PATTERNS.md](docs/RETRIEVAL_AND_MODEL_PATTERNS.md) pattern 74).
 - ♊ **Attaching Gemini** to the medium or strong tier is configuration: the key in `.env` (`GEMINI_API_KEY_MEDIUM` / `GEMINI_API_KEY_STRONG`), the Gemini block commented under `chat-medium` in `deploy/litellm/litellm-config.yaml` (production: the `LLM_MEDIUM_*` / `LLM_STRONG_*` variables), a proxy restart, then `make probe-tools ARGS="--alias chat-medium"`. LiteLLM doesn't know an `openai/<gemini id>`, so state its price in `model_info`. **Not tried against a real key**, and Google doesn't document the streamed `usage` the app meters from, so send one streamed turn too.
 
 ### Routing a turn to a medium or strong model
@@ -434,7 +441,7 @@ Three chat tiers, each a gateway alias (the app names aliases, never a provider'
 Optional and **off by default** (`ROUTER_MODE=off`): no classifier is asked and every call is exactly what it was. It can only
 choose the model; approval, tenant scoping and idempotency are unchanged under every tier.
 
-- **How it decides.** The `route_model` node ([pattern 68](GRAPH_PATTERNS.md)) reads **rules** over the message (long, contains code, asks several things, reasoning words) and a **label** from the ML service (`POST /v1/decide`, the `route-topics` choice set in `services/ml-service/labelsets/route-topics.json`). Each names the lowest tier it accepts; the turn goes to `min(ROUTER_MAX_TIER, max(rules, label))`, lowered to a configured, priced tier, and is answered, priced and recorded as that alias.
+- **How it decides.** The `route_model` node ([pattern 68](docs/RETRIEVAL_AND_MODEL_PATTERNS.md)) reads **rules** over the message (long, contains code, asks several things, reasoning words) and a **label** from the ML service (`POST /v1/decide`, the `route-topics` choice set in `services/ml-service/labelsets/route-topics.json`). Each names the lowest tier it accepts; the turn goes to `min(ROUTER_MAX_TIER, max(rules, label))`, lowered to a configured, priced tier, and is answered, priced and recorded as that alias.
 - **Failure.** No label leaves the rules to decide; any other failure runs the turn on `chat`.
 - **Roll out in stages.** `shadow` makes and counts every decision but runs on `chat`, so you read what routing *would* have spent (`agent_model_route_tier_total{tier,mode="shadow"}`, `agent_model_route_total{outcome}`), then `on`:
 
@@ -568,7 +575,7 @@ Spec 021 (patterns 92 to 94). All of it is settings of the bot; `.env.example` h
 
 - 🔗 **MCP client** (`app/adapters/outbound/mcp/client.py::load_remote_tools`) binds an external server's tools into the graph. A remote tool not named in `capability_overrides` defaults to `outward`; the remote's own annotations are never trusted. What the remote says is input: a catalog can be pinned by a hash of what the model is shown (the sandbox bridge is: 5 of its 19 tools), and replies are scrubbed and cut to `MCP_TOOL_OUTPUT_MAX_CHARS` (head and tail kept). One long-lived connection per server (`app/adapters/outbound/mcp/connection.py`) replaces a process per call, and a call that may have reached the server is never sent twice (pattern 78).
 - 🕸️ **Web crawling:** [crawl4ai](https://github.com/unclecode/crawl4ai) renders JS-heavy pages (`app/adapters/outbound/crawl4ai/web_crawler.py`; needs the `crawl4ai` container and `CRAWL4AI_API_TOKEN`). Three `outward` tools use it: `enrich_lead_from_website` (sales), `fetch_external_reference` (support), `check_vendor_status_page` (ops).
-- 🔍 **Web search:** [serper.dev](https://serper.dev) finds the addresses those tools then read (`app/adapters/outbound/web/serper.py` the client, `app/domains/shared/web_search.py` the tool; optional, off without `SERPER_API_KEY`). `web_search` is `outward` in support, ops and sales: each call waits for a human to approve the query, which goes to Serper and Google and spends one credit. Ecorp has none. Results are third-party text, framed as data and never numbered like a citation. Not built: metering the spend against the agent's caps; only `organic` results are read (GRAPH_PATTERNS.md pattern 87). `make web-search-check` spends one credit to test the key; `WebSearchProviderRefusing` fires when the provider refuses it.
+- 🔍 **Web search:** [serper.dev](https://serper.dev) finds the addresses those tools then read (`app/adapters/outbound/web/serper.py` the client, `app/domains/shared/web_search.py` the tool; optional, off without `SERPER_API_KEY`). `web_search` is `outward` in support, ops and sales: each call waits for a human to approve the query, which goes to Serper and Google and spends one credit. Ecorp has none. Results are third-party text, framed as data and never numbered like a citation. Not built: metering the spend against the agent's caps; only `organic` results are read ([docs/TOOL_PATTERNS.md](docs/TOOL_PATTERNS.md) pattern 87). `make web-search-check` spends one credit to test the key; `WebSearchProviderRefusing` fires when the provider refuses it.
 - 📦 **Sandbox:** [OpenSandbox](https://github.com/opensandbox-group/OpenSandbox) over MCP gives every domain isolated code execution (`make sandbox-up`, needs `OPENSANDBOX_API_KEY`), per tenant and conversation. The model never sees its raw ~19-tool API: `app/domains/shared/sandbox_session.py` wraps it as four flat tools (`run_command_in_sandbox`, `run_python_in_sandbox`, `read_sandbox_file`, `write_sandbox_file`), because the raw catalog made a small model hallucinate sandbox ids (pattern 50).
 - ☣️ **Crawled text is untrusted.** `app/core/untrusted.py::frame_untrusted` wraps it in `<retrieved_document>` delimiters the system prompt calls data, not instructions, and a closing tag inside the page can't end the frame. Framing marks the boundary; the approval gate stops a model that follows it anyway (pattern 12).
 
@@ -609,7 +616,7 @@ requester + subject", since what counts as the same ticket is a product decision
 | 📟 **Ops** `app/domains/ops/` | Reads this repo's own Prometheus metrics, flags thresholds matching the alert rules, logs and resolves incidents, checks vendor status pages | `make ops-digest` (cron) · `python -m scripts.tools.ops_investigate "…"` |
 | 💼 **Sales** `app/domains/sales/` | Logs leads, drafts replies (never sends), schedules follow-ups, hands hot leads to a human, researches a lead's site, computes deal economics | `make telegram-sales` · `make followup-sweep` (cron) |
 
-Each is a module: `domain.py` + `tools.py` + `store.py` + `ports.py`, importing no other module (`ARCHITECTURE.md`). Its `AgentManifest.allowed_tools` is an exact list, and that omission, not a
+Each is a module: `domain.py` + `tools.py` + `store.py` + `ports.py`, importing no other module (`docs/ARCHITECTURE.md`). Its `AgentManifest.allowed_tools` is an exact list, and that omission, not a
 policy check, is what "sandboxed" means. Skills (`app/domains/<domain>/skills/*/SKILL.md`, or `shared/` for all) and subagents
 (`app/domains/<domain>/subagents/*/AGENT.md`) sit in their domain's folder, so each domain gets its own `skill_search`, `use_skill` and `run_subagent`.
 
@@ -637,7 +644,7 @@ Full runbook, scaling, backups, rollback and teardown: **[deploy/README.md](depl
 ### 🚨 Five things that bite on a first deploy
 
 - 🔓 **Production runs in identity mode behind the same front door as the dev stack** (`docker-compose.prod.yml`: Caddy on three real names, `authlimit`, Casdoor, the MCP gateway; [deploy/README.md](deploy/README.md)). A domain is required, and `AUTH_MODE=headers` is never set there. `AUTH_MODE=headers` trusts `X-Tenant-Id`/`X-Principal-Id` as sent: use it only for local runs, or behind a gateway of your own that sets both and discards client copies.
-- 📦 **The images ship no installer.** Built in stages with uv, the prod `api`, worker and `ml-service` containers run read-only with all capabilities dropped, so a change that writes to the image filesystem at runtime fails ([ENGINEERING_PATTERNS.md](ENGINEERING_PATTERNS.md) pattern 76).
+- 📦 **The images ship no installer.** Built in stages with uv, the prod `api`, worker and `ml-service` containers run read-only with all capabilities dropped, so a change that writes to the image filesystem at runtime fails ([ENGINEERING_PATTERNS.md](docs/ENGINEERING_PATTERNS.md) pattern 76).
 - 🗄️ **SQL migrations aren't applied to an existing volume.** `postgres-init/*.sql` runs only on a fresh volume and the deploy only syncs the files ([Database migrations](#database-migrations)).
 - 🕵️ **The production gateway does not store prompts or answers** (`store_prompts_in_spend_logs: false`; the development file turns it on so the admin UI's log page shows bodies). Its spend log keeps the metadata the caps read. Turning bodies on in production is a deliberate choice with a retention period ([deploy/README.md](deploy/README.md#everyday-operations)).
 - 📒 **Upgrading from a release whose spend caps read `usage_ledger`:** apply `postgres-init/19`, run `make usage-events-carry-over` (`ARGS=--dry-run` first), deploy, then run it once more. Skipping the first makes every cap read fail open; skipping the second makes a monthly cap forget the month so far ([runbook](deploy/README.md#upgrading-carry-the-ledgers-history-into-the-usage-events)).
@@ -657,14 +664,14 @@ LITELLM_MASTER_KEY=… LITELLM_APP_KEY=… make litellm-key ARGS=info           
 - **Every call is attributed** to the person (`end_user` = `tenant:<tenant>/user:<principal>`, plus a `tenant:<name>` tag), so a runaway bill can be traced. `make gateway-check` proves, against the pinned image, that none of it reaches the model backend.
 - **A default cap per person:** `make litellm-key ARGS="person-budget set --max-budget 20"` (`info` reads it back); fails open until the budget exists.
 - **A stop is reported:** `budget_exceeded` becomes `provider_budget_exceeded`, counts `agent_gateway_budget_exceeded_total`, pages `GatewayBudgetExceeded`, and is never retried.
-- ⚠️ **Gap:** no tenant-wide cap at the gateway (a tenant with many people can spend many times the per-person cap), and embeddings carry no end user. Verified against a real LiteLLM; the surprises are in [COST_GOVERNANCE.md](COST_GOVERNANCE.md) (patterns 26, 74).
+- ⚠️ **Gap:** no tenant-wide cap at the gateway (a tenant with many people can spend many times the per-person cap), and embeddings carry no end user. Verified against a real LiteLLM; the surprises are in [COST_GOVERNANCE.md](docs/COST_GOVERNANCE.md) (patterns 26, 74).
 
 ### Credit billing (optional)
 
 Off by default. Billing is its own package, [`packages/billing/`](packages/billing/README.md) (`credit_billing`): the prepaid
 wallet, signed payment webhooks (Stripe and Polar adapters, prepaid packs only), rating, debit and export of each model call,
 their reconciliation, and operator CLIs. It imports nothing from the app; the app hands it one plain value per model call and
-asks one question per turn ([BILLING_INTEGRATION.md](BILLING_INTEGRATION.md)).
+asks one question per turn ([BILLING_INTEGRATION.md](docs/BILLING_INTEGRATION.md)).
 
 - ⚙️ **Settings:** `CREDITS_PER_USD` turns it on; `CREDITS_ENFORCEMENT=true` refuses a tenant with no credits left (`insufficient_credits`); `BILLING_PROVIDERS` with `BILLING_WEBHOOK_SECRETS` accept a provider's webhooks (see `.env.example`).
 - 🗄️ **Schema:** `make billing-migrate` applies the package's four scripts to an existing volume (`make billing-migrate-status ARGS=--check` is the deploy gate). Run it **before** deploying a version that changes them.
@@ -706,7 +713,7 @@ hand, in order (`psql -U langfuse -d appdata -f postgres-init/NN-….sql`).
 - 📝 **Logs:** structlog JSON from every service, with `request_id`/`thread_id` on each line (pattern 14).
 - 📈 **Metrics:** 70+ OpenTelemetry counters and histograms (`app/core/metrics.py`), **pushed** over OTLP by the API and every worker replica to one otel-collector (pattern 11).
 - 🔭 **Traces:** Langfuse, grouped by `thread_id`.
-- 💵 **Cost:** one usage event per model call (tenant- and principal-scoped, with the concrete model behind each alias) is what the dollar caps sum ([COST_GOVERNANCE.md](COST_GOVERNANCE.md), patterns 38, 51).
+- 💵 **Cost:** one usage event per model call (tenant- and principal-scoped, with the concrete model behind each alias) is what the dollar caps sum ([COST_GOVERNANCE.md](docs/COST_GOVERNANCE.md), patterns 38, 51).
 
 `make obs-up` starts the backends, [`docker-compose.observability.yml`](deploy/compose/docker-compose.observability.yml), and the collectors that
 feed them, [`docker-compose.collectors.yml`](deploy/compose/docker-compose.collectors.yml) (the OTel collector, the exporters, cAdvisor, Promtail;
@@ -745,7 +752,7 @@ The quickstart's `requirements.txt` is the app alone. `make test`, `make lint` a
 Also manual: `make test-sandbox` (a real `opensandbox-mcp` round trip), `make test-provider-sandbox` (a payment provider's real
 sandbox; Polar rate-limits it, so never loop it; see the billing [README](packages/billing/README.md#tests)),
 `make authlimit-smoke` and `make authlimit-web-check`. **Run after a change:** `make eval` + `make promptfoo` for any prompt,
-model-alias or retrieval change; `make probe-tools` for any chat alias's model or `repeat_penalty` (GRAPH_PATTERNS.md pattern 73).
+model-alias or retrieval change; `make probe-tools` for any chat alias's model or `repeat_penalty` ([docs/RETRIEVAL_AND_MODEL_PATTERNS.md](docs/RETRIEVAL_AND_MODEL_PATTERNS.md) pattern 73).
 
 - 🟡 **Advisory live tests.** Two browser tests need the 3B model to chain several tool calls (a skill, a subagent). They're marked `advisory` and run in a non-blocking CI step, so a model that stops halfway shows in that log instead of failing the job. A failed browser test prints the page transcript (pattern 48).
 - 🎲 **deepeval never gates on a score.** Every case is `flaky=True`, so the job goes red only on a crash; LLM judges disagree with themselves, so read the printed reasons. The judges are hosted (Gemini, Groq) with a failover chain (see `.env.example`); the target stays local. Small local models make poor judges and targets, which is why the red-team grader is hosted and `garak` is report-only (pattern 48).
@@ -881,7 +888,7 @@ make/                     host.mk, admin.mk, evals.mk, security.mk, test.mk: tar
 
 ## 🚧 Roadmap and known gaps
 
-**❌ Not built** (the reasoning is in [GRAPH_PATTERNS.md](GRAPH_PATTERNS.md#extending-further)):
+**❌ Not built** (the reasoning is in [GRAPH_PATTERNS.md](docs/GRAPH_PATTERNS.md#extending-further)):
 
 - **Restarting a HUNG worker, and autoscaling.** Compose restarts a worker that exits (`restart: unless-stopped`), and one that hangs goes `unhealthy` with `AgentWorkerLoopStalled` firing, but Compose does not restart an unhealthy container (an orchestrator or an autoheal sidecar does: [deploy/README.md](deploy/README.md)). Nothing scales workers on queue depth; the depth and the wait are measured and alerted (`AgentQueueBacklog`, `AgentQueueWaitHigh`).
 - **Per-action authorization within a tenant.** Every principal in a tenant has the same write capability.
@@ -889,7 +896,7 @@ make/                     host.mk, admin.mk, evals.mk, security.mk, test.mk: tar
 - **A fallback node** for the primary LLM path.
 - **Credit billing beyond the gate.** A checkout route in the API, PayPal and a comparison with a provider's own balance; the package's own list is [ROADMAP.md](packages/billing/docs/ROADMAP.md).
 
-**⚠️ Known gaps** from reviewing the as-built system against the constitution (the full list is in GRAPH_PATTERNS.md). None
+**⚠️ Known gaps** from reviewing the as-built system against the constitution (the full list is in docs/GRAPH_PATTERNS.md). None
 lets a write run without a human decision, but the first means that run WITHOUT the front door, the human deciding can be
 anyone who sets the right headers.
 
@@ -897,7 +904,7 @@ anyone who sets the right headers.
 - **Approvals aren't attributed.** The gate is enforced but not auditable.
 - **The ops domain is global** (no control over which tenants may use it) and **the dedup lookup is not tenant-scoped**.
 - **A residual duplicate window for team-channel notifications** (support escalation, sales handoff, ops post).
-- **Monthly spend caps are linear in a month's model calls** (about 0.4 s at 2,000,000 events; off by default; the lever, a per-day rollup, isn't built; pattern 58 in [COST_GOVERNANCE.md](COST_GOVERNANCE.md)).
+- **Monthly spend caps are linear in a month's model calls** (about 0.4 s at 2,000,000 events; off by default; the lever, a per-day rollup, isn't built; pattern 58 in [COST_GOVERNANCE.md](docs/COST_GOVERNANCE.md)).
 - **Nothing alerts that the ledger carry-over was skipped, and nothing schedules `make usage-events-sweep` or `make checkpoint-sweep`** (`--dry-run` printing `Would carry 0` is the check; wire the sweep to cron once your retention policy is decided).
 - **A pre-existing vector collection is trusted, not verified** (adopted with a warning until its first `make reembed`), and a re-embed doesn't support writes while it runs (it detects them and stops).
 - **Embedding spend isn't metered.** Chat calls are recorded per call and counted by the caps; embeddings are not, nor attributed at the gateway.
@@ -916,7 +923,7 @@ anyone who sets the right headers.
 | Turns are slow | `qwen2.5:7b` runs at about 40 tokens/s on an M4 Pro (a cold load adds about 3 s). A smaller model is faster but silently drops tool calls (`make probe-tools` shows how many), so measure before swapping; a bigger one goes in `litellm-config.yaml`. A cold model can exceed `REQUEST_TIMEOUT_SECONDS` (60 s, `app/agent/runtime/core.py`) on the first call: retry |
 | No Grafana data, or a Prometheus target is down | `make obs-up` and `make up` are independent; both must run. Check http://localhost:9090/targets; a target that predates a LiteLLM config change needs `docker compose up -d litellm` |
 | Readiness returns 503 | The body names the failing dependency, e.g. `ml-service` still downloading its models on first start; `postgres` or `checkpointer` means the pooler or Postgres behind it (`docker compose logs pgbouncer`) |
-| Turns fail with `prepared statement "_pg3_N" does not exist`, or clients wait for a database connection | A connection that prepares statements is going through PgBouncer: every pool must pass `prepare_threshold=None` (`tests/core/test_pool_settings.py` finds the one that does not). Waiting clients: alert `PgBouncerClientsWaiting`, look for an `idle in transaction` session before raising `DEFAULT_POOL_SIZE` ([ENGINEERING_PATTERNS.md](ENGINEERING_PATTERNS.md) 95) |
+| Turns fail with `prepared statement "_pg3_N" does not exist`, or clients wait for a database connection | A connection that prepares statements is going through PgBouncer: every pool must pass `prepare_threshold=None` (`tests/core/test_pool_settings.py` finds the one that does not). Waiting clients: alert `PgBouncerClientsWaiting`, look for an `idle in transaction` session before raising `DEFAULT_POOL_SIZE` ([ENGINEERING_PATTERNS.md](docs/ENGINEERING_PATTERNS.md) 95) |
 | The Pyroscope UI is empty | Pushes before the server reports ready (`curl :4040/ready`) are dropped without a trace; check `agent_profiling_start_failures_total` and that `PYROSCOPE_SERVER_ADDRESS` is set in the container |
 | A prod dashboard is empty | Check the app droplet's relay: `dc logs otel-collector-agent promtail` (the `dc` alias is defined there; [deploy/README.md](deploy/README.md)) |
 
@@ -926,12 +933,14 @@ anyone who sets the right headers.
 
 | Document | What is in it |
 |---|---|
-| [ARCHITECTURE_DIAGRAMS.md](ARCHITECTURE_DIAGRAMS.md) · [ARCHITECTURE.md](ARCHITECTURE.md) | The big picture as Mermaid diagrams (topology, layers, the graph, a sequence per critical flow) · the layering rules and the tests that enforce them |
-| [GRAPH_PATTERNS.md](GRAPH_PATTERNS.md) | The graph's numbered design patterns, each with the bug that motivated it, and the honest list of what isn't built |
-| [COST_GOVERNANCE.md](COST_GOVERNANCE.md) · [ENGINEERING_PATTERNS.md](ENGINEERING_PATTERNS.md) | The spend meter and caps · repository-level lessons |
-| [WORKER_CONCURRENCY.md](WORKER_CONCURRENCY.md) | Sizing the worker pools |
-| [BILLING_INTEGRATION.md](BILLING_INTEGRATION.md) · [`packages/billing/`](packages/billing/README.md) | The app's side of the billing seam · the package: patterns, runbook, roadmap, specs |
+| [`docs/`](docs/README.md) | The index of the design and reference documents below, and how their pattern numbers work |
+| [ARCHITECTURE_DIAGRAMS.md](docs/ARCHITECTURE_DIAGRAMS.md) · [ARCHITECTURE.md](docs/ARCHITECTURE.md) | The big picture as Mermaid diagrams (topology, layers, the graph, a sequence per critical flow) · the layering rules and the tests that enforce them |
+| [GRAPH_PATTERNS.md](docs/GRAPH_PATTERNS.md) | The graph's design patterns, each with the bug that motivated it, and the honest list of what isn't built |
+| [RUNTIME](docs/RUNTIME_PATTERNS.md) · [ACCESS](docs/ACCESS_PATTERNS.md) · [CHANNEL](docs/CHANNEL_PATTERNS.md) · [TOOL](docs/TOOL_PATTERNS.md) · [RETRIEVAL_AND_MODEL](docs/RETRIEVAL_AND_MODEL_PATTERNS.md) `_PATTERNS.md` | The queue and workers · the front door and identity · the CLI and Telegram · tools, MCP, sandbox, web search · retrieval, embeddings and model routing |
+| [COST_GOVERNANCE.md](docs/COST_GOVERNANCE.md) · [ENGINEERING_PATTERNS.md](docs/ENGINEERING_PATTERNS.md) | The spend meter and caps · repository-level lessons |
+| [WORKER_CONCURRENCY.md](docs/WORKER_CONCURRENCY.md) | Sizing the worker pools |
+| [BILLING_INTEGRATION.md](docs/BILLING_INTEGRATION.md) · [`packages/billing/`](packages/billing/README.md) | The app's side of the billing seam · the package: patterns, runbook, roadmap, specs |
 | [`specs/`](specs/) · [Constitution](.specify/memory/constitution.md) | Spec Kit specs 001–022 · the non-negotiable rules (tenant isolation, mandatory approval and exactly-once side effects are principles I, II and IV) |
 | [deploy/README.md](deploy/README.md) · [evals/README.md](evals/README.md) | Deploy runbook: scaling, backups, rollback, teardown · judging a model swap |
 | [CLAUDE.md](CLAUDE.md) | Working rules for contributors and coding agents |
-| [PRODUCTION_REVIEW.md](PRODUCTION_REVIEW.md) | The 2026-11-13 review of the whole system, written as work orders (R01 to R35): what to fix, where, how to test it, and what was left alone on purpose |
+| [PRODUCTION_REVIEW.md](docs/PRODUCTION_REVIEW.md) | The 2026-11-13 review of the whole system, written as work orders (R01 to R35; most are done, R12, R19 and R34 are open): what to fix, where, how to test it, and what was left alone on purpose |

@@ -2,7 +2,7 @@
 
 Maps of the whole system for someone who has not read the code yet: what runs where, how the code is layered, what one turn of the agent does, and the flows where a mistake would leak data, spend money or write twice.
 
-A diagram is a map, not the contract. The text under each one names the code that is the contract, and the other docs hold the reasoning: [ARCHITECTURE.md](ARCHITECTURE.md) (the layering and the tests that enforce it), [GRAPH_PATTERNS.md](GRAPH_PATTERNS.md) (the graph; each pattern has the bug behind it), [COST_GOVERNANCE.md](COST_GOVERNANCE.md) and the [constitution](.specify/memory/constitution.md). Checked against the code on 2026-11-10. When a diagram and the code disagree, the code is right, and a change that alters a flow fixes its diagram.
+A diagram is a map, not the contract. The text under each one names the code that is the contract, and the other docs hold the reasoning: [ARCHITECTURE.md](ARCHITECTURE.md) (the layering and the tests that enforce it), [GRAPH_PATTERNS.md](GRAPH_PATTERNS.md) (the graph; each pattern has the bug behind it), [COST_GOVERNANCE.md](COST_GOVERNANCE.md) and the [constitution](../.specify/memory/constitution.md). Last re-checked on 2026-11-22: every file and function named here resolves (`tests/core/test_doc_references.py`), the graph's nodes are the ones `build.py` registers, and every diagram renders. When a diagram and the code disagree, the code is right, and a change that alters a flow fixes its diagram.
 
 | You want to know | Read |
 |---|---|
@@ -78,8 +78,8 @@ flowchart LR
 ```
 
 - The API and the workers share no memory, only Redis and Postgres, so the tier that holds SSE connections and the tier that runs turns scale on their own (pattern 43).
-- The production compose file ships the same front door as the dev stack (pattern 98): Caddy on three real names, `authlimit`, Casdoor and its own Postgres, the MCP gateway, and the Telegram bot as an opt-in service, in front of `api`, `agent-worker`, `ingest-worker`, PgBouncer, Postgres, Redis, Qdrant, LiteLLM and `ml-service`. Langfuse, MinIO, crawl4ai and OpenSandbox are in the dev stack only. Both stacks' Caddyfiles import one routing file, `deploy/caddy/gateway.caddy` ([deploy/README.md](deploy/README.md)).
-- The README's [architecture diagram](README.md#-architecture) draws the same system at node level, including the upload pipeline.
+- The production compose file ships the same front door as the dev stack (pattern 98): Caddy on three real names, `authlimit`, Casdoor and its own Postgres, the MCP gateway, and the Telegram bot as an opt-in service, in front of `api`, `agent-worker`, `ingest-worker`, PgBouncer, Postgres, Redis, Qdrant, LiteLLM and `ml-service`. Langfuse, MinIO, crawl4ai and OpenSandbox are in the dev stack only. Both stacks' Caddyfiles import one routing file, `deploy/caddy/gateway.caddy` ([deploy/README.md](../deploy/README.md)).
+- The README's [architecture diagram](../README.md#-architecture) draws the same system at node level, including the upload pipeline.
 
 ### 2. The rings: ports and adapters
 
@@ -256,6 +256,7 @@ flowchart TD
 - **`graph_edge_route_after_agent` checks the budgets first**, whatever the model said: iterations, tokens, dollars and repeated identical calls all end in `no_answer` (patterns 10, 34, 35). Anything not `read_only` goes to `human_approval` and no flag skips it (patterns 8, 15).
 - **`check_output` is a registry of checks** (leaked prompt, too short, fabricated, uncited, a skipped required tool, ...), and `retry_output` loops back to `agent` with a corrective message tagged as a retry artifact so it is never mistaken for the person's words (pattern 5).
 - **The two finish steps run in parallel**, and the cache write is skipped when the turn called a non-read-only tool (pattern 22).
+- **`retrieve_context` is optional per domain:** a manifest with `prefetch="never"` leaves it out of that domain's graph (none does today), and the model then sees no pre-fetched documents or memories (pattern 20).
 - A nested `run_subagent` run builds the same graph with `SUBAGENT_PROFILE`: no cache pair, follow-ups, compaction or router. `GraphProfile` is in `app/agent/graph/build.py`.
 - The full routing detail, with every dead end, is in [GRAPH_PATTERNS.md](GRAPH_PATTERNS.md#graph-flow).
 
@@ -280,7 +281,7 @@ A turn keeps nothing in process memory, which is why any worker can take any job
 
 ### 6. Where the non-negotiable rules are enforced
 
-Three principles in the [constitution](.specify/memory/constitution.md) cannot be waived: I tenant isolation, II mandatory approval, IV exactly-once. Each is held by several independent layers, each closing a failure the one before it cannot see.
+Three principles in the [constitution](../.specify/memory/constitution.md) cannot be waived: I tenant isolation, II mandatory approval, IV exactly-once. Each is held by several independent layers, each closing a failure the one before it cannot see.
 
 | Principle | The layers, outermost first |
 |---|---|
@@ -338,9 +339,9 @@ flowchart LR
     loki --> graf
 ```
 
-- **The same code runs in dev and prod**; only configuration and the compose file differ ([README](README.md#-environments)).
-- **Schema changes are not applied by the deploy.** `postgres-init/*.sql` runs on a fresh volume only; the billing scripts have their own `make billing-migrate`, which runs before the code that needs them ([README](README.md#database-migrations)).
-- **A graph change needs the workers drained first**: a renamed router or node can hide a mid-flight turn's pending node (pattern 16). The runbook is [deploy/README.md](deploy/README.md).
+- **The same code runs in dev and prod**; only configuration and the compose file differ ([README](../README.md#-environments)).
+- **Schema changes are not applied by the deploy.** `postgres-init/*.sql` runs on a fresh volume only; the billing scripts have their own `make billing-migrate`, which runs before the code that needs them ([README](../README.md#database-migrations)).
+- **A graph change needs the workers drained first**: a renamed router or node can hide a mid-flight turn's pending node (pattern 16). The runbook is [deploy/README.md](../deploy/README.md).
 
 ## Part 2: Flows
 
@@ -768,12 +769,12 @@ sequenceDiagram
         W->>E: embed_documents (dense), sparse vectors for the whole document
         W->>R: progress: chunks embedded of total
     end
-    W->>Q: upsert points tagged tenant, kind document, topic, ingest id and the time the job was queued; ids derived from content and the job id
-    W->>Q: then delete the same source's chunks from OLDER ingests of that tenant (best effort, counted when it fails)
+    W->>Q: upsert points tagged tenant, kind, topic, ingest id and queued-at (ids come from content and job id)
+    W->>Q: then delete that source's chunks from OLDER ingests of the tenant (best effort, counted on failure)
     W->>R: done with the chunk count, then XACK and XDEL
     R-->>A: progress events
     A-->>C: SSE progress, then done
-    Note over W,Q: ids come from content and the job id, so a re-run of the SAME job is an overwrite (a crashed job is safely retried) and two uploads of one name never share an id.<br/>A newer upload's chunks are never removed by an older one, so overlapping uploads cannot leave no document; an older job that finishes last leaves its chunks until the next upload
+    Note over W,Q: Ids come from content and job id, so a re-run of the SAME job overwrites (a crashed job retries safely)<br/>and two uploads of one name never share an id.<br/>An older upload never removes a newer one's chunks, so overlapping uploads cannot leave no document.<br/>If the older job finishes last, its chunks stay until the next upload
 ```
 
 - The ingest queue and the turn queue are separate streams and consumer groups, so a burst of uploads cannot starve chat.
@@ -855,7 +856,7 @@ sequenceDiagram
 | Every graph pattern, each with the bug that motivated it, and what is not built | [GRAPH_PATTERNS.md](GRAPH_PATTERNS.md) |
 | Spend, caps and the gateway backstop | [COST_GOVERNANCE.md](COST_GOVERNANCE.md) |
 | Sizing the worker pools and the connection budget | [WORKER_CONCURRENCY.md](WORKER_CONCURRENCY.md) |
-| The edge service: failure policy, route classes, key rotation | [services/authlimit/README.md](services/authlimit/README.md) |
+| The edge service: failure policy, route classes, key rotation | [services/authlimit/README.md](../services/authlimit/README.md) |
 | The billing package and its seam | [BILLING_INTEGRATION.md](BILLING_INTEGRATION.md) |
-| Running, deploying and operating it | [README.md](README.md), [deploy/README.md](deploy/README.md) |
-| The rules a change must keep | [constitution](.specify/memory/constitution.md), [CLAUDE.md](CLAUDE.md) |
+| Running, deploying and operating it | [README.md](../README.md), [deploy/README.md](../deploy/README.md) |
+| The rules a change must keep | [constitution](../.specify/memory/constitution.md), [CLAUDE.md](../CLAUDE.md) |
