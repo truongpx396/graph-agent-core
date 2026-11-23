@@ -146,6 +146,7 @@ jobs:
           rsync -azR -e "ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts" \
             deploy/prod/docker-compose.yml deploy/prod/infra.yml deploy/prod/app.yml \
             deploy/prod/gateway.yml deploy/prod/collectors.yml \
+            deploy/prod/tools.yml deploy/prod/compose.sh deploy/prod/crawler-firewall.sh \
             deploy/prod/caddy/Caddyfile deploy/shared/caddy/gateway.caddy \
             deploy/prod/litellm-config.yaml \
             deploy@${{ secrets.DROPLET_HOST }}:/opt/graph-agent-core/
@@ -167,10 +168,12 @@ jobs:
           ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts \
             deploy@${{ secrets.DROPLET_HOST }} \
             "cd /opt/graph-agent-core && \
-             IMAGE_TAG=$IMAGE_TAG docker compose --project-directory . -f deploy/prod/docker-compose.yml pull && \
-             IMAGE_TAG=$IMAGE_TAG docker compose --project-directory . -f deploy/prod/docker-compose.yml up -d --remove-orphans && \
+             IMAGE_TAG=$IMAGE_TAG deploy/prod/compose.sh pull && \
+             IMAGE_TAG=$IMAGE_TAG deploy/prod/compose.sh up -d --remove-orphans && \
              rm -f docker-compose.prod.yml Caddyfile litellm-config.prod.yaml && \
              docker image prune -f"
+          # compose.sh is `docker compose --project-directory . -f deploy/prod/docker-compose.yml` exactly, plus deploy/prod/tools.yml when the droplet's .env says
+          # CRAWLER_ENABLED=true (and a refusal to start while the crawler's firewall is missing): without the overlay, `--remove-orphans` would remove the crawler.
           # The rm above is a one-time migration, safe to drop once both
           # droplets have deployed from this layout: before deploy/ existed
           # these three files were rsynced flat into /opt/graph-agent-core/.

@@ -1,8 +1,8 @@
 name: Terraform validate
 
 # Structural correctness only (fmt + validate) — deliberately NOT `terraform
-# plan`: deploy/terraform's backend defaults to local state (see
-# deploy/terraform/versions.tf's own comment), which this runner has no
+# plan`: deploy/terraform's roots (prod/ and dev/) default to local state (see
+# prod/versions.tf's own comment), which this runner has no
 # access to, so a `plan` here would show "create everything from scratch"
 # rather than a real diff against the actual droplet. IaC misconfiguration
 # scanning for this same directory lives in .github/workflows/ci.yml's
@@ -29,5 +29,11 @@ jobs:
           terraform_version: "1.9.8"
 
       - run: terraform fmt -check -diff -recursive
-      - run: terraform init -backend=false
-      - run: terraform validate
+      # One job, not a matrix: a matrix would rename this check to `validate (prod)`, and a branch-protection rule waiting on `validate` would wait forever.
+      - name: Validate each root (prod is two droplets, dev is one)
+        run: |
+          for root in prod dev; do
+            echo "::group::terraform validate: $root"
+            (cd "$root" && terraform init -backend=false && terraform validate)
+            echo "::endgroup::"
+          done

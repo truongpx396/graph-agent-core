@@ -144,7 +144,7 @@ pick silently. If the owner has not answered, implement the recommended default 
 | R17 | No queue depth, queue wait or first-token metric; no traces in production | P1 | M, then L | read from code | | done (part 1; part 2, traces, needs a spec) |
 | R18 | A re-uploaded document leaves its old chunks; no way to delete a document | P1 | M | read from code | R09 | done (with a version order instead of "another ingest id", see pattern 24; no list route) |
 | R19 | The dependency ladder: Langfuse 2, LangChain 0.3, LangGraph 0.2 | P1 | L | from the field | R17 | open |
-| R20 | Web fetches: rebinding window, whole body read before the size check, crawler egress | P1 | M | read from code | | done (fetcher; the crawler's host firewall rule is documented, not run) |
+| R20 | Web fetches: rebinding window, whole body read before the size check, crawler egress | P1 | M | read from code | | done (fetcher; the crawler is an opt-in overlay with a host-firewall script, tested on a real Docker daemon; not run on a droplet) |
 | R21 | Five statements that are no longer true | P1 | S | read from code | | done (four corrected; the `scope_filter` docstring became true when R09 added its integration test) |
 | R22 | A hung worker is never restarted | P2 | S | read from code | | done |
 | R23 | The answer cache ignores the domain; its expiry is set in a second call | P2 | S | read from code | | done |
@@ -980,6 +980,11 @@ the second is new.
 3. For the crawler, isolation belongs to the network, not the application: its own Docker network with no route to
    the internal services and the cloud metadata address blocked. Write it into the development compose file and into
    `deploy/README.md` as a precondition for ever enabling the crawler in production.
+
+   *Done as:* `deploy/prod/tools.yml` (an opt-in overlay: its own pinned subnet, no published port, a required token),
+   `deploy/prod/crawler-firewall.sh` (the host rules; `status` and `check`, which read packet counters; a systemd unit that
+   re-applies them after Docker) and `deploy/prod/compose.sh` (adds the overlay to every command when `.env` says
+   `CRAWLER_ENABLED=true`, and refuses to start anything while the firewall is missing). Not run on a DigitalOcean droplet.
 
 **Also worth a spec, not part of this work order:** screening *ingested* documents and web results with the
 injection classifier the ML service already runs for user input, counted first and not blocking. Today only the

@@ -1,0 +1,20 @@
+# An overlay on the dev project (`make droplet-up` adds it through COMPOSE_OVERLAYS): LiteLLM on a hosted OpenAI-compatible endpoint instead of the host's native Ollama,
+# which a droplet does not have. It runs deploy/prod/litellm-config.yaml, so the aliases are production's (`chat`, `chat-medium`, `chat-strong`, `embed`) and the LLM_* variables
+# are production's too (deploy/dev/droplet.env.example). The container keeps the dev stack's own master key and database; nothing else in the stack changes.
+services:
+  litellm:
+    volumes:
+      # The same target as the dev mount, so this REPLACES it: compose merges `volumes` by target path (tests/core/test_compose_layout.py holds the two targets equal).
+      - ./deploy/prod/litellm-config.yaml:/app/config.yaml:ro
+    environment:
+      LLM_API_BASE: ${LLM_API_BASE:?set LLM_API_BASE in the droplet's .env (deploy/dev/droplet.env.example)}
+      LLM_API_KEY: ${LLM_API_KEY:?set LLM_API_KEY in the droplet's .env}
+      LLM_CHAT_MODEL: ${LLM_CHAT_MODEL:?set LLM_CHAT_MODEL in the droplet's .env}
+      # The optional tiers: unset = the chat model, so the proxy always starts (as in production).
+      LLM_MEDIUM_CHAT_MODEL: ${LLM_MEDIUM_CHAT_MODEL:-${LLM_CHAT_MODEL}}
+      LLM_MEDIUM_API_BASE: ${LLM_MEDIUM_API_BASE:-${LLM_API_BASE}}
+      LLM_MEDIUM_API_KEY: ${LLM_MEDIUM_API_KEY:-${LLM_API_KEY}}
+      LLM_STRONG_CHAT_MODEL: ${LLM_STRONG_CHAT_MODEL:-${LLM_CHAT_MODEL}}
+      LLM_STRONG_API_BASE: ${LLM_STRONG_API_BASE:-${LLM_API_BASE}}
+      LLM_STRONG_API_KEY: ${LLM_STRONG_API_KEY:-${LLM_API_KEY}}
+      LLM_EMBED_MODEL: ${LLM_EMBED_MODEL:?set LLM_EMBED_MODEL in the droplet's .env}

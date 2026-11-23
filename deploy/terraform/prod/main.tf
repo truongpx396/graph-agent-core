@@ -28,13 +28,16 @@ resource "digitalocean_droplet" "app" {
   monitoring = true
   backups    = var.enable_backups
 
-  user_data = templatefile("${path.module}/cloud-init.tpl.yaml", {
+  user_data = templatefile("${path.module}/../cloud-init.tpl.yaml", {
     deploy_user           = var.deploy_user
     deploy_ssh_public_key = var.deploy_ssh_public_key
     # No 8000 here — `api` no longer publishes a fixed host port (see
     # digitalocean_firewall.app's own comment on why).
     ufw_tcp_ports = [80, 443]
     app_dir       = "/opt/graph-agent-core"
+    # Packages beyond the template's own (the dev droplet adds make and rsync). Empty renders exactly what the template always did: a changed user_data
+    # replaces the droplet, so this stays [] here.
+    extra_packages = []
   })
 
   # cloud-init (user_data) only runs on FIRST boot — editing it later and
@@ -69,14 +72,15 @@ resource "digitalocean_droplet" "observability" {
   monitoring = true
   backups    = false # metrics/logs only, bounded retention already (Loki 7d, Prometheus 15d) — not worth a whole-image backup
 
-  user_data = templatefile("${path.module}/cloud-init.tpl.yaml", {
+  user_data = templatefile("${path.module}/../cloud-init.tpl.yaml", {
     deploy_user           = var.deploy_user
     deploy_ssh_public_key = var.deploy_ssh_public_key
     # 4040 is Pyroscope's push endpoint (specs/022). cloud-init runs on first boot only (see the app droplet's note above), so on a droplet that
     # already exists open it by hand instead (deploy/README.md) and read `terraform plan` before applying: nobody has planned this change
     # against real state, and an edited user_data may be shown as drift or as a replacement.
-    ufw_tcp_ports = [80, 443, 3000, 4318, 3100, 4040]
-    app_dir       = "/opt/agent-core-observability"
+    ufw_tcp_ports  = [80, 443, 3000, 4318, 3100, 4040]
+    app_dir        = "/opt/agent-core-observability"
+    extra_packages = [] # as the app droplet's: [] keeps user_data unchanged
   })
 
   lifecycle {

@@ -7,14 +7,15 @@
 #   gateway.yml     the front door: Caddy, authlimit, Casdoor (as dev's; the routing is deploy/shared/caddy/gateway.caddy)
 #   collectors.yml  the exporters and agents that feed the observability droplet
 #
-# Not here, on purpose: tools.yml (the crawler must not run as it is, since a page can steer its browser to an internal address: PRODUCTION_REVIEW.md R20, deploy/README.md "The
-# crawler's network"; the sandbox server mounts the Docker socket, so those tools stay absent) and the Grafana/Prometheus/Loki stack, which runs on a separate droplet (observability.yml
-# here) so a metrics spike cannot compete with the app. Unlike dev, the Telegram bot is a container here (profile `telegram`).
+# Not here, on purpose: the Grafana/Prometheus/Loki stack, which runs on a separate droplet (observability.yml here) so a metrics spike cannot compete with the app; the OpenSandbox
+# server, which mounts the Docker socket; and the crawler, which is an opt-in OVERLAY (tools.yml, added by compose.sh when .env says CRAWLER_ENABLED=true, and only behind the host firewall
+# crawler-firewall.sh: a page can steer its browser to an internal address, PRODUCTION_REVIEW.md R20, deploy/README.md "The crawler's network"). Run compose through compose.sh.
+# The Telegram bot is a container here and in dev (profile `telegram`).
 #
 # A domain is REQUIRED: identity needs an https issuer (pattern 98; specs/018 T069).
 #
 # .github/workflows/deploy.yml builds the app and ml-service images to GHCR, rsyncs these files with deploy/prod/caddy/, deploy/shared/caddy/, litellm-config.yaml, postgres-init/ and
-# observability/ to /opt/graph-agent-core, and runs `docker compose --project-directory . -f deploy/prod/docker-compose.yml pull && up -d`. Services use `image:`, never `build:`, so the
+# observability/ to /opt/graph-agent-core, and runs `deploy/prod/compose.sh pull && up -d` (compose.sh is `docker compose --project-directory . -f deploy/prod/docker-compose.yml`, plus the crawler overlay if enabled). Services use `image:`, never `build:`, so the
 # droplet never compiles onnxruntime's dependency chain. The droplet's .env is made once by hand (deploy/prod/prod.env.example); CI never touches it.
 #
 # Every path in these files, the `include` paths too, is relative to the repo root: run compose with `--project-directory .` (deploy/dev/docker-compose.yml says why).

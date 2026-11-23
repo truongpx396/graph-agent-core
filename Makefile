@@ -3,6 +3,7 @@
 #   data.mk      models and the vector store
 #   host.mk      the app as host processes: API, workers, channels
 #   gateway.mk   the front door (Casdoor, authlimit, Caddy) and its checks
+#   droplet.mk   the dev stack on one DigitalOcean droplet
 #   test.mk      tests, static checks, load tests, smoke checks
 #   evals.mk     model and prompt evaluation, red team
 #   security.mk  scanners, SonarQube, DefectDojo
@@ -16,7 +17,9 @@ export PYTHONPATH := $(CURDIR)/packages/billing/src:$(CURDIR)/services/ml-servic
 # The compose files are in deploy/dev/ (docker-compose.yml `include`s the parts), but every path in them, the `include`s too, is relative to the repo root, and `.env` is read
 # from there. `--project-directory .` pins that: without it the first `include` fails ("no such file"), where the old single file took the project name `compose` and
 # orphaned the volumes. It also lets deploy.yml mirror this layout. Consequence: a bare `docker compose up` finds no file.
-COMPOSE     := docker compose --project-directory . -f deploy/dev/docker-compose.yml
+# COMPOSE_OVERLAYS adds -f files to the dev project: `make droplet-up` passes deploy/dev/hosted-llm.yml, the hosted LLM a droplet needs.
+COMPOSE_OVERLAYS ?=
+COMPOSE     := docker compose --project-directory . -f deploy/dev/docker-compose.yml $(COMPOSE_OVERLAYS)
 COMPOSE_OBS := docker compose --project-directory . -f deploy/dev/observability.yml
 # collectors.yml is an overlay on the app's project (the exporters need its network), not a project of its own. COLLECTORS names its services, so `up --no-deps` and
 # the remove command touch only them.
@@ -50,6 +53,7 @@ include make/stack.mk
 include make/data.mk
 include make/host.mk
 include make/gateway.mk
+include make/droplet.mk
 include make/test.mk
 include make/evals.mk
 include make/security.mk

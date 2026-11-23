@@ -1,6 +1,6 @@
 # Deploying to a Digital Ocean droplet
 
-Provisions TWO droplets (via `deploy/terraform/`):
+Provisions TWO droplets (via `deploy/terraform/prod/`; the dev environment on one droplet is `deploy/terraform/dev/`, see [The dev droplet](#the-dev-droplet)):
 
 - The **app droplet**, running a lean production subset of this app's stack
   (`deploy/prod/`): api + agent-worker + ingest-worker + postgres
@@ -52,11 +52,14 @@ deploy/
     observability.yml          a project of its own: Prometheus, Loki, Grafana, Alertmanager, Pyroscope (dev also holds SonarQube, profile `quality`)
     litellm-config.yaml        the gateway's model list
     caddy/Caddyfile            how each site is addressed and certified (prod also has Caddyfile.observability)
-    dev only:  tools.yml (the crawler, the OpenSandbox server), loadtest.yml, litellm-patches/
-    prod only: backup.sh, prod.env.example, observability.env.example
+    tools.yml                  what the agent's tools run on: the crawler (dev: part of the project, with the OpenSandbox server; prod: an opt-in overlay, see The crawler's network)
+    dev only:  hosted-llm.yml (an overlay: LiteLLM on a hosted endpoint, for the dev droplet), droplet.env.example, loadtest.yml, litellm-patches/
+    prod only: backup.sh, compose.sh, crawler-firewall.sh, prod.env.example, observability.env.example
   shared/caddy/gateway.caddy the front door's routing, imported by both Caddyfiles: change it once (pattern 98)
   images/                    the sandbox image builds
-  terraform/                 provisions the droplets
+  terraform/                 one root per environment over a shared cloud-init.tpl.yaml
+    prod/                      the two droplets (app and observability)
+    dev/                       one droplet that runs the whole dev stack (see The dev droplet)
 ```
 
 Every path in these files, the `include` paths too, is relative to the repository root, so compose runs with `--project-directory .` (the Makefile's `COMPOSE` and every alias below do);
@@ -64,9 +67,9 @@ without it the first `include` fails with "no such file", where a mistake used t
 Each Caddyfile imports the routing by a path relative to itself (`../../shared/caddy/gateway.caddy`) and the Caddy container mounts both directories where they sit in the repo, so the import resolves
 in the container as on a checkout.
 
-Two differences are on purpose. **Production has no `tools.yml`**: the crawler must not run there as it is ([The crawler's network](#the-crawlers-network)) and the OpenSandbox server mounts the Docker
-socket, so `CRAWL4AI_SERVER_URL` and `OPENSANDBOX_MCP_DOMAIN` stay empty and those tools are absent. **The Telegram bot** is a container in production (`--profile telegram`) and a host process in
-development (`make telegram`).
+Two differences are on purpose. **The OpenSandbox server is never in production** (it mounts the Docker socket), so `OPENSANDBOX_MCP_DOMAIN` stays empty there and the sandbox tools are absent;
+**the crawler is opt-in** there, as an overlay behind a host firewall ([The crawler's network](#the-crawlers-network)). **The Telegram bot** is a container in both environments
+(`--profile telegram`; in dev `make telegram-up`), and in dev it can also run as a host process (`make telegram`).
 
 ## One-time setup
 
@@ -88,7 +91,7 @@ development (`make telegram`).
 ### 2. Provision both droplets
 
 ```
-cd deploy/terraform
+cd deploy/terraform/prod
 cp terraform.tfvars.example terraform.tfvars   # fill in do_token, ssh_key_fingerprints,
                                                 # admin_ip_cidrs, deploy_ssh_public_key (deploy_key.pub's contents)
 terraform init
@@ -181,6 +184,10 @@ those services whose mount source moved to be recreated once — `caddy` and
 by comparing `docker compose config --hash` before/after the move) — a few
 seconds of TLS/gateway blip. Nothing else changes, and the project names,
 so the volumes, are unchanged.
+
+**Moving an existing droplet to `deploy/prod/compose.sh`.** The deploy workflow now runs compose through `deploy/prod/compose.sh`, and ships it with `tools.yml` and `crawler-firewall.sh`. With
+`CRAWLER_ENABLED` unset it runs exactly the command the workflow ran before, so nothing changes until you opt in. Two things on the droplet are yours to change by hand: your shell's `dc` alias, and any
+cron line that calls `docker compose` directly (those keep working, but would not know about the crawler).
 
 **Moving an existing droplet to the `deploy/prod/` layout.** The first deploy after this layout lands changes the config of `caddy` and `litellm` on the app droplet (their mount sources moved: a few seconds
 of TLS and gateway blip) and of `caddy` on the observability droplet; `api`, `agent-worker` and `ingest-worker` are recreated as on every deploy (compared with `docker compose config --hash` before and after).
@@ -340,7 +347,7 @@ unset CASDOOR_ADMIN_PASSWORD
   charged per address by authlimit (`routes.json` `address_limits`), which slows guessing; it does not stop it, and it does not stop an attacker locking
   an account (Casdoor locks one after five wrong passwords).
 
-**The Telegram bot** is opt-in: set its variables in `.env` (see `prod.env.example`), then `dc --profile telegram up -d telegram-bot`. In `poll` mode (the default) it
+**The Telegram bot** is opt-in: set its variables in `.env` (see `prod.env.example`), then `dc --profile telegram up -d telegram-bot`. (Dev has the same container: `make telegram-up`.) In `poll` mode (the default) it
 needs nothing public; in `webhook` mode Caddy routes `https://<API_DOMAIN>/telegram/webhook` to it, which Telegram calls with the secret you set.
 
 ## Everyday operations
@@ -350,9 +357,9 @@ ssh deploy@<reserved_ip>
 cd /opt/graph-agent-core
 # The compose files live under deploy/prod/ but every path in them (the `include`s
 # too) and .env are relative to this directory, so every call needs --project-directory .
-# (an env var can't replace it — COMPOSE_FILE alone makes paths resolve under
-# deploy/prod/). The alias saves the typing.
-alias dc='docker compose --project-directory . -f deploy/prod/docker-compose.yml'
+# (an env var can't replace it: COMPOSE_FILE alone makes paths resolve under deploy/prod/).
+# compose.sh is that command, plus the crawler overlay when .env says CRAWLER_ENABLED=true; CI's deploy goes through it too.
+alias dc='deploy/prod/compose.sh'
 dc ps
 dc logs -f api
 dc logs -f authlimit caddy         # the front door: a 429 is a rate limit, a 401 a token, a 502 on a checked route authlimit not ready
@@ -405,7 +412,7 @@ commit on `main`, or SSH in and `IMAGE_TAG=<older-sha> dc up -d` directly using 
 observability stack has no image tags of its own to roll back — its images
 are always `:latest` off-the-shelf.
 
-**Destroying a droplet**: `cd deploy/terraform && terraform destroy` removes
+**Destroying a droplet**: `cd deploy/terraform/prod && terraform destroy` removes
 **both** droplets and both reserved IPs in one go. To remove just the
 observability droplet and keep the app running, target it specifically:
 `terraform destroy -target=digitalocean_droplet.observability
@@ -519,7 +526,7 @@ and leaves no complete backup. Put it in cron as the deploy user, with the Space
 **Restoring onto a rebuilt droplet** (Terraform applied, the repository cloned, `.env` restored; this is the sequence `make restore-drill` performs, against fresh containers):
 
 ```
-alias dc='docker compose --project-directory . -f deploy/prod/docker-compose.yml'
+alias dc='deploy/prod/compose.sh'
 dc up -d postgres casdoor-db redis redis-cache qdrant                       # the stores only: no api, no workers, nothing writing yet
 mkdir -p /restore && dc run --rm --no-deps -T --user "$(id -u):$(id -g)" -v /restore:/backup api python -m scripts.tools.backup_upload --download backups/<stamp> --to /backup   # checks every file against its manifest
 for db in appdata checkpointer litellm; do dc exec -T postgres pg_restore -U langfuse --clean --if-exists -d $db < /restore/$db.dump; done
@@ -607,7 +614,7 @@ The web page and the CLI have no thumbs yet, and a rating is not yet attached to
 It exports **counts**, `agent_answer_sample_total{outcome=judged|no_citations|unreadable}` and `agent_answer_sample_finding_total{finding=ungrounded_marker|uncited|misattributed}`, so a rate is `finding / judged`. Nothing alerts on them: the checks are heuristics tuned on small models, a trend to watch and not a verdict. Cron, once you have decided:
 
 ```
-30 4 * * * cd /opt/graph-agent-core && docker compose --project-directory . -f deploy/prod/docker-compose.yml run --rm --no-deps -T api python -m scripts.jobs.answer_sample
+30 4 * * * cd /opt/graph-agent-core && deploy/prod/compose.sh run --rm --no-deps -T api python -m scripts.jobs.answer_sample
 ```
 
 **It reads answers across tenants.** Like the retention sweep it is an operator job, never reachable from a request, but unlike it, it reads CONTENT: the final answer and its citations of each sampled conversation. It emits and logs no text, tenant, person or thread id (tested, including the log records' structured fields). If your data policy does not allow an operator job to read answers, leave it unscheduled, or set `ANSWER_SAMPLE_TENANTS` to the tenants that agree.
@@ -621,7 +628,7 @@ with `ARGS=--dry-run` first: it prints how many conversations it would delete an
 stopped at its ceiling of 50,000 conversations (run it again). Nothing schedules it; from cron once the retention policy is decided:
 
 ```
-30 3 * * * cd /opt/graph-agent-core && docker compose --project-directory . -f deploy/prod/docker-compose.yml run --rm --no-deps -T api python -m scripts.jobs.checkpoint_sweep
+30 3 * * * cd /opt/graph-agent-core && deploy/prod/compose.sh run --rm --no-deps -T api python -m scripts.jobs.checkpoint_sweep
 ```
 
 (`-T` because cron has no terminal, and `api` because it is the service the other one-off commands in this file run from. That line was written from the compose file and the other commands here, not run on a droplet: try it by hand with `--dry-run` before relying on it.)
@@ -640,33 +647,71 @@ Everything about credit billing (turning it on, changing a wallet, reconciling t
 
 ## The crawler's network
 
-The crawler (`crawl4ai`, headless Chromium; `app/adapters/outbound/crawl4ai/web_crawler.py`) is **not in the production stack, and must not be added to it as it is.** The app checks the first
-URL it hands over (`app/core/url_safety.py`); the browser then follows redirects and loads sub-resources by itself, so a page that passes the check can send it to `http://qdrant:6333`,
-`http://litellm:4000` or the droplet's metadata address. Isolation for that is the network's job, not the application's (PRODUCTION_REVIEW.md R20, specs/009 A1).
+The crawler (`crawl4ai`, headless Chromium; `app/adapters/outbound/crawl4ai/web_crawler.py`) is **opt-in in production, and only behind a host firewall.** The app checks the first URL it hands over
+(`app/core/url_safety.py`); the browser then follows redirects and loads sub-resources by itself, so a page that passes the check can send it to `http://qdrant:6333`, `http://litellm:4000` or the
+droplet's metadata address (`169.254.169.254`: instance credentials). Isolation for that is the network's job, not the application's (PRODUCTION_REVIEW.md R20, specs/009 A1).
 
-What the development compose files do (`deploy/dev/tools.yml` and `app.yml`): `crawl4ai` is alone on its own `crawler` network, and the three app roles that call it (`api`, `agent-worker`,
-`ingest-worker`) are on `crawler` and on `default`. Checked on a real Docker daemon with stand-in containers: a container on `crawler` alone cannot resolve or reach one on `default`, by name
-or by address; an app container on both reaches both.
+**Two layers, one in each place.**
 
-What that does **not** do, and what to add before the crawler runs anywhere that matters:
+1. **A network of its own** (`deploy/prod/tools.yml`, `deploy/dev/tools.yml`): `crawl4ai` is alone on `crawler`, and the three app roles that call it (`api`, `agent-worker`, `ingest-worker`) are on
+   `crawler` and on `default`. A container on `crawler` alone cannot resolve or reach one on `default`, by name or by address (checked on a real Docker daemon, with stand-in containers). Production
+   pins the subnet (`172.30.50.0/24`), publishes no port, and requires `CRAWL4AI_API_TOKEN` (crawl4ai 0.9+ refuses to listen beyond loopback without one).
+2. **A host firewall for what a bridge network still reaches.** A bridge network has internet egress, and on a cloud droplet that includes the metadata service and the VPC. Docker offers no option
+   for this: `deploy/prod/crawler-firewall.sh` writes rules in the host's `DOCKER-USER` chain (traffic the crawler sends through the host: link-local, `10/8`, `172.16/12`, `192.168/16` and
+   `100.64/10` are dropped; its own subnet and the internet are allowed) and in `INPUT` (traffic to the host itself, which `DOCKER-USER` never sees: only replies are accepted).
 
-1. **Name and pin the network's subnet** in the production compose file (`ipam: config: [{subnet: 172.30.50.0/24}]`), so a firewall rule can name it. Publish no port for the crawler; the app reaches it by its
-   service name, and `CRAWL4AI_API_TOKEN` is set (crawl4ai 0.9+ refuses to listen beyond loopback without one).
-2. **Block what a bridge network still reaches.** A bridge network has internet egress, and on a cloud droplet that includes the provider's metadata service (`169.254.169.254`: instance credentials)
-   and the VPC's private addresses. Docker offers no option for this; it is a host firewall rule in the `DOCKER-USER` chain, scoped to the crawler's subnet, for example:
+**Turning it on** (on the app droplet, as the deploy user):
 
-   ```
-   sudo iptables -I DOCKER-USER -s 172.30.50.0/24 -d 169.254.169.254 -j DROP
-   sudo iptables -I DOCKER-USER -s 172.30.50.0/24 -d 10.0.0.0/8 -j DROP
-   sudo iptables -I DOCKER-USER -s 172.30.50.0/24 -d 172.16.0.0/12 ! -d 172.30.50.0/24 -j DROP
-   sudo iptables -I DOCKER-USER -s 172.30.50.0/24 -d 192.168.0.0/16 -j DROP
-   ```
+```
+deploy/prod/crawler-firewall.sh install      # a systemd unit: the rules are applied after Docker starts, and again whenever Docker restarts
+echo 'CRAWLER_ENABLED=true' >> .env          # and CRAWL4AI_API_TOKEN=<a long random value>; the exact line, with no spaces or comment after it
+dc up -d                                     # compose.sh adds deploy/prod/tools.yml, and refuses to start anything while the firewall is missing
+deploy/prod/crawler-firewall.sh check        # probes one address in each blocked range from inside the crawler and reads the rules' packet counters
+```
 
-   Make them persistent (`iptables-persistent`, or a systemd unit that runs before Docker) and confirm from inside the container (`docker exec <crawler> curl -m 3 http://169.254.169.254/`) that each one times out.
-   **These rules were not run on a droplet from here**: treat them as the shape of the control, and test them where they will apply.
-3. **The development stack is weaker than this.** It publishes its infrastructure on the host's ports (Qdrant, Redis, Postgres and others), and a bridge network reaches the host through its gateway
-   (`host.docker.internal` on Docker Desktop), so on a developer's machine the crawler can still reach those published ports. Do not point the dev crawler at a page you do not trust.
-4. The application's own check on the first URL stays: it is the first line, not the only one.
+`check` is the proof, and it reads **counters**: a timeout alone cannot tell "dropped" from "nothing there", so a probe passes only if the rule for its range counted a packet; it also confirms the
+internet still works. `status` is `check` without the probing (exit 0 only if every rule is in place), and `remove` deletes the rules. A refused start prints what to run.
+
+**What is and is not verified.** The script is tested against a stateful fake `iptables` (`tests/scripts/deploy/test_crawler_firewall.py`: it is idempotent, `status` names the missing rule, `check` fails
+unless every range counted a drop), and `compose.sh` against a fake `docker` (`test_compose_wrapper.py`). On a real Docker daemon, a container on the pinned subnet reached a service on the host before
+`apply` and could not after, with each range's counter moving. **It has not been run on a DigitalOcean droplet**: the metadata address, the VPC and the droplet's resolvers are what a laptop cannot show,
+so run `check` there before relying on it, and look at `iptables -S DOCKER-USER` for rules of your own that sit above it. No browser-level crawl of a hostile page was run either: the probes are `curl`
+from inside the crawler's container.
+
+**What it does not do.** The development stack is weaker: it publishes its infrastructure on the host's ports (Qdrant, Redis, Postgres and others), and a bridge network reaches the host through its
+gateway (`host.docker.internal` on Docker Desktop), so on a developer's machine the crawler can still reach those. Do not point the dev crawler at a page you do not trust; the dev droplet does not
+install the firewall either, and nothing public faces that box. The application's own check on the first URL stays: it is the first line, not the only one.
+
+## The dev droplet
+
+`deploy/terraform/dev/` is the whole dev stack on **one** DigitalOcean droplet (default `s-8vcpu-16gb`; the ML service alone takes about 3 cores and 2 GB, and the crawler image about 9 GB of disk), for
+the work a laptop is too small for or that must run while the laptop is off. It is the dev compose project, unchanged, with one overlay: the LLM is a **hosted endpoint** (any OpenAI-compatible
+one), as in production, because a droplet has no GPU and no native Ollama.
+
+- **Nothing public.** The cloud firewall opens SSH from `admin_ip_cidrs` and nothing else (the variable refuses `0.0.0.0/0`), because the dev stack publishes its services on every interface
+  with passwords like `admin/admin` and `sk-anything`. You reach it through an SSH tunnel: `make droplet-tunnel` forwards the front door, Grafana, Langfuse, LiteLLM and Open WebUI, so
+  `https://api.localhost:8443/` works as on a laptop. There is no reserved IP, VPC or domain, and no CI deploys to it.
+- **The files**: `deploy/dev/hosted-llm.yml` (the overlay: LiteLLM runs `deploy/prod/litellm-config.yaml`, so the aliases are production's) and `deploy/dev/droplet.env.example` (the `LLM_*` variables,
+  with the names and order of `deploy/prod/prod.env.example`). The droplet's `.env` is separate from the laptop's `.env.example` on purpose: `LLM_API_KEY` and `LLM_API_BASE` mean something else for
+  the Strix job there, and a laptop's keys must not travel.
+
+```
+cd deploy/terraform/dev && cp terraform.tfvars.example terraform.tfvars   # do_token, ssh_key_fingerprints, deploy_ssh_public_key, admin_ip_cidrs
+terraform init && terraform apply                                          # one droplet, one firewall, one project
+cd ../../.. && export DEV_DROPLET=$(terraform -chdir=deploy/terraform/dev output -raw droplet)   # deploy@<ip>
+make droplet-sync                      # copies exactly the files git knows about (never a .env) to /opt/graph-agent-core-dev
+make droplet-ssh                       # then, on the droplet: cp deploy/dev/droplet.env.example .env, and fill in LLM_API_KEY; log out
+make droplet-up                        # build and start the whole stack there (make up-all with the overlay)
+make droplet-bootstrap droplet-ingest  # the Casdoor tenants and demo users; the sample documents and the skills catalog
+make droplet-ca droplet-tunnel         # fetch the droplet's Caddy root certificate (trust it on your machine), then open the tunnel
+```
+
+`make droplet-down` stops the containers and keeps the volumes. `terraform destroy` in `deploy/terraform/dev` removes the droplet, and it is **billed hourly until you do**. The droplet gets production's
+cloud-init hardening (a deploy user, ufw, fail2ban, Docker) from the same template, `deploy/terraform/cloud-init.tpl.yaml`, which takes the ports to open and extra packages as parameters; production's
+rendering is byte-identical to before (checked by rendering `user_data` and comparing hashes, since a changed one makes DigitalOcean replace the droplet).
+
+**What is and is not verified.** `terraform fmt`, `validate` and Checkov pass for both roots, the template renders, and the hosted-LLM overlay was started on a real Docker daemon and LiteLLM served through it.
+**`terraform apply` and a real droplet build have not been run**, so the first run is the real test: the size, the disk, and the tunnel are what to watch.
 
 ## Security scanning in front of all this
 

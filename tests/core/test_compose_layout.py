@@ -14,7 +14,7 @@ import pytest
 
 from app.adapters.inbound.workers.agent_worker import parse_worker_domains
 from app.domains.registry import DOMAINS
-from tests.compose_project import REPO, parts, services
+from tests.compose_project import REPO, load, parts, services
 
 DEV_DIR, PROD_DIR = REPO / "deploy" / "dev", REPO / "deploy" / "prod"
 DEV, COLLECTORS, OBS = DEV_DIR / "docker-compose.yml", DEV_DIR / "collectors.yml", DEV_DIR / "observability.yml"
@@ -23,8 +23,8 @@ SHARED_ROUTING = REPO / "deploy" / "shared" / "caddy" / "gateway.caddy"
 
 # What each environment directory holds that its entry does NOT include, and why: an overlay on the app's project, or a project of its own.
 NOT_INCLUDED = {
-    DEV_DIR: {"observability.yml", "collectors.yml", "loadtest.yml"},
-    PROD_DIR: {"observability.yml"},
+    DEV_DIR: {"observability.yml", "collectors.yml", "loadtest.yml", "hosted-llm.yml"},
+    PROD_DIR: {"observability.yml", "tools.yml"},
 }
 # Built from source in development (`authlimit:dev`), pulled from the registry in production: the one service whose image differs on purpose.
 IMAGE_DIFFERS_BY_DESIGN = {"authlimit"}
@@ -63,7 +63,8 @@ def test_dev_and_production_run_the_same_image_for_a_service_they_share():
     """Production's compose comments promise this about LiteLLM ("the same as dev, a test checks"); nothing did, and a digest bumped in one file only would run
     a different gateway in production than the one `make gateway-check` was run against."""
     dev = services(DEV, COLLECTORS) | services(OBS)
-    prod = services(PROD) | services(OBS_PROD)
+    # The crawler is an opt-in overlay, not part of the project: its service is production's crawler all the same.
+    prod = services(PROD) | services(OBS_PROD) | {"crawl4ai": services(PROD_DIR / "tools.yml")["crawl4ai"]}
     differing = {
         name: (dev[name]["image"], prod[name]["image"])
         for name in dev.keys() & prod.keys() - IMAGE_DIFFERS_BY_DESIGN
@@ -98,6 +99,32 @@ def test_the_caddyfiles_import_resolves_inside_the_container_to_the_shared_routi
         in_container = on_host(posixpath.normpath(posixpath.join(posixpath.dirname(config), relative)))
         assert in_container.resolve() == SHARED_ROUTING.resolve(), f"in the container {relative} reaches {in_container}"
         assert (entry_file.parent / relative).resolve() == SHARED_ROUTING.resolve(), f"on a checkout {relative} reaches another file"
+
+
+def test_the_crawler_overlay_isolates_the_crawler_and_pins_the_subnet_the_firewall_names():
+    """The crawler is a browser that follows what a page tells it to load, so its safety is its network (PRODUCTION_REVIEW.md R20): alone on its own, no published port, and a
+    subnet the host firewall can name. If compose and crawler-firewall.sh disagree on that subnet the rules protect nothing and nothing says so."""
+    overlay = services(PROD_DIR / "tools.yml")
+    crawler = overlay["crawl4ai"]
+    assert crawler["networks"] == ["crawler"], "on `default` it would reach Postgres, Redis and LiteLLM"
+    assert "ports" not in crawler
+    assert "${CRAWL4AI_API_TOKEN:?" in crawler["environment"]["CRAWL4AI_API_TOKEN"], "crawl4ai binds loopback without a token: a missing one must stop the deploy, not start a dead crawler"
+    for role in ("api", "agent-worker", "ingest-worker"):
+        assert overlay[role]["networks"] == ["default", "crawler"], f"{role} must reach both the stack and the crawler"
+        assert overlay[role]["environment"]["CRAWL4AI_SERVER_URL"] == "http://crawl4ai:11235"
+    subnet = load(PROD_DIR / "tools.yml")["networks"]["crawler"]["ipam"]["config"][0]["subnet"]
+    assert f"CRAWLER_SUBNET:-{subnet}" in (PROD_DIR / "crawler-firewall.sh").read_text(encoding="utf-8"), "the firewall script must default to the subnet compose pins"
+
+
+def test_the_hosted_llm_overlay_replaces_the_dev_litellm_config_mount_instead_of_adding_a_second():
+    """Compose merges a service's `volumes` by TARGET path: an overlay that mounts another file at the same target replaces the dev config, and one that mounts it
+    anywhere else would leave LiteLLM reading the Ollama config on the droplet and silently ignoring the hosted endpoint."""
+    def targets(service):
+        return {volume.split(":")[1] for volume in service["volumes"] if volume.startswith(".")}
+
+    base = targets(services(DEV)["litellm"])
+    overlay = targets(services(DEV_DIR / "hosted-llm.yml")["litellm"])
+    assert overlay and overlay <= base, f"the overlay mounts {sorted(overlay)}, which the dev service does not: it would add a mount, not replace one"
 
 
 def test_prometheus_scrapes_only_what_its_own_project_or_the_host_publishes():
