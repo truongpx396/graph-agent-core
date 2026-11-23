@@ -9,7 +9,7 @@ paths:
   - "app/adapters/inbound/api/routers/**/*.py"
   - "app/core/metrics.py"
   - "app/core/resilience.py"
-  - "deploy/litellm/patches/**"
+  - "deploy/dev/litellm-patches/**"
   - "observability/**"
 ---
 
@@ -46,8 +46,8 @@ session; the pattern documents (`docs/README.md` maps each number to its file) h
   open it through `init_graph_async` on the calling loop. `MemorySaver` is for tests/subagents.
 - Don't reorder the bound tool list: `skill_search`/`use_skill` sit first on purpose (pattern 50).
 - Parallel tool calls are supported. The old glued-together `tool_calls` corruption was a LiteLLM
-  chunk-index bug, fixed in `deploy/litellm/patches/sitecustomize.py` (loaded via `PYTHONPATH` in
-  docker-compose) — not by `parallel_tool_calls=False`, which was a no-op and has been removed.
+  chunk-index bug, fixed in `deploy/dev/litellm-patches/sitecustomize.py` (loaded via `PYTHONPATH` in
+  `deploy/dev/infra.yml`) — not by `parallel_tool_calls=False`, which was a no-op and has been removed.
   Treat that patch file as load-bearing.
 
 ## Streaming turns (`runtime/stream.py`)

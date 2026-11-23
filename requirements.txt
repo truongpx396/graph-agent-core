@@ -52,7 +52,7 @@ cryptography>=43,<51
 
 # Observability — structured JSON logging (app/platform/logging_config.py) and
 # OpenTelemetry metrics pushed via OTLP/HTTP to a shared otel-collector
-# (app/platform/telemetry.py, app/core/metrics.py, docker-compose.observability.yml).
+# (app/platform/telemetry.py, app/core/metrics.py, deploy/dev/observability.yml).
 structlog>=24.1,<26
 opentelemetry-api>=1.27,<2
 opentelemetry-sdk>=1.27,<2
@@ -73,7 +73,7 @@ fastembed>=0.9.1,<1
 psycopg[binary,pool]>=3.1,<4
 
 # Semantic cache (app/semantic_cache.py) — needs Redis Stack/RediSearch
-# server-side (see docker-compose.yml's `redis` service), not plain Redis.
+# server-side (see deploy/dev/infra.yml's `redis` service), not plain Redis.
 # Also backs app/queue.py's Redis Streams queue (GRAPH_PATTERNS.md pattern
 # 43) via this same package's redis.asyncio — no extra dependency needed,
 # redis-py has bundled async support since 4.2.

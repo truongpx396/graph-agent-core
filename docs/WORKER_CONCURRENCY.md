@@ -24,7 +24,7 @@ Provisioning to the burst peak when the ceiling is elsewhere just pays for idle 
 
 ## One process per container
 
-Docker already gives independent restart-on-crash, resource accounting and trivial scaling *per container* (`restart: unless-stopped` is container-level, so a crashed process inside a multi-process container needs its own supervisor to be noticed at all). Both workers are one-process-per-container services in `docker-compose.yml`, scaled by replica count (`docker compose --profile app up -d --scale agent-worker=3` / `--scale ingest-worker=3`). Efficiency belongs *inside* the process (below), not in packing processes together. Each replica pushes its metrics over OTLP to one collector (RUNTIME_PATTERNS.md 43), so scaling needs no scrape-config change either.
+Docker already gives independent restart-on-crash, resource accounting and trivial scaling *per container* (`restart: unless-stopped` is container-level, so a crashed process inside a multi-process container needs its own supervisor to be noticed at all). Both workers are one-process-per-container services in `deploy/dev/app.yml` and `deploy/prod/app.yml`, scaled by replica count (`docker compose --profile app up -d --scale agent-worker=3` / `--scale ingest-worker=3`). Efficiency belongs *inside* the process (below), not in packing processes together. Each replica pushes its metrics over OTLP to one collector (RUNTIME_PATTERNS.md 43), so scaling needs no scrape-config change either.
 
 ## Domains per process
 

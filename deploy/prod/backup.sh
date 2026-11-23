@@ -3,7 +3,7 @@
 # checked, copied off the box to the object-storage bucket, and pruned locally. deploy/README.md ("Backups and restore") is the runbook; the restore it describes was
 # performed (`make restore-drill`).
 #
-#   17 2 * * *  /opt/graph-agent-core/deploy/backup/backup.sh >> /var/log/graph-agent-backup.log 2>&1
+#   17 2 * * *  /opt/graph-agent-core/deploy/prod/backup.sh >> /var/log/graph-agent-backup.log 2>&1
 #
 # Run as the deploy user, from cron. It needs: the production stack up, the object-storage settings in .env (the same Spaces credentials the uploads use), and
 # BACKUP_DIR (default /var/backups/graph-agent-core) on a disk with room for a few copies. Exit status is non-zero on ANY failure, so cron's mail or a wrapper can say so.
@@ -19,7 +19,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."   # the repo root: compose resolves its paths and .env from here
-dc() { docker compose --project-directory . -f deploy/compose/docker-compose.prod.yml "$@"; }
+dc() { docker compose --project-directory . -f deploy/prod/docker-compose.yml "$@"; }
 
 ROOT="${BACKUP_DIR:-/var/backups/graph-agent-core}"
 KEEP="${BACKUP_KEEP_LOCAL:-3}"

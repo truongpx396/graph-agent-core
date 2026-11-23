@@ -5,7 +5,7 @@ containerized `opensandbox-server` (`make sandbox-up`), run as `python -m opensa
 seconds against a Docker-internal bridge IP the host can't reach.
 
 Historical gotcha: sandbox-creation calls 405'd because `opensandbox_mcp_domain`'s old port (8080) collided
-with `open-webui` in docker-compose.yml, so requests silently landed there. Fixed with port 8090 and a real
+with `open-webui` in deploy/dev/infra.yml, so requests silently landed there. Fixed with port 8090 and a real
 `--api-key`.
 
 Why a real code-execution tool, unlike `calculator` (app/agent/tools/builtin.py): calculator is a narrow AST

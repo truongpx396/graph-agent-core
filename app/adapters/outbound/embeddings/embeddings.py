@@ -9,7 +9,7 @@ chat completion — downloading once from Hugging Face and running offline
 after that.
 
 Reranking used to be local/fastembed too, but moved to a dedicated
-container (`docker-compose.yml`'s `ml-service`; see `ML_SERVICE_URL`'s
+container (`deploy/dev/app.yml`'s `ml-service`; see `ML_SERVICE_URL`'s
 config comment for measured numbers) — it was a measured concurrency
 bottleneck in-process, worth isolating unlike sparse's cheap lexical scoring.
 

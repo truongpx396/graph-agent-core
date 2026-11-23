@@ -26,7 +26,7 @@
 #    for `server.host` — this file states it explicitly rather than relying
 #    on that default silently doing the right thing.
 # 2. No `api_key` set here at all — `OPENSANDBOX_SERVER_API_KEY`
-#    (docker-compose.yml's `opensandbox-server` service, from this repo's
+#    (deploy/dev/tools.yml's `opensandbox-server` service, from this repo's
 #    own `.env`'s `OPENSANDBOX_API_KEY`) overrides it at container start,
 #    confirmed against configuration.md to be the documented mechanism for
 #    exactly this — no env-var-interpolation-in-TOML trick needed.

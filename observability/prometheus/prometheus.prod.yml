@@ -1,5 +1,5 @@
 # Prod counterpart of ./prometheus.yml — runs on the SEPARATE observability
-# droplet (docker-compose.observability.prod.yml), scraping only its own
+# droplet (deploy/prod/observability.yml), scraping only its own
 # LOCAL otel-collector (the gateway collector, ./config.yaml — the app
 # droplet's own otel-collector-agent, node-exporter, and cadvisor metrics
 # all arrive here already, relayed through that gateway's OTLP receiver,

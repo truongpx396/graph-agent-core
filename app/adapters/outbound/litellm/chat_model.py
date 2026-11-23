@@ -13,7 +13,7 @@ ids/names/args (Langfuse `fc0a31db`/`dbd2c02b`, 2026-09-08). `parallel_tool_call
 
 Root cause was in litellm: OllamaChatCompletionResponseIterator's chunk_parser restarts its tool-call index at 0 per chunk instead of per
 response, so two calls in separate chunks both get index 0 and any OpenAI-compatible client string-concatenates them. Fixed at that layer
-(deploy/litellm/patches/sitecustomize.py, loaded via PYTHONPATH in docker-compose.yml) with a globally increasing index.
+(deploy/dev/litellm-patches/sitecustomize.py, loaded via PYTHONPATH in deploy/dev/infra.yml) with a globally increasing index.
 
 The flag was then removed rather than kept as defense in depth: approval and routing already handled the full tool_calls list, just untested
 with a real batch, now verified live (tests/live/test_agent_parallel_tool_calls.py). A batch needing approval is approved or rejected as ONE

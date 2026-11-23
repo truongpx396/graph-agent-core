@@ -37,8 +37,8 @@ import yaml
 from app.bootstrap import wire
 
 REPO = Path(__file__).resolve().parents[2]
-DEV_CONFIG = REPO / "deploy/litellm/litellm-config.yaml"
-DEV_COMPOSE = REPO / "deploy/compose/docker-compose.yml"
+DEV_CONFIG = REPO / "deploy/dev/litellm-config.yaml"
+DEV_COMPOSE = REPO / "deploy/dev/infra.yml"
 STUB_PORT, GATEWAY_PORT = 18911, 18912
 MASTER = "sk-anything"  # the dev config's own master key, committed
 STUB_TOKENS = (10, 20)  # the prompt and completion tokens the stub reports

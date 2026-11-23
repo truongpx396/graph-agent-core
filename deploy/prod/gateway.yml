@@ -1,0 +1,144 @@
+# Production stack (droplet), part of docker-compose.yml: the front door.
+#
+# The front door (specs/018 T069, pattern 98): the same services, images and settings as the development stack's `gateway` profile (deploy/dev/gateway.yml), with
+# the local names replaced by the three real ones and the passwords required instead of defaulted.
+# deploy/dev/gateway.yml is the development counterpart.
+
+services:
+  # Casdoor's own Postgres: it migrates its schema on upgrade, so it does not share the app's (the dev stack does the same). Pinned by digest, like dev.
+  casdoor-db:
+    image: postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36
+    restart: unless-stopped
+    cpus: "0.1"
+    mem_limit: 192m
+    environment:
+      POSTGRES_USER: casdoor
+      POSTGRES_PASSWORD: ${CASDOOR_DB_PASSWORD:?set CASDOOR_DB_PASSWORD in .env}
+      POSTGRES_DB: casdoor
+    volumes:
+      - casdoor-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U casdoor -d casdoor"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # The OAuth 2.1 authorization server: where people sign in and what issues the tokens authlimit and the MCP gateway verify. Pinned by digest because it
+  # releases almost daily (deploy/dev/gateway.yml says how to move it). `origin` is the public issuer: every URL Casdoor generates (a token's `iss`, the
+  # discovery document) derives from it, not from the request's Host, and it must equal AUTHLIMIT_ISSUER and MCP_GATEWAY_ISSUER below. No `ports`: reached
+  # through Caddy (the browser sign-in) and, inside the network, by authlimit and the MCP gateway (the signing keys).
+  #
+  # The admin UI is on the same host as the sign-in page: protect the `built-in` admin with CASDOOR_ADMIN_PASSWORD (required), and see deploy/README.md
+  # on narrowing it further.
+  casdoor:
+    image: casbin/casdoor:v4.24.0@sha256:b7a2005518396a1d800ad77a695a4edb0c73eb1123070c35b5624440d5fdc550
+    restart: unless-stopped
+    cpus: "0.2"
+    mem_limit: 384m
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      driverName: postgres
+      dataSourceName: user=casdoor password=${CASDOOR_DB_PASSWORD} host=casdoor-db port=5432 sslmode=disable dbname=casdoor
+      dbName: casdoor
+      runmode: prod
+      origin: https://${AUTH_DOMAIN:?set AUTH_DOMAIN in .env}
+      initAdminPassword: ${CASDOOR_ADMIN_PASSWORD:?set CASDOOR_ADMIN_PASSWORD in .env}
+    depends_on:
+      casdoor-db:
+        condition: service_healthy
+
+  # Edge authentication and rate limiting: Caddy asks it about every request (specs/018), and about the sign-in and webhook routes that carry no token
+  # (pattern 97). Stateless apart from caches, so two replicas behind Caddy's `dynamic a`; its signing keys are a host directory outside the
+  # image and the repo, made once (deploy/README.md) and never written by this service. Every setting that names a place is required: a default would
+  # be the development stack's.
+  authlimit:
+    image: ${AUTHLIMIT_IMAGE:?set AUTHLIMIT_IMAGE in .env}:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    init: true
+    cpus: "0.2"
+    mem_limit: 128m
+    deploy:
+      replicas: 2
+    user: "65532:65532"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    environment:
+      AUTHLIMIT_ISSUER: https://${AUTH_DOMAIN}
+      # In-network name and plain http: the keys are fetched by this process, not shown to a client, so only the ISSUER has to be public.
+      AUTHLIMIT_JWKS_URL: http://casdoor:8000/.well-known/jwks
+      AUTHLIMIT_AUDIENCE: https://${API_DOMAIN}
+      AUTHLIMIT_REDIS_URL: redis://redis:6379
+      AUTHLIMIT_KEYS_DIR: /keys
+      AUTHLIMIT_LIMIT_MODE: ${AUTHLIMIT_LIMIT_MODE:-enforce}
+      AUTHLIMIT_MCP_METADATA_URL_TEMPLATE: https://${MCP_DOMAIN:?set MCP_DOMAIN in .env}/.well-known/oauth-protected-resource{path}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector-agent:4318
+    volumes:
+      # Read-only, owned by uid 65532 with mode 700 (deploy/README.md creates it with `authlimit keys init`); `keys rotate` runs the same way and the
+      # replicas pick a new key up without a restart.
+      - ${AUTHLIMIT_KEYS_DIR:-/opt/graph-agent-core/authlimit-keys}:/keys:ro
+    # Ready = a signing key, usable Casdoor keys and a trustworthy revocation list; Caddy's `health_uri /readyz` drops a replica that is not.
+    healthcheck:
+      test: ["CMD", "/authlimit", "healthcheck", "--ready"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+    depends_on:
+      redis:
+        condition: service_healthy
+      casdoor:
+        condition: service_started
+
+  # Reverse proxy and TLS, the only service with host ports 80/443 (deploy/terraform's firewall): Let's Encrypt on the three names. The same image,
+  # pinned by digest, as the development stack's. deploy/prod/caddy/Caddyfile is the entry; it imports ../../shared/caddy/gateway.caddy, so both directories
+  # are mounted, each at the path it has in the repo (the import then resolves in the container as it does on a checkout).
+  caddy:
+    image: caddy:2.11.7@sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489
+    restart: unless-stopped
+    cpus: "0.2"
+    mem_limit: 128m
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "80:80"
+      - "443:443"
+    command: ["caddy", "run", "--config", "/deploy/prod/caddy/Caddyfile", "--adapter", "caddyfile"]
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN in .env}
+      AUTH_DOMAIN: ${AUTH_DOMAIN:?set AUTH_DOMAIN in .env}
+      MCP_DOMAIN: ${MCP_DOMAIN:?set MCP_DOMAIN in .env}
+    volumes:
+      - ./deploy/prod/caddy:/deploy/prod/caddy:ro
+      - ./deploy/shared/caddy:/deploy/shared/caddy:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      default:
+        # The public names resolve to this container for the services inside the network that call the door the way a client does (the Telegram bot).
+        aliases:
+          - ${API_DOMAIN}
+          - ${AUTH_DOMAIN}
+          - ${MCP_DOMAIN}
+    # `service_started`, not `service_healthy`, for authlimit and the MCP gateway: Caddy's own health checks (`health_uri /readyz`) already keep a replica
+    # that cannot decide out of rotation and the routes that need it fail CLOSED (a 502), so a missing signing key shows up as exactly that. Waiting for
+    # healthy instead would make the first deploy of a fresh droplet, before its keys exist (deploy/README.md), never finish.
+    depends_on:
+      api:
+        condition: service_started
+      authlimit:
+        condition: service_started
+      casdoor:
+        condition: service_started
+      mcp-gateway:
+        condition: service_started
+
+volumes:
+  caddy_data:
+  caddy_config:
+  casdoor-db:

@@ -8,7 +8,7 @@ discards a call it cannot read without a word). Nothing in the graph can tell th
 
 It sends one labelled prompt at a time to Ollama's native chat endpoint, exactly as the gateway's `ollama_chat`
 provider does: the app's real system prompt and tool schemas (taken from the Ecorp domain, not copied), temperature 0, and
-the options the chosen alias sets in `deploy/litellm/litellm-config.yaml` (`num_ctx`, `num_predict`, `repeat_penalty`).
+the options the chosen alias sets in `deploy/dev/litellm-config.yaml` (`num_ctx`, `num_predict`, `repeat_penalty`).
 Temperature 0 makes one run per prompt the whole distribution. Each reply is put in one class:
 
     ok                     the right tool with arguments that satisfy its schema (or, for a no-tool prompt, plain text)
@@ -49,7 +49,7 @@ from app.core.config import settings as app_settings
 from app.core.tool_schema import strict_tool_schema
 from app.domains.registry import resolve_domain
 
-CONFIG = Path(__file__).resolve().parents[2] / "deploy" / "litellm" / "litellm-config.yaml"
+CONFIG = Path(__file__).resolve().parents[2] / "deploy" / "dev" / "litellm-config.yaml"
 # The options the gateway forwards to Ollama; anything else in `litellm_params` is routing, not sampling.
 FORWARDED = ("num_ctx", "num_predict", "repeat_penalty")
 

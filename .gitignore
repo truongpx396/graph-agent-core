@@ -72,7 +72,7 @@ deploy/terraform/*.auto.tfvars
 deploy/terraform/crash.log
 
 # Production secrets — must exist only on the droplet itself, never in this
-# repo (see docker-compose.prod.yml's own header comment); deploy/env/prod.env.example
+# repo (see deploy/prod/docker-compose.yml's own header comment); deploy/prod/prod.env.example
 # is the committed template and stays unaffected by this glob.
 .env.prod
 

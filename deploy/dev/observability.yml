@@ -1,9 +1,9 @@
-# A project of its own (not the checkout directory's name): this stack's containers and volumes stay apart from docker-compose.yml's,
+# A project of its own (not the checkout directory's name): this stack's containers and volumes stay apart from the app project's (docker-compose.yml),
 # so each can be torn down without orphaning the other.
 name: agent-core-observability
 
 # The observability backends (`make obs-up`): Prometheus, Alertmanager, Loki, Pyroscope and Grafana. What feeds them is
-# docker-compose.collectors.yml. Optional: with every container here down the app runs as before, with nowhere for metrics and logs to go.
+# collectors.yml. Optional: with every container here down the app runs as before, with nowhere for metrics and logs to go.
 #
 # No shared Docker network with the app stack, so `make up` and `make obs-up` work in either order. They meet through the host: Prometheus scrapes
 # the collectors' published ports via `host.docker.internal` (Docker Desktop resolves it; `extra_hosts: host-gateway` does on native Linux),
@@ -43,7 +43,7 @@ services:
     ports:
       - "3100:3100"
 
-  # Continuous profiling (specs/022): the app pushes CPU profiles here (PYROSCOPE_SERVER_ADDRESS in docker-compose.yml's `x-app-env`) and
+  # Continuous profiling (specs/022): the app pushes CPU profiles here (PYROSCOPE_SERVER_ADDRESS in app.yml's `x-app-env`) and
   # Grafana reads them through the Pyroscope datasource. The two flags keep this 2.x server on the v1 write path (2.0 release notes): ready in
   # 19 s instead of ~3 minutes (earlier pushes are dropped silently) and 38 MiB idle instead of 97. Seven days of profiles; one writable volume, /data.
   pyroscope:
@@ -81,9 +81,56 @@ services:
       - prometheus
       - loki
 
+  # --- SonarQube Community (profile `quality`; `make sonar-up`) ---
+  # A persistent server with history and trends, which CI's ephemeral per-run `sonarqube` job (.github/workflows/ci.yml) cannot give: a GitHub
+  # runner cannot reach a local server. Opt-in for its memory cost (2 GB+ heap). Own Postgres, since SonarQube migrates its schema on upgrade.
+  sonarqube-db:
+    image: postgres:16
+    profiles: ["quality"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sonarqube
+      POSTGRES_PASSWORD: sonarqube
+      POSTGRES_DB: sonarqube
+    volumes:
+      - sonarqube-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sonarqube"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  sonarqube:
+    image: sonarqube:community
+    profiles: ["quality"]
+    restart: unless-stopped
+    ports:
+      - "9002:9000"   # not 9000/9001 — this stack's own minio already binds both of those host ports
+    environment:
+      SONAR_JDBC_URL: jdbc:postgresql://sonarqube-db:5432/sonarqube
+      SONAR_JDBC_USERNAME: sonarqube
+      SONAR_JDBC_PASSWORD: sonarqube
+    volumes:
+      - sonarqube-data:/opt/sonarqube/data
+      - sonarqube-extensions:/opt/sonarqube/extensions
+      - sonarqube-logs:/opt/sonarqube/logs
+    depends_on:
+      sonarqube-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/api/system/status | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
 volumes:
   prometheus:
   alertmanager:
   loki:
   grafana:
   pyroscope:
+  sonarqube-db:
+  sonarqube-data:
+  sonarqube-extensions:
+  sonarqube-logs:

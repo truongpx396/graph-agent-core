@@ -51,7 +51,7 @@ Sign-in and webhooks carry no token, so the door never saw them, and the app's o
 
 ### 98. Production runs the same front door as development, from one routing file; the entries only say how a site is addressed and what sits behind it
 Production ran `api` behind a Caddy that did not authenticate. Copying the dev Caddyfile would have left two copies of the part that decides who gets in.
-- **One routing file, two thin entries:** `deploy/caddy/gateway.caddy` decides every request; `Caddyfile.gateway` (dev) and `Caddyfile` (prod) say how each site is addressed and certified.
-- **Same services and images; places and passwords are required:** `casdoor`, `authlimit` x2, `mcp-gateway` and the opt-in `telegram-bot` are in `docker-compose.prod.yml`; `API_DOMAIN`, `AUTH_DOMAIN`, `MCP_DOMAIN` and the Casdoor passwords have no default, and issuer, audience and keys URL derive from them in one place.
+- **One routing file, two thin entries:** `deploy/shared/caddy/gateway.caddy` decides every request; `deploy/dev/caddy/Caddyfile` and `deploy/prod/caddy/Caddyfile` say how each site is addressed and certified.
+- **Same services and images; places and passwords are required:** `casdoor`, `authlimit` x2, `mcp-gateway` and the opt-in `telegram-bot` are in `deploy/prod/` (`app.yml`, `gateway.yml`); `API_DOMAIN`, `AUTH_DOMAIN`, `MCP_DOMAIN` and the Casdoor passwords have no default, and issuer, audience and keys URL derive from them in one place.
 - **Found by running it:** a `${VAR:?}` on the opt-in bot would have broken `pull` and `up` for everyone ([ENGINEERING_PATTERNS.md](ENGINEERING_PATTERNS.md) 83); a bare `tls` is a Caddy parse error; a Caddy waiting on authlimit's health can never finish a first deploy; the deploy workflow curled a port `api` never publishes.
 - **Gaps:** the admin UI shares the sign-in host (admin password and the per-address limit only); nothing was run on a real droplet or against Let's Encrypt.

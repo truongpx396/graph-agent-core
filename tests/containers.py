@@ -199,7 +199,7 @@ def teardown_all() -> None:
 
 
 def ensure_postgres() -> dict[str, str]:
-    """Real Postgres 16 (same image docker-compose.yml's own `postgres` service uses), pre-seeded via the EXACT
+    """Real Postgres 16 (same image deploy/dev/infra.yml's own `postgres` service uses), pre-seeded via the EXACT
     same `postgres-init/*.sql` files docker-compose feeds `/docker-entrypoint-initdb.d` — mounted read-only
     into that same path so the official postgres image's own entrypoint runs them, unmodified, in filename
     order.
@@ -213,7 +213,7 @@ def ensure_postgres() -> dict[str, str]:
             image="postgres:16",
             username="langfuse",
             password="langfuse",
-            dbname="langfuse",  # matches docker-compose.yml's POSTGRES_DB, so postgres-init's `\connect appdata` etc. resolve identically
+            dbname="langfuse",  # matches deploy/dev/infra.yml's POSTGRES_DB, so postgres-init's `\connect appdata` etc. resolve identically
         ).with_volume_mapping(str(_POSTGRES_INIT_DIR), "/docker-entrypoint-initdb.d", mode="ro")
         # Sized for the stack this container hosts, not left at Postgres's default 100:
         # tests/integration/test_worker_scaling.py runs 5 agent_worker processes + the API, and
@@ -282,7 +282,7 @@ def _setup_checkpointer_schema_once(checkpointer_url: str) -> None:
 
 
 def ensure_pgbouncer() -> dict[str, str]:
-    """A real PgBouncer in front of `ensure_postgres()`'s server, started from the SHIPPED service definition in `docker-compose.yml` (the
+    """A real PgBouncer in front of `ensure_postgres()`'s server, started from the SHIPPED service definition in `deploy/dev/infra.yml` (the
     image by digest, every setting, the hardening flags and the one tmpfs it needs) so the test runs what ships, with three exceptions that make
     the test STRICTER than production: `MAX_PREPARED_STATEMENTS=0` (production leaves PgBouncer's own backstop on; a client that prepares a
     statement fails here instead of working by luck), and a pool of 3 server connections with no reserve (so 30 client connections have to
@@ -298,7 +298,7 @@ def ensure_pgbouncer() -> dict[str, str]:
         from testcontainers.core.container import DockerContainer
         from testcontainers.core.docker_client import DockerClient
 
-        service = yaml.safe_load((_REPO_ROOT / "deploy" / "compose" / "docker-compose.yml").read_text(encoding="utf-8"))["services"]["pgbouncer"]
+        service = yaml.safe_load((_REPO_ROOT / "deploy" / "dev" / "infra.yml").read_text(encoding="utf-8"))["services"]["pgbouncer"]
         postgres_ip = DockerClient().bridge_ip(postgres["container_id"])
         env = dict(service["environment"])
         env["DATABASE_URLS"] = ",".join(f"postgresql://langfuse:langfuse@{postgres_ip}:5432/{name}" for name in ("appdata", "checkpointer"))
@@ -330,14 +330,14 @@ def ensure_pgbouncer() -> dict[str, str]:
 
 
 def _shipped_image(service: str) -> str:
-    """The image `docker-compose.yml` runs for `service`, by digest: a test of a store runs what ships, and a floating `latest` could pass here and not there."""
+    """The image `deploy/dev/infra.yml` runs for `service`, by digest: a test of a store runs what ships, and a floating `latest` could pass here and not there."""
     import yaml
 
-    return str(yaml.safe_load((_REPO_ROOT / "deploy" / "compose" / "docker-compose.yml").read_text(encoding="utf-8"))["services"][service]["image"])
+    return str(yaml.safe_load((_REPO_ROOT / "deploy" / "dev" / "infra.yml").read_text(encoding="utf-8"))["services"][service]["image"])
 
 
 def ensure_redis() -> dict[str, str]:
-    """Real Redis Stack (same image docker-compose.yml's `redis` service
+    """Real Redis Stack (same image deploy/dev/infra.yml's `redis` service
     uses — plain `redis:*` doesn't ship RediSearch, which the semantic cache
     and the Streams queue both need). Returns `redis_url`."""
     _require_docker("a real Redis")
@@ -358,7 +358,7 @@ def ensure_redis() -> dict[str, str]:
 
 
 def ensure_qdrant() -> dict[str, str]:
-    """Real Qdrant (same image docker-compose.yml's `qdrant` service uses)."""
+    """Real Qdrant (same image deploy/dev/infra.yml's `qdrant` service uses)."""
     _require_docker("a real Qdrant")
 
     def _start() -> dict[str, Any]:
@@ -403,13 +403,13 @@ CRAWL_TARGET_HEADING = "Example Domains"
 
 
 def ensure_crawl4ai() -> dict[str, str]:
-    """Real crawl4ai server (the image docker-compose.yml's `crawl4ai` service uses): the headless-Chromium
+    """Real crawl4ai server (the image deploy/dev/tools.yml's `crawl4ai` service uses): the headless-Chromium
     rendering backend behind `app/adapters/outbound/crawl4ai/web_crawler.py` (GRAPH_PATTERNS.md pattern 50). Driven through the
     generic `DockerContainer` API like `ensure_qdrant()` above (there is no first-party testcontainers module
     for it either).
 
     A fresh random `CRAWL4AI_API_TOKEN` per container start (`secrets.token_hex`, not a fixed test value), as
-    docker-compose.yml's `crawl4ai` comment discloses: crawl4ai 0.9.0+ is secure-by-default, and without it
+    deploy/dev/tools.yml's `crawl4ai` comment discloses: crawl4ai 0.9.0+ is secure-by-default, and without it
     the server binds loopback-only INSIDE its container, so the published port would connection-reset.
     `shm_size="1g"` (via `with_kwargs`, the one docker-run option `DockerContainer` has no builder for)
     because Chromium needs a real `/dev/shm` (crawl4ai's docker-run docs). Readiness is a real `GET /health`
@@ -486,7 +486,7 @@ def _build_image(context: str, tag: str) -> None:
 
 def ensure_ml_service() -> dict[str, str]:
     """Real reranker + prompt-injection-classifier service — the same
-    image docker-compose.yml's own `ml-service` builds from
+    image deploy/dev/app.yml's own `ml-service` builds from
     services/ml-service/Dockerfile. Needed purely to satisfy
     `GET /health/ready`'s `ml_service` check (app/adapters/inbound/api/health.py), added
     once that endpoint started checking it: the same "a real instance, not
@@ -520,7 +520,7 @@ def ensure_ml_service() -> dict[str, str]:
         host = container.get_container_host_ip()
         port = int(container.get_exposed_port(80))
         url = f"http://{host}:{port}"
-        # Generous retry budget, mirroring docker-compose.yml's own
+        # Generous retry budget, mirroring deploy/dev/app.yml's own
         # ml-service healthcheck `start_period` comment: covers a cold
         # pull of EVERY model on first startup. The service answers /health only
         # once its lifespan has finished, and that includes the downloads. It was
@@ -559,7 +559,7 @@ def ensure_ollama(model: str, embed_model: str = "nomic-embed-text") -> dict[str
     tag).
 
     `embed_model` defaults to `nomic-embed-text`, this app's production `EMBED_MODEL` default
-    (`app/core/config.py`, `docker-compose.yml`'s `pull-models`). It was added when
+    (`app/core/config.py`, the Makefile's `pull-models`). It was added when
     `tests/live/test_qdrant_real.py` (real `qdrant_store.hybrid_search`, which calls `embeddings.embed_text`,
     a REAL dense-embedding call that `ensure_qdrant()` alone can't satisfy) failed in CI with
     `openai.APIConnectionError`, since `test-integration` provisions no LLM at all; the test moved to

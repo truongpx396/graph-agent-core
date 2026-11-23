@@ -3,7 +3,7 @@ like Claude Code: an OAuth authorization-code + PKCE login as a PUBLIC client wi
 parameter, through Caddy over TLS signed by Caddy's local CA, then the real MCP client with the token it got.
 Unit tests replace the authorization server; what this repo depends on from Casdoor (audience, claim set,
 public clients, issuer) is measured behaviour of one version, so run this after changing the Casdoor digest in
-docker-compose.yml.
+deploy/dev/gateway.yml.
 
 Needs the stack up and bootstrapped (`make mcp-gateway-up`, `mcp-gateway-bootstrap`, `mcp-gateway-ca`). It
 creates a throwaway user in each organization (a demo user's password is never touched) and deletes them

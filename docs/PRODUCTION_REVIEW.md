@@ -475,7 +475,7 @@ comment") and the sizing section of `WORKER_CONCURRENCY.md`.
 ### R06. The chat client has no HTTP timeout; three layers each retry
 
 **Established:** verified in the installed source (`langchain-openai==0.3.35`, `openai==2.54.0`); the gateway's values
-are read from `deploy/litellm/litellm-config.prod.yaml`.
+are read from `deploy/prod/litellm-config.yaml`.
 
 **Problem.** `app/adapters/outbound/litellm/chat_model.py::OpenAiChatModels` builds
 `ChatOpenAI(model=..., base_url=..., api_key=..., temperature=0, stream_usage=True)`. With no `timeout` and no
@@ -505,9 +505,9 @@ openai client      -> timeout: None        | max_retries: 2
    `max_retries=<llm_sdk_max_retries>`. On a streamed response the read timeout is the longest silence between chunks,
    not the length of the answer, which is the right meaning: "no bytes for N seconds is a stall". The retry that
    remains in the application is the graph's, which already knows what must not be retried (`_retry_agent_on`).
-3. In both `deploy/litellm/*.yaml`: `request_timeout` to 120, and a comment that the three layers were counted. Leave
+3. In both `deploy/{dev,prod}/litellm-config.yaml`: `request_timeout` to 120, and a comment that the three layers were counted. Leave
    `num_retries: 2`: the gateway is closest to the provider and sees `Retry-After`.
-4. `.env.example` and `deploy/env/prod.env.example`: for a hosted model, suggest `LLM_READ_TIMEOUT_SECONDS=30`, which
+4. `.env.example` and `deploy/prod/prod.env.example`: for a hosted model, suggest `LLM_READ_TIMEOUT_SECONDS=30`, which
    leaves room for one retry inside a 60 s turn. A cold local model can take longer than that to send its first token,
    which is why the default is not 30.
 
@@ -789,7 +789,7 @@ reading with `Last-Event-ID` returns only later events; another person's request
 
 **Problem.** `app/adapters/inbound/api/schemas.py::ChatRequest`: `message` has `min_length=1` and no maximum;
 `thread_id` is any string; `images` is a list of any length of strings of any size. The front door sets no body limit
-(`deploy/caddy/gateway.caddy` has no `request_body`). A request body is parsed whole, copied into a Redis stream entry,
+(`deploy/shared/caddy/gateway.caddy` has no `request_body`). A request body is parsed whole, copied into a Redis stream entry,
 and then into the checkpoint. One large request costs memory in four places, and the conversation id becomes part of
 several Redis keys.
 
@@ -800,7 +800,7 @@ several Redis keys.
   `images`: at most `chat_max_images` (default 4; first read the page's own limit in
   `app/adapters/inbound/api/static/` and do not go below it), each at most `chat_image_max_chars` (default 7,000,000,
   about 5 MB as base64).
-- `deploy/caddy/gateway.caddy`, in `(api_site)`: `request_body { max_size 140MB }` as the ceiling (uploads are 5 files
+- `deploy/shared/caddy/gateway.caddy`, in `(api_site)`: `request_body { max_size 140MB }` as the ceiling (uploads are 5 files
   of 25 MB), and a matcher for `/chat/*` with `max_size 32MB`. Run `make authlimit-smoke` if you touch that file; it is
   imported by both the development and the production Caddyfile.
 - This narrows a request schema. `make openapi-breaking` will report it: add the entries to
@@ -810,7 +810,7 @@ several Redis keys.
 
 ### R15. Production Redis: one instance for queue and cache, no persistence policy, floating image tags
 
-**Established:** read from code (`deploy/compose/docker-compose.prod.yml`).
+**Established:** read from code (`deploy/prod/docker-compose.yml` and its parts).
 
 **Problem.**
 - One Redis holds the work queue, the conversation locks, the cancel flags, the dedup claims, the front door's rate
@@ -852,7 +852,7 @@ policy").
 
 **Established:** read from code.
 
-**Problem.** `deploy/litellm/litellm-config.prod.yaml` ends with `store_prompts_in_spend_logs: true`. The development
+**Problem.** `deploy/prod/litellm-config.yaml` ends with `store_prompts_in_spend_logs: true`. The development
 config explains why it is on there (the admin UI's log page can show request and response bodies). In production it
 means every message a person sends, every retrieved passage and memory placed in a prompt, and every answer is written
 to the gateway's Postgres database, with no retention, readable with the gateway's admin credentials. The application
@@ -998,7 +998,7 @@ connected to at that address.
 |---|---|---|
 | the docstring of `app/adapters/outbound/qdrant/qdrant_store.py::scope_filter` | `tests/integration/test_tenant_isolation_real_qdrant.py` "proves the result against a real Qdrant" | No such file exists. R09 creates it; until then the sentence should say "pinned against a fake only" |
 | `README.md`, "Roadmap and known gaps" | "Several domains in one process. Each domain is its own process" (not built) | Built: pattern 96, `AGENT_WORKER_DOMAINS` |
-| `README.md`, same section | "The shipped proxy doesn't authenticate, and neither sets nor strips the identity headers" | The production stack runs the authlimit front door, which verifies tokens and strips those headers (pattern 98, `deploy/caddy/gateway.caddy`) |
+| `README.md`, same section | "The shipped proxy doesn't authenticate, and neither sets nor strips the identity headers" | The production stack runs the authlimit front door, which verifies tokens and strips those headers (pattern 98, `deploy/shared/caddy/gateway.caddy`) |
 | `GRAPH_PATTERNS.md`, "Not built" | "Real authentication" | Built: specs/018, patterns 84 to 86 |
 | `GRAPH_PATTERNS.md` and `README.md` | "nothing restarts a crashed [worker]" | `restart: unless-stopped` restarts a worker that exits. What is true: nothing restarts one that hangs (R22), and nothing scales on queue depth (R17) |
 

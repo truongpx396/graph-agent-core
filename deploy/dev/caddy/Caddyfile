@@ -1,9 +1,9 @@
-# The development entry of the front door (docker-compose.yml, profile `gateway`; specs/017 and specs/018). Development only: `tls internal` has
+# The development entry of the front door (deploy/dev/gateway.yml, profile `gateway`; specs/017 and specs/018). Development only: `tls internal` has
 # Caddy sign the certificates with its own local CA (`make mcp-gateway-ca` exports the root so a client can trust it), the names are *.localhost
 # (they resolve to the loopback address with no /etc/hosts entry), and one port serves all three so that an issuer or a resource URL written in a
 # token matches what the client dialled.
 #
-# The routing is gateway.caddy's, the same file production's Caddyfile imports: this file says how each site is addressed and certified and what
+# The routing is deploy/shared/caddy/gateway.caddy's, the same file production's Caddyfile imports: this file says how each site is addressed and certified and what
 # sits behind it, and nothing else.
 {
 	# Nothing listens on 80, so there is nothing to redirect from.
@@ -26,7 +26,9 @@
 	reverse_proxy host.docker.internal:8081
 }
 
-import gateway.caddy
+# The routing, relative to THIS file: the compose part mounts this directory and deploy/shared/caddy at the paths they have in the repo, so the
+# import resolves in the container exactly as it does on a checkout.
+import ../../shared/caddy/gateway.caddy
 
 https://mcp.localhost:8443 {
 	tls internal

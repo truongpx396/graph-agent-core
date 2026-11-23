@@ -1,0 +1,174 @@
+# Dev stack, part of docker-compose.yml: the front door, the `gateway` profile (`make mcp-gateway-up`). Casdoor issues the tokens, authlimit decides who may call
+# and how often, Caddy terminates TLS and asks authlimit about every request. The MCP gateway behind it, and the API (`make authlimit-up-app`), are app.yml.
+# Local only: *.localhost names, Caddy's own CA, one loopback port. deploy/prod/gateway.yml is the production counterpart: real names, ACME, and the same
+# routing (deploy/shared/caddy/gateway.caddy).
+
+# The authlimit service's own Dockerfile and context, shared by `authlimit` and its smoke-check stand-in `authlimit-echo`.
+x-authlimit-image: &authlimit-image
+  image: authlimit:dev
+  build:
+    context: ./services/authlimit
+
+services:
+  # --- MCP gateway (profile `gateway`; `make mcp-gateway-up`; specs/017) ---
+  # The published MCP servers (app/adapters/inbound/mcp/server.py, ops_server.py) over Streamable HTTP behind OAuth 2.1: caddy-gateway terminates TLS, mcp-gateway is
+  # the resource server, casdoor issues the tokens. Local only: *.localhost names, Caddy's own CA, one loopback port. A deployment swaps in real
+  # names, ACME and its own identity provider (the gateway needs only an issuer URL and a JWKS URL).
+  #
+  # Casdoor is pinned by digest because it releases almost daily. To move it, take the new tag's digest, run `make mcp-gateway-up` and
+  # `make mcp-gateway-bootstrap`, and read the minted token (specs/017-mcp-gateway/research.md lists the claims this depends on).
+  # It gets its own Postgres: Casdoor migrates its schema on upgrade (as sonarqube-db does).
+  # The passwords come from `make mcp-gateway-up` (a second --env-file outside the repo) and default to EMPTY, not `${VAR:?}`: compose interpolates
+  # the whole file on every command, so a required variable would break `make up` for everyone. Empty fails safe: Postgres will not initialise
+  # without a password and Casdoor reports the admin password unset.
+  casdoor-db:
+    image: postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36
+    profiles: ["gateway"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: casdoor
+      POSTGRES_PASSWORD: ${CASDOOR_DB_PASSWORD:-}
+      POSTGRES_DB: casdoor
+    volumes:
+      - casdoor-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U casdoor -d casdoor"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  casdoor:
+    image: casbin/casdoor:v4.24.0@sha256:b7a2005518396a1d800ad77a695a4edb0c73eb1123070c35b5624440d5fdc550
+    profiles: ["gateway"]
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      driverName: postgres
+      dataSourceName: user=casdoor password=${CASDOOR_DB_PASSWORD:-} host=casdoor-db port=5432 sslmode=disable dbname=casdoor
+      dbName: casdoor
+      runmode: prod
+      # Every URL Casdoor generates (the token's `iss`, the discovery document) derives from this, not the request's Host (measured). Must equal MCP_GATEWAY_ISSUER.
+      origin: ${MCP_GATEWAY_ISSUER:-https://auth.localhost:8443}
+      # No default admin password in this version; `make mcp-gateway-up` generates one.
+      initAdminPassword: ${CASDOOR_ADMIN_PASSWORD:-}
+    depends_on:
+      casdoor-db:
+        condition: service_healthy
+    # No `ports`: reached through caddy-gateway (the browser login) and, inside the network, by mcp-gateway (the signing keys).
+
+  # --- authlimit: edge authentication and rate limiting (profile `gateway`; specs/018) ---
+  # Caddy asks it about every request (`forward_auth`, deploy/dev/caddy/Caddyfile): it verifies the Casdoor token offline, charges the tenant's
+  # and the person's token buckets in Redis, refuses revoked people, and returns a short-lived signed identity for Caddy to copy onto the request.
+  # Stateless apart from caches; any number of replicas behind Caddy's `dynamic a`. Needs `make up` (Redis) and `make authlimit-keys` first.
+  authlimit:
+    <<: *authlimit-image
+    profiles: ["gateway"]
+    restart: unless-stopped
+    init: true
+    deploy:
+      replicas: 2
+    # The host user, so the key directory (mode 700, made by `make authlimit-keys`) is readable; the image's 65532 cannot enter it. The Makefile sets
+    # AUTHLIMIT_UID/GID; the default keeps other compose commands valid, and the service then fails at start naming the keys.
+    user: "${AUTHLIMIT_UID:-65532}:${AUTHLIMIT_GID:-65532}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    environment:
+      AUTHLIMIT_ISSUER: ${AUTHLIMIT_ISSUER:-https://auth.localhost:8443}
+      # In-network name and plain http: the keys are fetched by this process, not shown to a client, so only the ISSUER has to be public.
+      AUTHLIMIT_JWKS_URL: http://casdoor:8000/.well-known/jwks
+      AUTHLIMIT_AUDIENCE: ${AUTHLIMIT_AUDIENCE:-https://api.localhost:8443}
+      AUTHLIMIT_REDIS_URL: redis://redis:6379
+      AUTHLIMIT_KEYS_DIR: /keys
+      AUTHLIMIT_KEYS_ALLOW_LOOSE_PERMS: ${AUTHLIMIT_KEYS_ALLOW_LOOSE_PERMS:-false}
+      AUTHLIMIT_LIMIT_MODE: ${AUTHLIMIT_LIMIT_MODE:-enforce}
+      # Key-cache timings, exposed so `make authlimit-smoke` can shorten them to watch a Casdoor outage in seconds.
+      AUTHLIMIT_JWKS_CACHE_SECONDS: ${AUTHLIMIT_JWKS_CACHE_SECONDS:-300}
+      AUTHLIMIT_JWKS_MIN_REFRESH_SECONDS: ${AUTHLIMIT_JWKS_MIN_REFRESH_SECONDS:-30}
+      AUTHLIMIT_JWKS_STALE_GRACE_SECONDS: ${AUTHLIMIT_JWKS_STALE_GRACE_SECONDS:-21600}
+      AUTHLIMIT_REVOCATION_POLL_MS: ${AUTHLIMIT_REVOCATION_POLL_MS:-1000}
+      AUTHLIMIT_MCP_METADATA_URL_TEMPLATE: ${MCP_GATEWAY_PUBLIC_URL:-https://mcp.localhost:8443}/.well-known/oauth-protected-resource{path}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${AUTHLIMIT_OTLP_ENDPOINT-http://host.docker.internal:4318}
+    volumes:
+      # The signing keys, read-only, outside the repo (see `make authlimit-keys`).
+      - ${AUTHLIMIT_KEYS_DIR:-${HOME:-/tmp}/.cache/graph-agent-core-authlimit/keys}:/keys:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # so OTEL_EXPORTER_OTLP_ENDPOINT resolves on native Linux Docker too
+    # Ready = a signing key, usable Casdoor keys and a trustworthy revocation list; Caddy's `health_uri /readyz` drops a replica that is not.
+    healthcheck:
+      test: ["CMD", "/authlimit", "healthcheck", "--ready"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+    depends_on:
+      redis:
+        condition: service_healthy
+      casdoor:
+        condition: service_healthy
+
+  # The smoke check's stand-in upstream (`make authlimit-smoke`): echoes the headers it received, which shows what a real API would have been given.
+  # Same image as authlimit, a different binary.
+  authlimit-echo:
+    <<: *authlimit-image
+    profiles: ["gateway"]
+    restart: unless-stopped
+    init: true
+    entrypoint: ["/echo"]
+    user: "65532:65532"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    environment:
+      AUTHLIMIT_LISTEN: ":8000"   # read only by the healthcheck below
+    healthcheck:
+      test: ["CMD", "/authlimit", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  caddy-gateway:
+    image: caddy:2.11.7@sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489
+    profiles: ["gateway"]
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      # What sits behind the chat-API site's check (deploy/dev/caddy/Caddyfile): the echo stub or `api:8000`. Resolved by compose's `:-` because
+      # Caddy's own default only fires on an UNSET variable, not an empty one.
+      AUTHLIMIT_UPSTREAM: ${AUTHLIMIT_UPSTREAM:-authlimit-echo:8000}
+    ports:
+      # Loopback only: this is a development stack with Casdoor's admin UI behind it.
+      - "127.0.0.1:8443:8443"
+    # Two directories, not files, each mounted at the path it has in the repo: the Caddyfile imports ../../shared/caddy/gateway.caddy, the routing
+    # production's Caddyfile imports too, and that relative path then resolves in the container as it does on a checkout. Read-only, so the
+    # container cannot rewrite its own configuration.
+    command: ["caddy", "run", "--config", "/deploy/dev/caddy/Caddyfile", "--adapter", "caddyfile"]
+    volumes:
+      - ./deploy/dev/caddy:/deploy/dev/caddy:ro
+      - ./deploy/shared/caddy:/deploy/shared/caddy:ro
+      - caddy-gateway-data:/data    # the local CA (and its root certificate: `make mcp-gateway-ca`) lives here
+      - caddy-gateway-config:/config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # the Telegram bot's own listener runs on the host (`make telegram`); see the Caddyfile's telegram_proxy
+    depends_on:
+      mcp-gateway:
+        condition: service_healthy
+      casdoor:
+        condition: service_healthy
+      authlimit:
+        condition: service_healthy
+      authlimit-echo:
+        condition: service_healthy
+
+volumes:
+  casdoor-db-data:
+  caddy-gateway-data:
+  caddy-gateway-config:

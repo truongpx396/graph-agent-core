@@ -42,7 +42,7 @@ The only HTTP chat path. `POST /chat/stream/queued` publishes a turn and relays 
 - **Bug:** redis-py's async `socket_timeout` (5 s) raced `XREAD`'s `BLOCK`. Use `socket_timeout=None`.
 - **Bug:** the requests stream only grew (`XACK` leaves the entry). Every ack is `streams.py::ack_and_delete`, an age trim by `MINID` is the net, and **never `XADD ... MAXLEN`** (it deletes jobs nobody ran) (R04).
 - **Bug:** a Redis blip ended the worker. A failed READ is retried with backoff and counted; a write is never retried and redis-py's client-wide `retry=` stays off, since it would re-send an applied `XADD` and run a second turn (R07).
-- **Bug:** nothing bounded a request. `message` ≤ `CHAT_MESSAGE_MAX_CHARS`, `thread_id` 1-200 characters, images capped; `deploy/caddy/gateway.caddy` is the outer bound (R14).
+- **Bug:** nothing bounded a request. `message` ≤ `CHAT_MESSAGE_MAX_CHARS`, `thread_id` 1-200 characters, images capped; `deploy/shared/caddy/gateway.caddy` is the outer bound (R14).
 - **Bug:** a hung worker was never restarted. Workers touch heartbeat files that the container health check reads (`app/platform/worker_heartbeat.py`) and `AgentWorkerLoopStalled` fires; Compose still does not restart an unhealthy container (R22).
 - **Visibility:** `agent_queue_lag`, `agent_queue_pending`, `agent_queue_wait_seconds`, `agent_first_token_seconds` and the alerts `AgentQueueBacklog`, `AgentQueueWaitHigh`, `WorkerUnreachable` size the pool (R17).
 - **Resumable reads:** SSE frames carry an `id:`, a quiet stream sends `: keepalive`, and `GET /chat/stream/{request_id}` with `Last-Event-ID` reads on, owner-checked (R13). Web page and CLI do not reconnect on their own yet.

@@ -1,10 +1,10 @@
 # Provisions TWO DigitalOcean droplets: the app droplet, running the "lean
 # production subset" of this app's docker-compose stack (see
-# docker-compose.prod.yml): api + agent-workers + ingest-worker + postgres +
+# deploy/prod/docker-compose.yml): api + agent-workers + ingest-worker + postgres +
 # redis + qdrant + litellm + ml-service, fronted by Caddy — and a separate,
-# smaller observability droplet (docker-compose.observability.prod.yml).
-# Deliberately NOT the full dev stack (docker-compose.yml) — no local Ollama
-# (litellm-config.prod.yaml points at a real hosted OpenAI-compatible
+# smaller observability droplet (deploy/prod/observability.yml).
+# Deliberately NOT the full dev stack (deploy/dev/docker-compose.yml) — no local Ollama
+# (deploy/prod/litellm-config.yaml points at a real hosted OpenAI-compatible
 # endpoint instead), no Langfuse/MinIO/open-webui. See deploy/README.md for
 # the full tradeoff and how to add any of those back.
 terraform {

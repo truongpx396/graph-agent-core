@@ -28,17 +28,17 @@ checkov:  ## IaC misconfiguration scan of deploy/terraform; same config and gate
 
 # --- SonarQube ---
 
-sonar-up:  ## Start a persistent SonarQube (Community) at http://localhost:9002 in the opt-in `quality` profile. First login admin/admin; change the password before a real `make sonar-scan`
-	$(COMPOSE) --profile quality up -d sonarqube-db sonarqube
+sonar-up:  ## Start a persistent SonarQube (Community) at http://localhost:9002, the opt-in `quality` profile of the observability project (its volumes are that project's: a SonarQube from before deploy/dev/ starts empty). First login admin/admin; change the password before a real `make sonar-scan`
+	$(COMPOSE_OBS) --profile quality up -d sonarqube-db sonarqube
 
 sonar-down:  ## Stop the persistent SonarQube (volumes and history kept)
-	$(COMPOSE) --profile quality stop sonarqube sonarqube-db
+	$(COMPOSE_OBS) --profile quality stop sonarqube sonarqube-db
 
 sonar-scan:  ## Scan against the `make sonar-up` server (needs SONAR_TOKEN: My Account -> Security). The gate blocks only NEW issues; the baseline scan found ~90 older ones (2 BLOCKER, 10 CRITICAL) to triage
 	@test -n "$$SONAR_TOKEN" || (echo "SONAR_TOKEN is required — generate one in the SonarQube UI (My Account -> Security)" && exit 1)
-	# Joins the compose network and uses the in-network sonarqube:9000, not --network host (CI's choice): host networking
-	# is unreliable on macOS.
-	docker run --rm --network $(COMPOSE_NETWORK) \
+	# Joins the observability project's network and uses the in-network sonarqube:9000, not --network host (CI's choice): host
+	# networking is unreliable on macOS.
+	docker run --rm --network $(OBS_NETWORK) \
 		-e SONAR_HOST_URL=http://sonarqube:9000 -e SONAR_TOKEN=$$SONAR_TOKEN \
 		-v $(PWD):/usr/src -w /usr/src \
 		sonarsource/sonar-scanner-cli@sha256:23ca0f137965d9dff2198074043fd48d386280bc5d0ccac8c8349cea4cf096a9

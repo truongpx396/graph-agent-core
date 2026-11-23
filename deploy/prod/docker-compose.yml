@@ -1,0 +1,39 @@
+# Lean production stack for the DigitalOcean droplet deploy/terraform provisions (runbook: deploy/README.md). A smaller set than the dev stack (deploy/dev/):
+# no Ollama (litellm-config.yaml points at a hosted OpenAI-compatible endpoint), no Langfuse or open-webui, and no MinIO (object storage is
+# DigitalOcean Spaces; the `minio` client talks to any S3-compatible endpoint, see MINIO_* in deploy/prod/prod.env.example).
+#
+# ONE compose project made of the parts under `include`, named as the dev stack's are (each file says what it holds):
+#   infra.yml       Postgres, PgBouncer, the queue's Redis and the answer cache's, Qdrant, LiteLLM
+#   app.yml         the ML service, the API, the two workers, the MCP gateway and the opt-in Telegram bot
+#   gateway.yml     the front door: Caddy, authlimit, Casdoor
+#   collectors.yml  the exporters and agents that feed the observability droplet
+#
+# Two differences from dev, on purpose. There is no tools.yml: the crawler must not run here as it is (a page can steer its headless browser to an internal
+# address: PRODUCTION_REVIEW.md R20, deploy/README.md "The crawler's network") and the OpenSandbox server mounts the Docker socket, so CRAWL4AI_SERVER_URL and
+# OPENSANDBOX_MCP_DOMAIN stay empty and those tools are absent. And the Telegram bot is a container here (app.yml, profile `telegram`) where in dev it is a host
+# process (`make telegram`).
+#
+# The front door is the same as the development stack's (deploy/dev/gateway.yml, profile `gateway`; specs/018 T069, pattern 98): Caddy terminates TLS on three real names
+# and asks authlimit about every request; Casdoor issues the tokens; the API runs in identity mode and trusts only the identity authlimit signs. The
+# routing is deploy/shared/caddy/gateway.caddy, imported by both stacks' Caddyfiles (deploy/dev/caddy/, deploy/prod/caddy/). A domain is therefore REQUIRED: identity needs an https issuer.
+#
+# The Grafana/Prometheus/Loki/Alertmanager stack is NOT here: it runs on a separate, smaller droplet (observability.yml, in this directory) so a
+# metrics or logs spike cannot compete with the app for CPU and memory. collectors.yml carries only what feeds it.
+#
+# Deployed by .github/workflows/deploy.yml: it builds and pushes the app image (root Dockerfile) and the ml-service image to GHCR, rsyncs the files this
+# project is made of, deploy/prod/caddy/ and deploy/shared/caddy/, litellm-config.yaml, postgres-init/ and observability/ to /opt/graph-agent-core, and runs
+# `docker compose --project-directory . -f deploy/prod/docker-compose.yml pull && up -d` over SSH. The app services use `image:`, never `build:`, so the droplet
+# pulls layers and never compiles onnxruntime's dependency chain. The droplet's .env is made once by hand (copy deploy/prod/prod.env.example); CI never touches it.
+#
+# Every path in these files is relative to the repo root, the `include` paths too, which is why compose runs with `--project-directory .` (deploy/dev/docker-compose.yml says why).
+name: graph-agent-core
+
+include:
+  - path: ./deploy/prod/infra.yml
+    project_directory: .
+  - path: ./deploy/prod/app.yml
+    project_directory: .
+  - path: ./deploy/prod/gateway.yml
+    project_directory: .
+  - path: ./deploy/prod/collectors.yml
+    project_directory: .

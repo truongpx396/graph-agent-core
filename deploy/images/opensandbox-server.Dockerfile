@@ -1,4 +1,4 @@
-# opensandbox-server, containerized (docker-compose.yml's opt-in `sandbox`
+# opensandbox-server, containerized (deploy/dev/tools.yml's opt-in `sandbox`
 # profile, `make sandbox-up`, GRAPH_PATTERNS.md pattern 50) — a small wrapper
 # around the pip package, with a non-root user, a healthcheck and a data
 # directory it owns (all below). When this was written no official image
@@ -14,7 +14,7 @@
 # import (the FastPath gRPC stubs were left out of it; fixed in 1.1.1).
 #
 # Needs the host Docker daemon to create sandbox containers — this image
-# gets that via a bind-mounted host /var/run/docker.sock (docker-compose.yml),
+# gets that via a bind-mounted host /var/run/docker.sock (deploy/dev/tools.yml),
 # NOT Docker-in-Docker.
 FROM python:3.13-slim
 

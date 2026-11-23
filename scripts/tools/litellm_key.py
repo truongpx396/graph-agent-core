@@ -52,7 +52,7 @@ import httpx
 from app.adapters.outbound.litellm.model_catalog import admin_base_url
 from app.core.gateway import end_user_id, legacy_end_user_id
 
-# Every alias deploy/litellm/litellm-config.prod.yaml defines (tests/scripts/tools/test_litellm_key.py keeps the two in step). A key lists the
+# Every alias deploy/prod/litellm-config.yaml defines (tests/scripts/tools/test_litellm_key.py keeps the two in step). A key lists the
 # aliases it may call, and an alias missing here is refused for the app, so the tiers an operator attaches later would fail with
 # "key not allowed to access model" until the key was re-minted. Naming one the app does not use yet grants nothing: the budget still applies.
 DEFAULT_MODELS = "chat,chat-medium,chat-strong,embed"
@@ -87,7 +87,7 @@ def _build_parser() -> argparse.ArgumentParser:
     create.add_argument("--rpm-limit", type=int, help="requests per minute across the key")
     create.add_argument("--tpm-limit", type=int, help="tokens per minute across the key")
     create.add_argument("--max-parallel", type=int, help="concurrent requests across the key")
-    create.add_argument("--models", default=DEFAULT_MODELS, help=f"comma-separated aliases the key may call (default {DEFAULT_MODELS}, the ones deploy/litellm/litellm-config.prod.yaml defines); list every alias the app calls")
+    create.add_argument("--models", default=DEFAULT_MODELS, help=f"comma-separated aliases the key may call (default {DEFAULT_MODELS}, the ones deploy/prod/litellm-config.yaml defines); list every alias the app calls")
     create.add_argument("--alias", default="agent-core-app", help="a name to find the key by in LiteLLM's UI")
 
     sub.add_parser("info", help="spend, budget and reset time of the key in LITELLM_APP_KEY")
@@ -128,7 +128,7 @@ def _create(args: argparse.Namespace) -> int:
         print("error: LiteLLM answered without a key", file=sys.stderr)
         return 1
     print(f"Created key {args.alias!r}: ${args.max_budget:g} per {args.budget_duration}, models {payload['models']}.")
-    print("Shown once; put it in LITELLM_APP_KEY (deploy/env/prod.env.example):")
+    print("Shown once; put it in LITELLM_APP_KEY (deploy/prod/prod.env.example):")
     print(key)
     return 0
 

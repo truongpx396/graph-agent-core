@@ -205,7 +205,7 @@ flowchart TB
     IngestWorker -. OTLP push .-> OtelCollector
 ```
 
-- 🚪 **Front door**: `services/authlimit/` ([details](#front-door-authlimit)) turns a Casdoor login into the signed identity the API trusts, for the chat routes and the upload alike, whoever the client is: the web UI, the CLI (it signs in with a browser) and Telegram (one person per Telegram user). The production Caddyfile and compose are not wired to it yet ([Deploying](#-deploying-to-production)); with `make serve` (`AUTH_MODE=headers`) the web UI calls the API directly.
+- 🚪 **Front door**: `services/authlimit/` ([details](#front-door-authlimit)) turns a Casdoor login into the signed identity the API trusts, for the chat routes and the upload alike, whoever the client is: the web UI, the CLI (it signs in with a browser) and Telegram (one person per Telegram user). Production runs behind it too ([Deploying](#-deploying-to-production)); with `make serve` (`AUTH_MODE=headers`) the web UI calls the API directly.
 - 🟥 **Redis** is one Redis Stack used three ways: **Streams** (turn requests, one results stream per request, dead letters, ingest jobs and progress), a **RediSearch vector index** (the semantic cache, pattern 22) and **plain keys** (per-thread lock, cancel flags, submit-dedup claims, Telegram's poll offset, the front door's token buckets).
 - 📡 **OTLP edge** stands for every process that pushes metrics: the API and each worker replica (pattern 43).
 - 🔀 **Graph flow**, including the refusal and dead-end exits (`reject_*`, `context_window_exceeded`, `retry_exhausted`): [GRAPH_PATTERNS.md](docs/GRAPH_PATTERNS.md#graph-flow).
@@ -214,17 +214,17 @@ flowchart TB
 
 ## 🌍 Environments
 
-The same code runs in both; only configuration and the compose file differ.
+The same code runs in both; only configuration and the compose files differ. Both are laid out the same way, one directory each ([deploy/README.md](deploy/README.md), "Layout").
 
-| | 💻 Dev: `docker-compose.yml` | 🌍 Prod: `docker-compose.prod.yml` |
+| | 💻 Dev: `deploy/dev/` | 🌍 Prod: `deploy/prod/` |
 |---|---|---|
-| **LLM** | Native Ollama on the host (`qwen2.5:7b`, `nomic-embed-text`) via `litellm-config.yaml` | Any OpenAI-compatible endpoint via `litellm-config.prod.yaml`: `LLM_API_BASE`, `LLM_API_KEY`, `LLM_CHAT_MODEL`, `LLM_EMBED_MODEL` |
+| **LLM** | Native Ollama on the host (`qwen2.5:7b`, `nomic-embed-text`) via `deploy/dev/litellm-config.yaml` | Any OpenAI-compatible endpoint via `deploy/prod/litellm-config.yaml`: `LLM_API_BASE`, `LLM_API_KEY`, `LLM_CHAT_MODEL`, `LLM_EMBED_MODEL` |
 | **Services** | Full stack: Langfuse, MinIO, open-webui, crawl4ai, opt-in app/sandbox/quality profiles; the exporters are the collectors file | `api`, `agent-worker`, `ingest-worker`, Postgres, Redis, Qdrant, LiteLLM, `ml-service`, behind Caddy (TLS) |
 | **Postgres access** | The containers reach `appdata` and `checkpointer` through PgBouncer (`:6432`, transaction mode, at most 18 server connections per database however many replicas run); LiteLLM and Langfuse connect directly; a host process (`make serve`) uses `:5432` unless pointed at `:6432` ([`.env.example`](.env.example)) | The same service, no published port; Postgres's `max_connections` is written down and a test checks the pooler fits inside it ([WORKER_CONCURRENCY.md](docs/WORKER_CONCURRENCY.md)) |
 | **Object storage** | MinIO | DigitalOcean Spaces (any S3-compatible store) |
 | **Observability** | Optional `make obs-up` (backends and collectors) | Separate droplet, fed by sidecars over the private VPC |
-| **Config** | `.env` from `.env.example` | `/opt/graph-agent-core/.env` from `deploy/env/prod.env.example`, created once by hand, never touched by CI |
-| **Cost caps** | Local models cost $0 | `MAX_COST_USD_PER_TURN=0.50`, `MAX_COST_USD_PER_TENANT_PER_DAY=20.0`; monthly and per-person limits off at `0` ([COST_GOVERNANCE.md](docs/COST_GOVERNANCE.md)) |
+| **Config** | `.env` from `.env.example` | `/opt/graph-agent-core/.env` from `deploy/prod/prod.env.example`, created once by hand, never touched by CI |
+| **Cost caps** | Local models cost $0 | `MAX_COST_USD_PER_TURN=0.50`, `MAX_COST_USD_PER_TENANT_PER_DAY=20.0`; the monthly and per-person limits are off at `0` until set in `.env` (the example starts them at 400, 5 and 100; [COST_GOVERNANCE.md](docs/COST_GOVERNANCE.md)) |
 | **Credits, payments** | Off | Off until `CREDITS_PER_USD` is set (a price is your decision); `BILLING_PROVIDERS` enables a signed webhook ([Credit billing](#credit-billing-optional)) |
 | **Provisioning** | `make up` | Terraform (human-run) + `deploy.yml` (automatic after CI passes on `main`) |
 
@@ -363,7 +363,7 @@ curl -s -N -X POST http://localhost:8000/chat/stream/queued \
 - ✋ **Approvals:** `POST /chat/resume` approves or rejects an `approval_required` event; `POST /chat/cancel` stops the run.
 - 🧵 **Threads:** reuse a `thread_id` to continue a conversation (Langfuse groups traces by it). It belongs to whoever sends on it first (tenant + principal + domain); anyone else gets the same 404 an unknown id gets, so switching identity needs a new one. `telegram:<chat id>` ids are reserved. The check lives at the API; the worker doesn't repeat it (pattern 17).
 - 🔁 **Resubmits:** an identical `(thread_id, message, images)` within `CHAT_SUBMIT_DEDUP_TTL_SECONDS` (10) streams the first attempt's turn.
-- 🚦 **Limits:** the API doesn't limit turns or uploads; the [front door](#front-door-authlimit) does, as a token bucket per tenant and per person on `POST /chat/stream/queued`, `/chat/resume`, `/ingest/upload` and `DELETE /ingest/documents` (defaults in `services/authlimit/routes.json`: 30 a minute per tenant, 10 per person). ⚠️ **The production Caddyfile doesn't route through it yet** (spec 018), so production currently has no limit on turns or uploads. The CLI and the Telegram channel are counted like the web UI: each person has their own bucket, and a refusal reaches them as a message with the wait time. The API's own limit is per source address on the payment webhook (`BILLING_WEBHOOK_RATE_LIMIT_PER_MINUTE`). CORS: `CORS_ALLOWED_ORIGINS`.
+- 🚦 **Limits:** the API doesn't limit turns or uploads; the [front door](#front-door-authlimit) does, as a token bucket per tenant and per person on `POST /chat/stream/queued`, `/chat/resume`, `/ingest/upload` and `DELETE /ingest/documents` (defaults in `services/authlimit/routes.json`: 30 a minute per tenant, 10 per person). Production is behind the same door (`deploy/prod/`, pattern 98), so the limits apply there too. The CLI and the Telegram channel are counted like the web UI: each person has their own bucket, and a refusal reaches them as a message with the wait time. The API's own limit is per source address on the payment webhook (`BILLING_WEBHOOK_RATE_LIMIT_PER_MINUTE`). CORS: `CORS_ALLOWED_ORIGINS`.
 - 📈 **Metrics** are pushed over OTLP; the API has no `/metrics` route.
 - 🖥️ **Web UI:** `make serve`, then http://localhost:8000/. It drives the full approve/reject flow and has a real-browser test (`tests/live/test_chat_ui.py`, pattern 48). Behind the front door (`make authlimit-up-app`) it signs in through Casdoor; `make authlimit-web-check` drives that in a browser.
 
@@ -426,7 +426,7 @@ production limit is 2 GiB).
 
 Three chat tiers, each a gateway alias (the app names aliases, never a provider's model id):
 
-| Tier | Alias | Dev (`litellm-config.yaml`) | Production | Used by |
+| Tier | Alias | Dev (`deploy/dev/litellm-config.yaml`) | Production | Used by |
 |---|---|---|---|---|
 | 🟢 easy | `chat` | qwen2.5:7b, local | `LLM_CHAT_MODEL` | every turn (`CHAT_MODEL=chat`) |
 | 🟡 medium | `chat-medium` | qwen2.5:7b, a local stand-in (same as `chat`) | `LLM_MEDIUM_*`; unset = `chat` | the router's middle tier; a specialist's `AGENT.md` `model:` |
@@ -434,7 +434,7 @@ Three chat tiers, each a gateway alias (the app names aliases, never a provider'
 
 - 💲 **Every local alias states a price** in `model_info` ($0.10 / $0.20 per million input / output tokens for the 7B, $0.20 / $0.40 for the 14B). They're shadow prices: without one LiteLLM reports a local model as unpriced or a flat $0, and no gateway budget can ever trip on $0. Change them if you like, but keep them above 0 ([pattern 74](docs/COST_GOVERNANCE.md)).
 - 🔧 **Strict tool schemas** (`TOOL_CALLS_STRICT`, **off**): leave off on Ollama, where the smallest model calls tools measurably worse with it; turn on only for a provider that enforces strict calling, with `make probe-tools` before and after ([docs/RETRIEVAL_AND_MODEL_PATTERNS.md](docs/RETRIEVAL_AND_MODEL_PATTERNS.md) pattern 74).
-- ♊ **Attaching Gemini** to the medium or strong tier is configuration: the key in `.env` (`GEMINI_API_KEY_MEDIUM` / `GEMINI_API_KEY_STRONG`), the Gemini block commented under `chat-medium` in `deploy/litellm/litellm-config.yaml` (production: the `LLM_MEDIUM_*` / `LLM_STRONG_*` variables), a proxy restart, then `make probe-tools ARGS="--alias chat-medium"`. LiteLLM doesn't know an `openai/<gemini id>`, so state its price in `model_info`. **Not tried against a real key**, and Google doesn't document the streamed `usage` the app meters from, so send one streamed turn too.
+- ♊ **Attaching Gemini** to the medium or strong tier is configuration: the key in `.env` (`GEMINI_API_KEY_MEDIUM` / `GEMINI_API_KEY_STRONG`), the Gemini block commented under `chat-medium` in `deploy/dev/litellm-config.yaml` (production: the `LLM_MEDIUM_*` / `LLM_STRONG_*` variables), a proxy restart, then `make probe-tools ARGS="--alias chat-medium"`. LiteLLM doesn't know an `openai/<gemini id>`, so state its price in `model_info`. **Not tried against a real key**, and Google doesn't document the streamed `usage` the app meters from, so send one streamed turn too.
 
 ### Routing a turn to a medium or strong model
 
@@ -454,7 +454,7 @@ ROUTER_MODE=shadow                # off | shadow | on
 ROUTER_MAX_TIER=strong            # the ceiling: spend is bounded by it
 ```
 
-- **A hosted target** (edit the `chat-medium` / `chat-strong` entry in `deploy/litellm/litellm-config.yaml`, or set `LLM_MEDIUM_*` / `LLM_STRONG_*`) needs OpenAI chat completions with `stream_options.include_usage`, native OpenAI-shape tool calls, a context window of at least 32,000 tokens and a price LiteLLM can find (an unpriced alias steps the turn down a tier rather than refusing it). Nothing in `app/` names a provider.
+- **A hosted target** (edit the `chat-medium` / `chat-strong` entry in `deploy/dev/litellm-config.yaml`, or set `LLM_MEDIUM_*` / `LLM_STRONG_*`) needs OpenAI chat completions with `stream_options.include_usage`, native OpenAI-shape tool calls, a context window of at least 32,000 tokens and a price LiteLLM can find (an unpriced alias steps the turn down a tier rather than refusing it). Nothing in `app/` names a provider.
 - ✅ **Measured:** the label set (`make model-eval KIND=classifier CANDIDATE=labelset-bge-small-en-v1.5 DATASET=route-topics`; numbers in `specs/015-label-sets-and-tiered-routing/research.md`). On this repository's prompts it routes about 5% of turns up a tier.
 - ❓ **Not known:** that the tiers it picks give *better answers*. The label table and rules are policy, and the routing outcomes that exist could not tell a perfect router from a random one. That is what `shadow` is for.
 - 👀 `GET http://localhost:8083/health/models` shows each label set's status; `ModelRouterLabelUnavailable` alerts when only rules decide, `ModelRoutedTierFailing` when routed turns had to be repeated locally.
@@ -558,7 +558,7 @@ Both are clients of the chat API, signed in as a person, so they get the same li
 - 💻 **CLI:** `make chat` opens your browser at the authorization server the first time (the address is also printed), catches the redirect on a fixed loopback port (`CHANNEL_CLI_CALLBACK_PORT`, registered by `make mcp-gateway-bootstrap`), and keeps the session in a file only you can read (`~/.config/graph-agent-core/channel-session.json`), renewed before it expires. Point it at the door with `CHANNEL_API_URL` (and `CHANNEL_CA_FILE` for Caddy's local CA, `make mcp-gateway-ca`); `python -m app.adapters.inbound.channels.cli.chat --sign-out` forgets the session. With `AUTH_MODE=headers` (development, announced loudly by the API) nothing is signed in and the API is reached directly.
 - 📱 **Telegram:** each Telegram user is a person `telegram-<id>` of one tenant (`TELEGRAM_TENANT`, default `DEFAULT_TENANT`); the bot signs in as them with a password it **derives** from `TELEGRAM_PERSON_SECRET` (`openssl rand -hex 32`), so it stores nothing per person. By default an operator adds a person (`make telegram-person ACTION=add TELEGRAM_ID=<id>`) and an unregistered user is told to ask an administrator. `make telegram-person ACTION=disable` ends their sign-in at once (the command prints the `make authlimit-revoke` line that voids a token already issued). Each person has their own conversation per chat, named `telegram:<person>:<chat>`; in a group chat that means one per person.
 - ⚠️ **`TELEGRAM_AUTO_PROVISION=true` lets the bot create the person on a first message, and puts a tenant-wide credential in its environment.** Measured on Casdoor 4.24.0: an application's client id and secret are an administrator's of the whole organization (they reset any person's password). Leave it off, or give the bot a tenant of its own. A leak of `TELEGRAM_PERSON_SECRET` exposes the Telegram people and nobody else, but a Telegram person's password also signs in at the web page.
-- 🔒 **Not changed:** an unattended Telegram turn (`TELEGRAM_APPROVALS=false`) declines an approval pause and never approves it, and with buttons (below) only a tap approves; a redelivered update is one turn; the worker's lock, reclaim and dead letters cover all three clients. Until the production Caddyfile is wired to the door (spec 018, T069), production has no limits for any client.
+- 🔒 **Not changed:** an unattended Telegram turn (`TELEGRAM_APPROVALS=false`) declines an approval pause and never approves it, and with buttons (below) only a tap approves; a redelivered update is one turn; the worker's lock, reclaim and dead letters cover all three clients. Production runs behind the same door (spec 018, T069), so those limits and the signed identity apply to every client there.
 
 ### Telegram: approvals, parallel chats, a webhook, linking
 
@@ -635,7 +635,7 @@ automatically once CI passes on `main`.
 
 1. `terraform apply` (needs a DO token, your SSH key fingerprint and admin IP, and a dedicated CI deploy key).
 2. Add the repo secrets `DROPLET_HOST`, `OBS_DROPLET_HOST`, `DEPLOY_SSH_KEY`.
-3. SSH in once and create each droplet's `.env` from `deploy/env/prod.env.example` (`POSTGRES_PASSWORD`, `LITELLM_MASTER_KEY`, `LLM_*`, `MINIO_*`, `CORS_ALLOWED_ORIGINS`, ...).
+3. SSH in once and create each droplet's `.env` from `deploy/prod/prod.env.example` (the observability droplet's from `deploy/prod/observability.env.example`) (`POSTGRES_PASSWORD`, `LITELLM_MASTER_KEY`, `LLM_*`, `MINIO_*`, `CORS_ALLOWED_ORIGINS`, ...).
 4. Merge to `main`.
 5. Once LiteLLM is up, mint the app's scoped gateway key and put it in `.env` as `LITELLM_APP_KEY` ([Gateway backstop](#gateway-backstop)).
 
@@ -643,7 +643,7 @@ Full runbook, scaling, backups, rollback and teardown: **[deploy/README.md](depl
 
 ### 🚨 Five things that bite on a first deploy
 
-- 🔓 **Production runs in identity mode behind the same front door as the dev stack** (`docker-compose.prod.yml`: Caddy on three real names, `authlimit`, Casdoor, the MCP gateway; [deploy/README.md](deploy/README.md)). A domain is required, and `AUTH_MODE=headers` is never set there. `AUTH_MODE=headers` trusts `X-Tenant-Id`/`X-Principal-Id` as sent: use it only for local runs, or behind a gateway of your own that sets both and discards client copies.
+- 🔓 **Production runs in identity mode behind the same front door as the dev stack** (`deploy/prod/`: Caddy on three real names, `authlimit`, Casdoor, the MCP gateway; [deploy/README.md](deploy/README.md)). A domain is required, and `AUTH_MODE=headers` is never set there. `AUTH_MODE=headers` trusts `X-Tenant-Id`/`X-Principal-Id` as sent: use it only for local runs, or behind a gateway of your own that sets both and discards client copies.
 - 📦 **The images ship no installer.** Built in stages with uv, the prod `api`, worker and `ml-service` containers run read-only with all capabilities dropped, so a change that writes to the image filesystem at runtime fails ([ENGINEERING_PATTERNS.md](docs/ENGINEERING_PATTERNS.md) pattern 76).
 - 🗄️ **SQL migrations aren't applied to an existing volume.** `postgres-init/*.sql` runs only on a fresh volume and the deploy only syncs the files ([Database migrations](#database-migrations)).
 - 🕵️ **The production gateway does not store prompts or answers** (`store_prompts_in_spend_logs: false`; the development file turns it on so the admin UI's log page shows bodies). Its spend log keeps the metadata the caps read. Turning bodies on in production is a deliberate choice with a retention period ([deploy/README.md](deploy/README.md#everyday-operations)).
@@ -652,7 +652,7 @@ Full runbook, scaling, backups, rollback and teardown: **[deploy/README.md](depl
 ### Gateway backstop
 
 The ceilings live in the app, so an app bug can defeat them. LiteLLM sits in front of every model call and can still stop
-spend, but only if the app doesn't send its **master key** (gateway admin, which can't carry a budget). `deploy/compose/docker-compose.prod.yml` sends
+spend, but only if the app doesn't send its **master key** (gateway admin, which can't carry a budget). `deploy/prod/app.yml` sends
 `LITELLM_APP_KEY` when set and falls back to the master key only so an existing deployment keeps running until you mint one:
 
 ```
@@ -715,8 +715,8 @@ hand, in order (`psql -U langfuse -d appdata -f postgres-init/NN-….sql`).
 - 🔭 **Traces:** Langfuse, grouped by `thread_id`.
 - 💵 **Cost:** one usage event per model call (tenant- and principal-scoped, with the concrete model behind each alias) is what the dollar caps sum ([COST_GOVERNANCE.md](docs/COST_GOVERNANCE.md), patterns 38, 51).
 
-`make obs-up` starts the backends, [`docker-compose.observability.yml`](deploy/compose/docker-compose.observability.yml), and the collectors that
-feed them, [`docker-compose.collectors.yml`](deploy/compose/docker-compose.collectors.yml) (the OTel collector, the exporters, cAdvisor, Promtail;
+`make obs-up` starts the backends, [`observability.yml`](deploy/dev/observability.yml), and the collectors that
+feed them, [`collectors.yml`](deploy/dev/collectors.yml) (the OTel collector, the exporters, cAdvisor, Promtail;
 `make collectors-up` starts only those, beside `make up`). Nothing in the app depends on either (`make obs-down` keeps data, `make obs-clean`
 drops it; config in [`observability/`](observability/); prod runs the backends on their own droplet, [deploy/README.md](deploy/README.md)).
 
@@ -835,7 +835,7 @@ until configured**.
 | `make authlimit-test` · `-up` · `-up-app` · `-keys` · `-smoke` · `-revoke` · `-latency` · `-mutants` · `-web-check` | The front door ([commands](#front-door-authlimit)) |
 | **⏰ One-shot jobs** (for cron; nothing schedules them) | |
 | `make ops-digest` · `make followup-sweep` · `make tool-call-dedup-sweep` | The ops digest · the sales follow-up sweep · the dedup-table sweep |
-| `make restore-drill` | Restore backups of a seeded Postgres, Casdoor DB, Qdrant and Redis into fresh containers and time it (needs Docker; `ARGS="--points 50000"`). The backup job is `deploy/backup/backup.sh` (`deploy/README.md`, "Backups and restore") |
+| `make restore-drill` | Restore backups of a seeded Postgres, Casdoor DB, Qdrant and Redis into fresh containers and time it (needs Docker; `ARGS="--points 50000"`). The backup job is `deploy/prod/backup.sh` (`deploy/README.md`, "Backups and restore") |
 | `make answer-sample` | Sample yesterday's conversations and count answers with an invented source number, a missing attribution or a wrong one: the graph's own grounded-claims checks, counts only, advisory (`ARGS="--date YYYY-MM-DD"`). Reads answers across tenants: leave it unscheduled if that is not allowed |
 | `make checkpoint-sweep` | Delete conversations (checkpoints and session rows) older than `CHECKPOINT_RETENTION_DAYS`; **0 is off**, `ARGS=--dry-run` first |
 | **✅ Gates and tools** | |
@@ -844,9 +844,9 @@ until configured**.
 | `make obs-up` · `make obs-down` · `make collectors-up` · `make sandbox-up` | Observability with its collectors · the collectors alone · OpenSandbox (opt-in) |
 
 ⚠️ `make clean`, `make clear-*`, `make obs-clean` and `make restart-all` delete volumes or kill running processes; don't run them
-casually. The compose files live in `deploy/compose/` but resolve paths and `.env` from the repo root, so a bare
-`docker compose up` finds nothing: use the make targets, or
-`docker compose --project-directory . -f deploy/compose/docker-compose.yml up -d`.
+casually. The compose files live in `deploy/dev/` (the stack's entry, `docker-compose.yml`, includes its parts) but resolve paths and `.env` from the repo root, so a bare
+`docker compose up` fails with "no such file": use the make targets, or
+`docker compose --project-directory . -f deploy/dev/docker-compose.yml up -d`.
 
 * * *
 
@@ -920,7 +920,7 @@ anyone who sets the right headers.
 | `make chat` or Telegram answers "No response … is an agent-worker running for this domain?" | Nothing picked the turn up. Start a worker that serves that domain (`make agent-worker-all` serves every one); the channel's `AGENT_DOMAIN` must be among the worker's `AGENT_WORKER_DOMAINS` |
 | Telegram never answers and the webhook is set | Look at `channel_telegram_webhook_total`: `forbidden` means the secret Telegram sends is not `TELEGRAM_WEBHOOK_SECRET` (rotate it and re-run the bot, which registers it again); nothing at all means the proxy is not forwarding `/telegram/*` to the bot's listener or asks for a token there |
 | Telegram says "This approval expired or was already handled", or "You have an approval waiting above" | The buttons live `TELEGRAM_APPROVAL_TTL_SECONDS` and decide once. After they expire, write your message again: the old pause is cleared first. `/cancel` drops a waiting one |
-| Turns are slow | `qwen2.5:7b` runs at about 40 tokens/s on an M4 Pro (a cold load adds about 3 s). A smaller model is faster but silently drops tool calls (`make probe-tools` shows how many), so measure before swapping; a bigger one goes in `litellm-config.yaml`. A cold model can exceed `REQUEST_TIMEOUT_SECONDS` (60 s, `app/agent/runtime/core.py`) on the first call: retry |
+| Turns are slow | `qwen2.5:7b` runs at about 40 tokens/s on an M4 Pro (a cold load adds about 3 s). A smaller model is faster but silently drops tool calls (`make probe-tools` shows how many), so measure before swapping; a bigger one goes in `deploy/dev/litellm-config.yaml`. A cold model can exceed `REQUEST_TIMEOUT_SECONDS` (60 s, `app/agent/runtime/core.py`) on the first call: retry |
 | No Grafana data, or a Prometheus target is down | `make obs-up` and `make up` are independent; both must run. Check http://localhost:9090/targets; a target that predates a LiteLLM config change needs `docker compose up -d litellm` |
 | Readiness returns 503 | The body names the failing dependency, e.g. `ml-service` still downloading its models on first start; `postgres` or `checkpointer` means the pooler or Postgres behind it (`docker compose logs pgbouncer`) |
 | Turns fail with `prepared statement "_pg3_N" does not exist`, or clients wait for a database connection | A connection that prepares statements is going through PgBouncer: every pool must pass `prepare_threshold=None` (`tests/core/test_pool_settings.py` finds the one that does not). Waiting clients: alert `PgBouncerClientsWaiting`, look for an `idle in transaction` session before raising `DEFAULT_POOL_SIZE` ([ENGINEERING_PATTERNS.md](docs/ENGINEERING_PATTERNS.md) 95) |

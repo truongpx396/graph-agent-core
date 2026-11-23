@@ -1,0 +1,104 @@
+# Production stack (droplet), part of docker-compose.yml: the exporters and agents that feed the observability droplet (the counterpart of deploy/dev/collectors.yml, which is an overlay there).
+# Observability sidecars: relay this droplet's metrics and logs to the observability droplet (observability.yml in this directory; its header has the
+# topology). None publishes a host port; only otel-collector-agent and promtail reach off-box (OTLP to OBS_COLLECTOR_ENDPOINT, Loki push to
+# LOKI_PUSH_HOST, both in .env), so the firewall needed no new inbound rule.
+
+services:
+  # Agent-mode collector: the api and workers push their OTel metrics here (OTEL_EXPORTER_OTLP_ENDPOINT), and it scrapes node-exporter and cadvisor locally
+  # before forwarding everything to the observability droplet's collector (observability/otel-collector/config.agent.yaml). With this agent + gateway
+  # split only port 4318 crosses the droplets' firewall.
+  otel-collector-agent:
+    image: otel/opentelemetry-collector-contrib:latest
+    restart: unless-stopped
+    cpus: "0.2"
+    mem_limit: 256m
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    environment:
+      OBS_COLLECTOR_ENDPOINT: ${OBS_COLLECTOR_ENDPOINT}
+    volumes:
+      - ./observability/otel-collector/config.agent.yaml:/etc/otelcol-contrib/config.yaml:ro
+    depends_on:
+      - node-exporter
+      - cadvisor
+
+  # Scraped by `otel-collector-agent` (observability/otel-collector/config.agent.yaml) and relayed to the observability droplet, where the
+  # PgBouncer alerts evaluate. No host port.
+  pgbouncer-exporter:
+    image: prometheuscommunity/pgbouncer-exporter:v0.12.1@sha256:30f31b6c2efdad3647f8182cc7c1a3a19e42bae5d17387694989f969371c230d
+    restart: unless-stopped
+    cpus: "0.1"
+    mem_limit: 64m
+    init: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    environment:
+      PGBOUNCER_EXPORTER_CONNECTION_STRING: postgres://langfuse:${POSTGRES_PASSWORD}@pgbouncer:6432/pgbouncer?sslmode=disable
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+
+  # Scraped by `otel-collector-agent` and relayed to the observability droplet, where `RedisQueueMemoryHigh` evaluates. It watches `redis` (the queue), not `redis-cache`: a cache
+  # is MEANT to sit near its `maxmemory` and evict, so an 80% alert on it would only cry wolf. No host port.
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.97.0@sha256:f5f903fbe77571d455ede0453b084d6840bc62fc105efac001034421cab83b99
+    restart: unless-stopped
+    cpus: "0.1"
+    mem_limit: 64m
+    init: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    restart: unless-stopped
+    cpus: "0.05"
+    mem_limit: 64m
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+
+  # Native Linux Docker, so the standard recipe (privileged + /dev/kmsg) works and container names resolve: no container-name-mapper, unlike the dev
+  # stack's collectors.yml.
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    restart: unless-stopped
+    cpus: "0.2"
+    mem_limit: 256m
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+
+  # Reads THIS droplet's Docker socket and log files, so it must run beside the containers it tails, and pushes to the observability droplet's Loki
+  # (observability/promtail/promtail-config.prod.yaml says why it cannot live in observability.yml).
+  promtail:
+    image: grafana/promtail:latest
+    restart: unless-stopped
+    cpus: "0.1"
+    mem_limit: 128m
+    command: ["-config.file=/etc/promtail/promtail-config.yaml", "-config.expand-env=true"]
+    environment:
+      LOKI_PUSH_HOST: ${LOKI_PUSH_HOST}
+    volumes:
+      - ./observability/promtail/promtail-config.prod.yaml:/etc/promtail/promtail-config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro

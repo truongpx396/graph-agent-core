@@ -14,20 +14,20 @@ GATEWAY_SECRETS := $(GATEWAY_DIR)/secrets.env
 AUTHLIMIT_DIR      := $(HOME)/.cache/graph-agent-core-authlimit
 AUTHLIMIT_KEYS_DIR := $(AUTHLIMIT_DIR)/keys
 
-# Compose files live under deploy/compose/ but use repo-root paths and read `.env` from the root. `--project-directory .` pins that:
-# without it paths resolve under deploy/compose/, `.env` is ignored and the project name silently becomes `compose`, orphaning volumes
-# and breaking `sonar-scan`'s network. It also lets deploy.yml mirror this layout. Consequence: a bare `docker compose up` finds no file.
-COMPOSE     := docker compose --project-directory . -f deploy/compose/docker-compose.yml
-COMPOSE_OBS := docker compose --project-directory . -f deploy/compose/docker-compose.observability.yml
+# The compose files live under deploy/dev/ (docker-compose.yml is the entry and `include`s the parts) but every path in them, the `include` paths too,
+# is relative to the repo root, and `.env` is read from the root. `--project-directory .` pins that: without it the first `include` fails ("no such
+# file"), where the old single file silently took the project name `compose` and orphaned the volumes. It also lets deploy.yml mirror this layout.
+# Consequence: a bare `docker compose up` finds no file.
+COMPOSE     := docker compose --project-directory . -f deploy/dev/docker-compose.yml
+COMPOSE_OBS := docker compose --project-directory . -f deploy/dev/observability.yml
 # The collectors file is an overlay on the app's project (the exporters need its network), not a project of its own. COLLECTORS names its
 # services, so `up --no-deps` and `rm` touch only them.
 COLLECTORS         := otel-collector promtail postgres-exporter redis-exporter pgbouncer-exporter node-exporter cadvisor container-name-mapper
-COMPOSE_COLLECTORS := $(COMPOSE) -f deploy/compose/docker-compose.collectors.yml
-# Its containers belong to the project but not to docker-compose.yml; without this every `make up` warns about them as orphans.
+COMPOSE_COLLECTORS := $(COMPOSE) -f deploy/dev/collectors.yml
+# Its containers belong to the project but not to its docker-compose.yml; without this every `make up` warns about them as orphans.
 export COMPOSE_IGNORE_ORPHANS := true
-# The default network is `<project>_default`; with no `name:` the project is the checkout directory's name (lowercased, invalid
-# characters dropped; COMPOSE_PROJECT_NAME wins). Derived so a clone or worktree under any name finds its network.
-COMPOSE_NETWORK := $(or $(COMPOSE_PROJECT_NAME),$(shell basename "$(CURDIR)" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-'))_default
+# SonarQube is in the observability project (profile `quality`), whose name its file fixes, so its network is fixed too: `sonar-scan` joins it.
+OBS_NETWORK := agent-core-observability_default
 
 # Named explicitly: the included files bring targets of their own.
 .DEFAULT_GOAL := help
@@ -136,8 +136,10 @@ down:  ## Stop all services (keep volumes), the collectors included
 	$(COMPOSE) down --remove-orphans
 
 # `down` skips containers started under a profile; `--profile '*'` reaches them all.
-down-all: mcp-gateway-secrets  ## Stop and remove every container of the dev stack, any profile, plus observability and the collectors; keeps volumes
-	$(MAKE) obs-down
+down-all: mcp-gateway-secrets  ## Stop and remove every container of the dev stack, any profile, plus observability (SonarQube included) and the collectors; keeps volumes
+	# `--profile '*'` on the observability project too: SonarQube is its `quality` profile, which `obs-down` leaves alone on purpose.
+	$(COMPOSE_OBS) --profile '*' down
+	$(MAKE) collectors-down
 	$(GATEWAY_COMPOSE) --profile '*' down
 
 clear-cache:  ## Flush the semantic cache (Redis) only — leaves the agent-worker queue and other volumes intact

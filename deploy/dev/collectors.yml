@@ -1,13 +1,13 @@
 # Telemetry collectors (`make collectors-up`): the OTel collector, the exporters, cAdvisor and Promtail that feed the stack in
-# docker-compose.observability.yml. Optional: the app runs the same without them.
+# observability.yml. Optional: the app runs the same without them.
 #
-# An overlay on the app stack (docker-compose.yml, same project), not a project of its own: the exporters reach postgres, redis and
+# An overlay on the app stack (docker-compose.yml: infra.yml and the other parts, same project), not a project of its own: the exporters reach postgres, redis and
 # pgbouncer by service name, so they must share its network. Each publishes a host port instead, which Prometheus (another project)
 # scrapes through host.docker.internal.
 services:
   # --- Metrics ---
 
-  # What the app pushes its OTel metrics to (OTEL_EXPORTER_OTLP_ENDPOINT in docker-compose.yml's `x-app-env`).
+  # What the app pushes its OTel metrics to (OTEL_EXPORTER_OTLP_ENDPOINT in app.yml's `x-app-env`).
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest
     command: ["--config=/etc/otelcol-contrib/config.yaml"]

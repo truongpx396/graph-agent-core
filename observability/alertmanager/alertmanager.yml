@@ -1,4 +1,4 @@
-# LOCAL/DEMO ONLY. docker-compose.observability.prod.yml mounts alertmanager.prod.yml, which
+# LOCAL/DEMO ONLY. deploy/prod/observability.yml mounts alertmanager.prod.yml, which
 # has a real receiver; never mount this file in production (it delivers nothing).
 #
 # No real notification channel wired up by default — this is a local/demo

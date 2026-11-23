@@ -1,4 +1,4 @@
-"""`deploy/backup/backup.sh` (PRODUCTION_REVIEW.md R26), run for real against a fake `docker` on PATH.
+"""`deploy/prod/backup.sh` (PRODUCTION_REVIEW.md R26), run for real against a fake `docker` on PATH.
 
 The script's only outside world is `docker compose exec/run`, so a stand-in that logs every call, prints canned output and can be told to fail runs the real bash: what it
 checks is the script's own logic, which is where a backup job goes wrong quietly. It proves: a backup is complete only when its directory has lost the `.partial`
@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[3]
-SCRIPT = REPO / "deploy" / "backup" / "backup.sh"
+SCRIPT = REPO / "deploy" / "prod" / "backup.sh"
 
 FAKE_DOCKER = r'''#!/usr/bin/env python3
 """A stand-in for `docker compose ...`. Logs argv; FAKE_FAIL=<word> makes any call whose argv contains that word exit 1; FAKE_CORRUPT=<db> makes that db's dump unreadable."""

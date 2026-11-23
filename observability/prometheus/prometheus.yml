@@ -1,6 +1,6 @@
 # Scrapes the app's OTel metrics (through the otel-collector's Prometheus exporter) and the infra exporters of the app stack. Every target
-# is a port published by docker-compose.collectors.yml or docker-compose.yml, reached through `host.docker.internal`: this stack shares no
-# network with them (docker-compose.observability.yml). A target whose stack is not up shows as down; nothing in the app depends on this one.
+# is a port published by deploy/dev/collectors.yml or the dev stack (deploy/dev/docker-compose.yml), reached through `host.docker.internal`: this stack shares no
+# network with them (deploy/dev/observability.yml). A target whose stack is not up shows as down; nothing in the app depends on this one.
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
@@ -51,7 +51,7 @@ scrape_configs:
     static_configs:
       - targets: ["host.docker.internal:8083"]
 
-  # postgres-exporter / redis-exporter (docker-compose.collectors.yml).
+  # postgres-exporter / redis-exporter (deploy/dev/collectors.yml).
   - job_name: postgres
     static_configs:
       - targets: ["host.docker.internal:9187"]
@@ -60,13 +60,13 @@ scrape_configs:
     static_configs:
       - targets: ["host.docker.internal:9121"]
 
-  # pgbouncer-exporter (docker-compose.collectors.yml): the pool and wait gauges the PgBouncer alerts read. In production the same job name comes
+  # pgbouncer-exporter (deploy/dev/collectors.yml): the pool and wait gauges the PgBouncer alerts read. In production the same job name comes
   # through the app droplet's otel-collector-agent (observability/otel-collector/config.agent.yaml).
   - job_name: pgbouncer
     static_configs:
       - targets: ["host.docker.internal:9127"]
 
-  # node-exporter / cadvisor (docker-compose.collectors.yml). Their dashboard never filters on job= (its $server variable is
+  # node-exporter / cadvisor (deploy/dev/collectors.yml). Their dashboard never filters on job= (its $server variable is
   # label_values(node_boot_time_seconds, instance)), so these names only match the jobs above.
   - job_name: node
     static_configs:
