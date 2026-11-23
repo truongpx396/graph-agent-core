@@ -1,6 +1,6 @@
 # Single-binary, filesystem-backed Loki — no object store dependency,
 # consistent with this app's fully-offline/self-hosted posture everywhere
-# else (see the main docker-compose.yml's MinIO comment for the same
+# else (see deploy/dev/infra.yml's MinIO comment for the same
 # reasoning applied to object storage).
 auth_enabled: false
 

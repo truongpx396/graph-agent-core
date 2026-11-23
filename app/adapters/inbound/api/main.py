@@ -130,7 +130,7 @@ app.add_middleware(WebhookRateLimitMiddleware)
 
 # "*" (default) is fine for a local demo — the web UI is same-origin and
 # never touches CORS. A real multi-origin deployment sets
-# CORS_ALLOWED_ORIGINS to a comma-separated allowlist (deploy/env/prod.env.example).
+# CORS_ALLOWED_ORIGINS to a comma-separated allowlist (deploy/prod/prod.env.example).
 app.add_middleware(
     CORSMiddleware,
     # nosemgrep: python.fastapi.security.wildcard-cors.wildcard-cors -- gated behind CORS_ALLOWED_ORIGINS, not a hardcoded wildcard; see comment above.

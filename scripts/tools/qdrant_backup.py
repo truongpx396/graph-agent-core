@@ -3,7 +3,7 @@
     python -m scripts.tools.qdrant_backup --out /backup          # a snapshot of each collection, and the aliases, into /backup
     python -m scripts.tools.qdrant_backup --restore /backup      # recreate the collections and the aliases from /backup
 
-Qdrant's image has no `curl`, so the snapshot is taken from the app image over the compose network (`deploy/backup/backup.sh`). A snapshot is made per PHYSICAL
+Qdrant's image has no `curl`, so the snapshot is taken from the app image over the compose network (`deploy/prod/backup.sh`). A snapshot is made per PHYSICAL
 collection (`docs-<hash>`) and does not carry the alias the app reads and writes through (`docs-live`, pattern 67), so the aliases are written beside the snapshots
 and put back on restore: a restored collection the app cannot reach by its alias would look empty. The snapshot stays on the server only for the length of the
 download (it is deleted after), so repeated backups do not fill Qdrant's disk.

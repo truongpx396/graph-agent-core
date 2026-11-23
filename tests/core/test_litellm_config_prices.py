@@ -20,8 +20,8 @@ from app.agent.cost.pricing import parse_model_info
 from scripts.tools import litellm_key
 
 REPO = Path(__file__).resolve().parents[2]
-DEV = REPO / "deploy/litellm/litellm-config.yaml"
-PROD = REPO / "deploy/litellm/litellm-config.prod.yaml"
+DEV = REPO / "deploy/dev/litellm-config.yaml"
+PROD = REPO / "deploy/prod/litellm-config.yaml"
 
 
 def _config(path: Path) -> dict:

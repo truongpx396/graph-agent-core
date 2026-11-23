@@ -1,6 +1,6 @@
 """The app's pools against a REAL PgBouncer in transaction mode (specs/022; ENGINEERING_PATTERNS.md 95).
 
-The pooler is the shipped service from `docker-compose.yml` (`tests/containers.py::ensure_pgbouncer`), made stricter than production: it refuses
+The pooler is the shipped service from `deploy/dev/infra.yml` (`tests/containers.py::ensure_pgbouncer`), made stricter than production: it refuses
 prepared statements outright and has three server connections for the thirty clients below, so a statement prepared on one server connection
 is routinely asked for on another. That is the failure a unit test cannot see and a light manual run does not trigger (a single client keeps
 reusing one server connection, so the default `prepare_threshold` of 5 passed a 60-query run and failed ~15% of a heavier one).

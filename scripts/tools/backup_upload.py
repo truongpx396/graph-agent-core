@@ -4,7 +4,7 @@
     python -m scripts.tools.backup_upload --latest --max-age-hours 30                    # exit 1 if the newest backup is older, or there is none
     python -m scripts.tools.backup_upload --download backups/20261115T021700Z --to /restore   # fetch a backup back, every file checked against its manifest
 
-`deploy/backup/backup.sh` runs the first from the app image (it has the object-storage settings). A backup is COMPLETE if and only if its `manifest.json` exists:
+`deploy/prod/backup.sh` runs the first from the app image (it has the object-storage settings). A backup is COMPLETE if and only if its `manifest.json` exists:
 it is uploaded last, after every file, and lists each file's size and SHA-256, so a run that died halfway leaves files with no manifest and `--latest` does not count
 it. The bucket is the uploads' own (`MINIO_BUCKET`), under `backups/`: set a lifecycle rule on that prefix in the Spaces console to expire old ones. Nothing here deletes.
 

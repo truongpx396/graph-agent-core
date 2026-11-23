@@ -1,10 +1,10 @@
-# Prod counterpart of docker-compose.observability.yml, run on the SEPARATE, smaller droplet deploy/terraform provisions
+# Prod counterpart of deploy/dev/observability.yml, run on the SEPARATE, smaller droplet deploy/terraform provisions
 # (digitalocean_droplet.observability), so a metrics or logs spike cannot compete with the app for CPU and memory, and losing this box never touches
 # the app's data. Deployed by .github/workflows/deploy.yml's `deploy-observability` job, independently of the app droplet.
 #
 # Unlike the dev file, nothing bridges through `host.docker.internal`: the app droplet reaches IN, over the two ports deploy/terraform/main.tf's
 # digitalocean_firewall.observability scopes to the VPC's CIDR: OTLP (4318, from its otel-collector-agent) and Loki's push (3100, from its promtail).
-# docker-compose.prod.yml has the other half of the topology.
+# docker-compose.yml (this directory) has the other half of the topology.
 #
 # Grafana is the only service meant for a browser (behind `caddy`, with a real login via GRAFANA_ADMIN_PASSWORD, not the dev file's anonymous
 # viewer). Prometheus, Alertmanager and Loki publish no host port beyond the two above.
@@ -47,7 +47,7 @@ services:
       - ./observability/alertmanager/alertmanager.prod.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager:/alertmanager
     environment:
-      ALERTMANAGER_SLACK_WEBHOOK_URL: ${ALERTMANAGER_SLACK_WEBHOOK_URL:?set ALERTMANAGER_SLACK_WEBHOOK_URL in this droplet's .env (see deploy/env/observability.prod.env.example) - without a receiver no alert is ever delivered}
+      ALERTMANAGER_SLACK_WEBHOOK_URL: ${ALERTMANAGER_SLACK_WEBHOOK_URL:?set ALERTMANAGER_SLACK_WEBHOOK_URL in this droplet's .env (see deploy/prod/observability.env.example) - without a receiver no alert is ever delivered}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-
@@ -68,9 +68,9 @@ services:
       - "3100:3100"   # Loki push — what the app droplet's promtail pushes to
 
   # Continuous profiling (specs/022): the app droplet's api and workers push CPU profiles here over the VPC when PYROSCOPE_SERVER_ADDRESS is set in its
-  # .env (deploy/env/prod.env.example), like OTLP and Loki; Grafana reads them through the Pyroscope datasource. No authentication, the same posture as
+  # .env (deploy/prod/prod.env.example), like OTLP and Loki; Grafana reads them through the Pyroscope datasource. No authentication, the same posture as
   # those two: the firewall scopes 4040 to the VPC (deploy/terraform digitalocean_firewall.observability) and profiles hold function names, never request
-  # data. Flags and sizing: docker-compose.observability.yml.
+  # data. Flags and sizing: deploy/dev/observability.yml.
   pyroscope:
     image: grafana/pyroscope:2.3.2@sha256:78c3b509f2ad98a6974b38c6f2135d5daf9597809532560e9ca29f9b43aa339e
     restart: unless-stopped
@@ -105,7 +105,7 @@ services:
       - prometheus
       - loki
 
-  # Reverse proxy and TLS in front of Grafana only, like docker-compose.prod.yml's `caddy` in front of `api`.
+  # Reverse proxy and TLS in front of Grafana only, like gateway.yml's `caddy` in front of `api`.
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -115,7 +115,7 @@ services:
     environment:
       OBS_SITE_ADDRESS: ${OBS_DOMAIN_NAME:-:80}
     volumes:
-      - ./deploy/caddy/Caddyfile.observability:/etc/caddy/Caddyfile:ro
+      - ./deploy/prod/caddy/Caddyfile.observability:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:

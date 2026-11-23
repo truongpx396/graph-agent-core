@@ -145,7 +145,7 @@ def test_the_example_for_running_the_api_alone_chooses_header_mode_explicitly():
 
 def test_the_production_api_is_identity_mode_with_an_address_that_passes_the_startup_check():
     """The compose file sets these (pattern 98), not the env example: an operator has nothing to get wrong, and the API reads what this file gives it."""
-    environment = yaml.safe_load((REPO / "deploy/compose/docker-compose.prod.yml").read_text(encoding="utf-8"))["services"]["api"]["environment"]
+    environment = yaml.safe_load((REPO / "deploy/prod/app.yml").read_text(encoding="utf-8"))["services"]["api"]["environment"]
 
     assert environment["AUTH_MODE"] == "identity"
     check_settings(SimpleNamespace(auth_mode=environment["AUTH_MODE"], authlimit_keys_url=environment["AUTHLIMIT_KEYS_URL"]))
@@ -153,4 +153,4 @@ def test_the_production_api_is_identity_mode_with_an_address_that_passes_the_sta
 
 def test_the_production_example_never_offers_header_mode():
     """It is what an operator copies onto a droplet a stranger can reach: any client could claim any tenant."""
-    assert _example("deploy/env/prod.env.example").get("AUTH_MODE", "identity") == "identity"
+    assert _example("deploy/prod/prod.env.example").get("AUTH_MODE", "identity") == "identity"

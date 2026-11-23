@@ -1,7 +1,7 @@
 # Production LiteLLM proxy config — unlike litellm-config.yaml (which
 # targets a native macOS Ollama via host.docker.internal, only reachable on
 # a dev machine), this points at a real hosted OpenAI-compatible endpoint
-# via env vars docker-compose.prod.yml passes through, so the same image
+# via env vars deploy/prod/infra.yml passes through, so the same image
 # works against OpenAI, Anthropic's OpenAI-compatible endpoint, a hosted
 # vLLM/Ollama instance, or anything else that speaks the OpenAI API — a
 # config change, not a code/image change (same model-alias architecture
@@ -67,7 +67,7 @@ litellm_settings:
   num_retries: 2
   request_timeout: 120
   # No Langfuse callback here — this lean stack ships no Langfuse
-  # container (see docker-compose.prod.yml's own header). Prometheus stays
+  # container (see deploy/prod/docker-compose.yml's own header). Prometheus stays
   # since it's just an exposed /metrics endpoint, no extra service needed.
   success_callback: ["prometheus"]
   failure_callback: ["prometheus"]

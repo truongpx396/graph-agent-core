@@ -1,24 +1,24 @@
 # The app's own processes on this machine, not in containers. Included by the Makefile.
 
-# --- API and MCP servers ---
+##@ API and MCP servers
 
+# --reload-dir app: uvicorn otherwise watches the whole tree incl. .venv (17k+ files), a steady CPU load
+# that slowed chat turns next to Ollama.
 serve:  ## Start the FastAPI service (http://localhost:8000/docs)
-	# --reload-dir app: uvicorn otherwise watches the whole tree incl. .venv (17k+ files), a steady CPU load
-	# that slowed chat turns next to Ollama.
 	uvicorn app.adapters.inbound.api.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
 
-mcp-serve:  ## MCP server exposing query_employees over stdio; needs `make up` and MCP_TENANT + MCP_PRINCIPAL (the identity it acts for) in .env or exported
+mcp-serve:  ## MCP server (query_employees) over stdio; needs `make up`, MCP_TENANT and MCP_PRINCIPAL
 	python -m app.adapters.inbound.mcp.server
 
 mcp-inspect:  ## MCP Inspector against app/adapters/inbound/mcp/server.py (set MCP_TENANT + MCP_PRINCIPAL first)
 	mcp dev app/adapters/inbound/mcp/server.py
 
-mcp-serve-ops:  ## MCP server exposing fetch_metrics_summary/list_recent_incidents over stdio; needs `make up` and MCP_PRINCIPAL
+mcp-serve-ops:  ## MCP server (fetch_metrics_summary, list_recent_incidents) over stdio; needs `make up` and MCP_PRINCIPAL
 	python -m app.adapters.inbound.mcp.ops_server
 
-# --- Queue consumers ---
+##@ Queue consumers
 
-agent-worker:  ## Redis Streams agent worker for the Ecorp domain (run several to scale); AGENT_WORKER_DOMAINS=support,ops picks others
+agent-worker:  ## Agent queue worker for the Ecorp domain (run several to scale); AGENT_WORKER_DOMAINS=support,ops picks others
 	python -m app.adapters.inbound.workers.agent_worker
 
 agent-worker-all:  ## One agent worker serving every domain (ecorp, support, ops, sales)
@@ -27,24 +27,24 @@ agent-worker-all:  ## One agent worker serving every domain (ecorp, support, ops
 ingest-worker:  ## Document-ingestion worker for POST /ingest/upload (run several to scale)
 	python -m app.adapters.inbound.workers.ingest_worker
 
-billing-export-worker:  ## Drain billing_export_outbox to the providers that bill on usage, in a loop (ARGS=--once for one pass; set BILLING_PROVIDERS as for the API and workers)
+billing-export-worker:  ## Drain billing_export_outbox to the usage-billing providers in a loop (ARGS=--once for one pass)
 	python -m credit_billing.cli.export_worker $(ARGS)
 
-credit-reconcile-worker:  ## credit-reconcile as a loop: a pass every CREDIT_RECONCILE_INTERVAL_SECONDS, gauges refreshed every minute
+credit-reconcile-worker:  ## credit-reconcile as a loop (a pass every CREDIT_RECONCILE_INTERVAL_SECONDS)
 	python -m credit_billing.cli.reconcile --loop $(ARGS)
 
-usage-reconcile-worker:  ## usage-reconcile as a loop: a pass every USAGE_RECONCILE_INTERVAL_SECONDS, drift gauge refreshed every minute
+usage-reconcile-worker:  ## usage-reconcile as a loop (a pass every USAGE_RECONCILE_INTERVAL_SECONDS)
 	python -m scripts.jobs.usage_reconcile --loop $(ARGS)
 
-# --- Channels ---
+##@ Channels
 
-chat:  ## Interactive agent CLI; turns go through the queue, so it needs `make up` and a worker (`make agent-worker`); AGENT_DOMAIN=support|ops|sales picks another domain (`make agent-worker-all`)
+chat:  ## Interactive agent CLI; needs `make up` and a worker; AGENT_DOMAIN=support|ops|sales picks another domain
 	python -m app.adapters.inbound.channels.cli.chat
 
 chat-hitl:  ## Interactive CLI with tool approval (same worker requirement as `make chat`)
 	python -m app.adapters.inbound.channels.cli.chat --hitl
 
-telegram:  ## Telegram bot for the Ecorp domain; needs TELEGRAM_BOT_TOKEN and `make agent-worker`; approvals appear as Approve/Reject buttons (specs/021)
+telegram:  ## Telegram bot for the Ecorp domain (needs TELEGRAM_BOT_TOKEN and `make agent-worker`); approvals are buttons
 	python -m app.adapters.inbound.channels.telegram.bot
 
 telegram-support:  ## Telegram bot as the support copilot; needs a worker serving support (`make agent-worker-all`)
@@ -53,17 +53,17 @@ telegram-support:  ## Telegram bot as the support copilot; needs a worker servin
 telegram-sales:  ## Telegram bot as the sales concierge; needs a worker serving sales (`make agent-worker-all`)
 	AGENT_DOMAIN=sales python -m app.adapters.inbound.channels.telegram.bot
 
-# --- Helpers ---
+##@ Helpers
 
-restart-all:  ## Kill and relaunch the API, one agent worker for every domain and the ingest worker as background host processes (logs in var/), then `make ingest` and `make index-skills`. Host dev only, not for `up-app`
+# `serve --reload` runs the real server as a multiprocessing child that the pkill above never matches; if its
+# reloader parent died, the child stays orphaned on :8000 serving stale code. Kill whatever holds the port.
+# A killed process lingers: a fixed `sleep 1` twice left a stale worker running beside a new duplicate (two
+# consumers on one Redis group) and kept a code change from taking effect. Poll for exit; SIGKILL after 10s.
+restart-all:  ## Relaunch the API, an all-domain worker and the ingest worker as background host processes (logs in var/), then ingest
 	pkill -f 'uvicorn app\.adapters\.inbound\.api\.main:app' 2>/dev/null || true
-	# `serve --reload` runs the real server as a multiprocessing child that the pkill above never matches; if its
-	# reloader parent died, the child stays orphaned on :8000 serving stale code. Kill whatever holds the port.
 	lsof -tiTCP:8000 -sTCP:LISTEN 2>/dev/null | xargs -r kill 2>/dev/null || true
 	pkill -f 'app\.adapters\.inbound\.workers\.agent_worker' 2>/dev/null || true
 	pkill -f 'app\.adapters\.inbound\.workers\.ingest_worker' 2>/dev/null || true
-	# A killed process lingers: a fixed `sleep 1` twice left a stale worker running beside a new duplicate (two
-	# consumers on one Redis group) and kept a code change from taking effect. Poll for exit; SIGKILL after 10s.
 	for i in $$(seq 1 20); do \
 		lsof -tiTCP:8000 -sTCP:LISTEN >/dev/null 2>&1 || pgrep -f 'app\.adapters\.inbound\.workers\.agent_worker' >/dev/null 2>&1 || pgrep -f 'app\.adapters\.inbound\.workers\.ingest_worker' >/dev/null 2>&1 || break; \
 		sleep 0.5; \
@@ -78,5 +78,5 @@ restart-all:  ## Kill and relaunch the API, one agent worker for every domain an
 	$(MAKE) ingest
 	$(MAKE) index-skills
 
-fake-llm:  ## Fake concurrent LLM (loadtest/fake_llm_server.py, :9009) to load-test agent_worker's concurrency without Ollama's -np 1 ceiling
+fake-llm:  ## Fake concurrent LLM on :9009 to load-test the worker without Ollama's -np 1 ceiling
 	uvicorn loadtest.fake_llm_server:app --host 0.0.0.0 --port 9009

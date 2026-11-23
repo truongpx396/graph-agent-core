@@ -49,7 +49,7 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       # App image — same one Dockerfile/image api, agent-worker, and
-      # ingest-worker all share in docker-compose.prod.yml (just a
+      # ingest-worker all share in deploy/prod/app.yml (just a
       # different `command:` each), see that Dockerfile's own header.
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -128,7 +128,7 @@ jobs:
             deploy@${{ secrets.DROPLET_HOST }} \
             "echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin"
 
-      # Config/compose files only — never .env (see docker-compose.prod.yml's
+      # Config/compose files only — never .env (see deploy/prod/docker-compose.yml's
       # own header: secrets live only on the droplet, created once by hand).
       # --delete is scoped to postgres-init/ and observability/ specifically,
       # not the whole target dir, so it can't ever touch the
@@ -136,20 +136,23 @@ jobs:
       # /opt/graph-agent-core.
       - name: Sync compose/config files to the droplet
         run: |
-          # -R keeps each file's repo path (deploy/compose/..., deploy/caddy/...),
-          # so the droplet mirrors the repo layout and the compose file's
-          # repo-root-relative mounts (./deploy/caddy, ./postgres-init, ...)
-          # resolve identically there and in dev. Caddy mounts the whole
-          # directory because Caddyfile imports gateway.caddy: ship both.
+          # -R keeps each file's repo path (deploy/prod/..., deploy/shared/...),
+          # so the droplet mirrors the repo layout and the compose files'
+          # repo-root-relative paths (the `include`s, ./deploy/prod/caddy,
+          # ./postgres-init, ...) resolve identically there and in dev. The
+          # entry file includes the other four, so ship all five: a missing one
+          # fails `docker compose` at parse time, before it touches a container.
+          # The Caddyfile imports ../../shared/caddy/gateway.caddy: ship both.
           rsync -azR -e "ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts" \
-            deploy/compose/docker-compose.prod.yml \
-            deploy/caddy/Caddyfile deploy/caddy/gateway.caddy \
-            deploy/litellm/litellm-config.prod.yaml \
+            deploy/prod/docker-compose.yml deploy/prod/infra.yml deploy/prod/app.yml \
+            deploy/prod/gateway.yml deploy/prod/collectors.yml \
+            deploy/prod/caddy/Caddyfile deploy/shared/caddy/gateway.caddy \
+            deploy/prod/litellm-config.yaml \
             deploy@${{ secrets.DROPLET_HOST }}:/opt/graph-agent-core/
           rsync -az --delete -e "ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts" \
             postgres-init/ \
             deploy@${{ secrets.DROPLET_HOST }}:/opt/graph-agent-core/postgres-init/
-          # otel-collector-agent + promtail configs (docker-compose.prod.yml's
+          # otel-collector-agent + promtail configs (deploy/prod/collectors.yml's
           # observability sidecars) — this app droplet only ever needs its
           # OWN agent-side configs, not the gateway-side ones the
           # deploy-observability job below ships to the other droplet.
@@ -164,8 +167,8 @@ jobs:
           ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts \
             deploy@${{ secrets.DROPLET_HOST }} \
             "cd /opt/graph-agent-core && \
-             IMAGE_TAG=$IMAGE_TAG docker compose --project-directory . -f deploy/compose/docker-compose.prod.yml pull && \
-             IMAGE_TAG=$IMAGE_TAG docker compose --project-directory . -f deploy/compose/docker-compose.prod.yml up -d --remove-orphans && \
+             IMAGE_TAG=$IMAGE_TAG docker compose --project-directory . -f deploy/prod/docker-compose.yml pull && \
+             IMAGE_TAG=$IMAGE_TAG docker compose --project-directory . -f deploy/prod/docker-compose.yml up -d --remove-orphans && \
              rm -f docker-compose.prod.yml Caddyfile litellm-config.prod.yaml && \
              docker image prune -f"
           # The rm above is a one-time migration, safe to drop once both
@@ -176,8 +179,12 @@ jobs:
           # silently recreate containers from frozen config. It runs only
           # after the new `up -d` succeeded, so a failed deploy never
           # strips the previous files.
+          #
+          # The files of the layout before deploy/prod/ (deploy/compose/, deploy/caddy/Caddyfile, deploy/litellm/, deploy/backup/) are NOT removed here, on
+          # purpose: the cron line in deploy/README.md still runs the old deploy/backup/backup.sh, which calls the old compose file, and deleting that
+          # would stop the backups without a sound. deploy/README.md ("Moving an existing droplet to deploy/prod/") says when to remove them.
 
-      # Through the front door, as a client reaches it: the API publishes no host port (docker-compose.prod.yml), so a curl to localhost:8000 could
+      # Through the front door, as a client reaches it: the API publishes no host port (deploy/prod/app.yml), so a curl to localhost:8000 could
       # never succeed. This proves Caddy's certificate, the route and the API at once. API_DOMAIN is read from the droplet's own .env, which CI never
       # sees. 120 s: the first deploy also waits for Let's Encrypt to issue the three certificates.
       - name: Wait for /health/ready through the front door
@@ -216,8 +223,8 @@ jobs:
       - name: Sync compose/config files to the droplet
         run: |
           rsync -azR -e "ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts" \
-            deploy/compose/docker-compose.observability.prod.yml \
-            deploy/caddy/Caddyfile.observability \
+            deploy/prod/observability.yml \
+            deploy/prod/caddy/Caddyfile.observability \
             deploy@${{ secrets.OBS_DROPLET_HOST }}:/opt/agent-core-observability/
           rsync -az --delete -e "ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts" \
             observability/ \
@@ -228,8 +235,9 @@ jobs:
           ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts \
             deploy@${{ secrets.OBS_DROPLET_HOST }} \
             "cd /opt/agent-core-observability && \
-             docker compose --project-directory . -f deploy/compose/docker-compose.observability.prod.yml pull && \
-             docker compose --project-directory . -f deploy/compose/docker-compose.observability.prod.yml up -d --remove-orphans && \
-             rm -f docker-compose.observability.prod.yml Caddyfile.observability && \
+             docker compose --project-directory . -f deploy/prod/observability.yml pull && \
+             docker compose --project-directory . -f deploy/prod/observability.yml up -d --remove-orphans && \
+             rm -f docker-compose.observability.prod.yml Caddyfile.observability \
+                   deploy/compose/docker-compose.observability.prod.yml deploy/caddy/Caddyfile.observability && \
              docker image prune -f"
           # One-time migration rm, same reasoning as the app droplet's above.

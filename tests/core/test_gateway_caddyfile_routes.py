@@ -1,6 +1,6 @@
 """What the front door's Caddy routing names agrees with the code it routes to (pattern 98).
 
-`deploy/caddy/gateway.caddy` is shared by the development and production Caddyfiles. It names two things that live in code, and a drift in either
+`deploy/shared/caddy/gateway.caddy` is shared by the development and production Caddyfiles. It names two things that live in code, and a drift in either
 only shows when a request arrives: a Telegram path the bot no longer serves is a silent 404 behind a webhook Telegram keeps retrying, and an address
 limit authlimit does not define is a 500 on every sign-in.
 """
@@ -12,7 +12,7 @@ from app.adapters.inbound.channels.telegram.link import CALLBACK_PATH, CONFIRM_P
 from app.adapters.inbound.channels.telegram.server import WEBHOOK_PATH
 
 REPO = Path(__file__).resolve().parents[2]
-GATEWAY_CADDY = (REPO / "deploy" / "caddy" / "gateway.caddy").read_text(encoding="utf-8")
+GATEWAY_CADDY = (REPO / "deploy" / "shared" / "caddy" / "gateway.caddy").read_text(encoding="utf-8")
 
 
 def test_the_telegram_paths_caddy_routes_are_the_ones_the_bot_serves():

@@ -7,7 +7,7 @@ the REAL litellm/Ollama streaming path, because that's exactly the path a
 real, live-verified bug used to corrupt: two simultaneous tool calls from an
 ollama_chat model got glued into one malformed tool_calls entry (litellm's
 OllamaChatCompletionResponseIterator.chunk_parser assigning duplicate
-"index":0 across separate stream chunks — see deploy/litellm/patches/
+"index":0 across separate stream chunks — see deploy/dev/litellm-patches/
 sitecustomize.py and graph/utils.py's make_llm comment for the full writeup). A
 fake-model test (tests/agent/graph/test_graph_integration.py's
 TestMandatoryCapabilityGate) already covers graph_edge_route_after_agent/human_approval's

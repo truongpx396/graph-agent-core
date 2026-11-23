@@ -3,7 +3,7 @@
     make restore-drill                     # python -m scripts.checks.restore_drill [--threads N] [--sessions N] [--points N] [--redis-keys N]
 
 A backup nobody has restored is a hope. This starts throwaway containers from the SHIPPED images (Postgres 16 initialised by `postgres-init/`, Postgres 16 for Casdoor,
-Qdrant, Redis Stack), seeds each with data of a size you choose, runs the SAME commands `deploy/backup/backup.sh` runs (`pg_dump --format=custom`, the Qdrant snapshot
+Qdrant, Redis Stack), seeds each with data of a size you choose, runs the SAME commands `deploy/prod/backup.sh` runs (`pg_dump --format=custom`, the Qdrant snapshot
 tool, `redis-cli --rdb -`), starts a SECOND set of containers the way a rebuilt droplet would be (empty, initialised from the repository), restores with the commands
 `deploy/README.md` gives, and checks the result: row counts and a checksum over the rows, the points and a search through the restored alias, and the Redis keys,
 including after turning AOF on again. It prints how long each backup and restore took.
@@ -34,20 +34,20 @@ from app.bootstrap import wire
 
 REPO = Path(__file__).resolve().parents[2]
 PG_PASSWORD = "drill"
-REDIS_ARGS = "--appendonly yes --appendfsync everysec --maxmemory 192mb --maxmemory-policy noeviction"  # what docker-compose.prod.yml gives `redis`
+REDIS_ARGS = "--appendonly yes --appendfsync everysec --maxmemory 192mb --maxmemory-policy noeviction"  # what deploy/prod/infra.yml gives `redis`
 EXIT_OK, EXIT_FAILED, EXIT_USAGE = 0, 1, 2
 
 
 def _compose_image(service: str) -> str:
     import yaml
 
-    return str(yaml.safe_load((REPO / "deploy" / "compose" / "docker-compose.yml").read_text(encoding="utf-8"))["services"][service]["image"])
+    return str(yaml.safe_load((REPO / "deploy" / "dev" / "infra.yml").read_text(encoding="utf-8"))["services"][service]["image"])
 
 
 def _prod_service(service: str) -> dict[str, Any]:
     import yaml
 
-    loaded: dict[str, Any] = yaml.safe_load((REPO / "deploy" / "compose" / "docker-compose.prod.yml").read_text(encoding="utf-8"))["services"][service]
+    loaded: dict[str, Any] = yaml.safe_load((REPO / "deploy" / "prod" / "infra.yml").read_text(encoding="utf-8"))["services"][service]
     return loaded
 
 

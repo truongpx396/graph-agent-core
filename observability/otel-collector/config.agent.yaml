@@ -1,9 +1,9 @@
-# Agent-mode collector — runs ON THE APP DROPLET (docker-compose.prod.yml's
+# Agent-mode collector — runs ON THE APP DROPLET (deploy/prod/collectors.yml's
 # `otel-collector-agent` service), the other half of the "agent + gateway"
 # split from this directory's own `config.yaml` (which runs unchanged on
 # the SEPARATE observability droplet as the gateway). Two jobs:
 #   1. Same OTLP receiver app/platform/telemetry.py already pushes to (now
-#      pointed here instead of a remote host — see docker-compose.prod.yml's
+#      pointed here instead of a remote host — see deploy/prod/app.yml's
 #      `OTEL_EXPORTER_OTLP_ENDPOINT`).
 #   2. Scrapes node-exporter/cadvisor LOCALLY (same Docker network, no
 #      firewall exposure needed) so the app droplet's own resource usage
@@ -47,13 +47,13 @@ receivers:
           scrape_interval: 15s
           static_configs:
             - targets: ["ml-service:80"]
-        # PgBouncer's pool and wait gauges (the exporter service in docker-compose.prod.yml). The app talks to Postgres only through it, so
+        # PgBouncer's pool and wait gauges (the exporter service in deploy/prod/collectors.yml). The app talks to Postgres only through it, so
         # PgBouncerDown / PgBouncerClientsWaiting / PgBouncerMaxWait are the first sign of a database path that is closed or saturated.
         - job_name: pgbouncer
           scrape_interval: 15s
           static_configs:
             - targets: ["pgbouncer-exporter:9127"]
-        # The work queue's Redis (`redis-exporter`, docker-compose.prod.yml): the memory gauges `RedisQueueMemoryHigh` reads. It has `noeviction`, so a full one refuses writes.
+        # The work queue's Redis (`redis-exporter`, deploy/prod/collectors.yml): the memory gauges `RedisQueueMemoryHigh` reads. It has `noeviction`, so a full one refuses writes.
         - job_name: redis
           scrape_interval: 15s
           static_configs:

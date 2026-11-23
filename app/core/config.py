@@ -106,7 +106,7 @@ class Settings(BillingSettings):
     # Reranking is a real ONNX cross-encoder and was a measured concurrency
     # bottleneck in-process (each call held a thread-pool slot plus ONNX's
     # own all-cores default under a 50-concurrent-turn burst). Moved to a
-    # dedicated container (docker-compose.yml's `ml-service`,
+    # dedicated container (deploy/dev/app.yml's `ml-service`,
     # services/ml-service/main.py) to get it off agent-worker's GIL entirely.
     #
     # Hand-rolled FastAPI + onnxruntime, not TEI — TEI was tried
@@ -122,7 +122,7 @@ class Settings(BillingSettings):
     # Model routing (specs/014, specs/015, GRAPH_PATTERNS pattern 68). OFF by default and inert: with `router_mode` "off" nothing is asked of the classifier
     # and every call is byte-identical to a build without this feature. "shadow" decides, counts and logs every turn's tier but runs the turn on the
     # local model, so an operator reads what the router WOULD have spent before it spends anything; "on" acts. The tiers are gateway ALIASES
-    # (deploy/litellm/*.yaml `chat-medium`, `chat-strong`), never a provider's model id; an empty alias means that tier does not exist and a decision for it
+    # (`chat-medium`, `chat-strong` in deploy/{dev,prod}/litellm-config.yaml), never a provider's model id; an empty alias means that tier does not exist and a decision for it
     # steps down to the next tier below. One operator-wide ceiling and switch: per-tenant control is a deliberate gap (the spec's "Not built").
     router_mode: Literal["off", "shadow", "on"] = "off"
     medium_chat_model: str = ""
@@ -606,7 +606,7 @@ class Settings(BillingSettings):
 
     # Comma-separated CORS allowed origins, or "*" (default — fine for a
     # local demo; the built-in web UI is same-origin and never needs CORS).
-    # A real multi-origin deployment narrows this (see deploy/env/prod.env.example).
+    # A real multi-origin deployment narrows this (see deploy/prod/prod.env.example).
     cors_allowed_origins: str = "*"
 
     # How the API learns WHO is calling (app/adapters/inbound/api/deps.py::get_ctx; specs/018). In `identity` mode (the default) it trusts one thing: the
@@ -698,7 +698,7 @@ class Settings(BillingSettings):
     max_upload_files_per_request: int = 5
 
     # What one chat request may carry (`ChatRequest`, app/adapters/inbound/api/schemas.py). A body is parsed whole, copied into a Redis stream entry
-    # and then into the checkpoint, so one large request cost memory in four places; the front door's own ceiling (deploy/caddy/gateway.caddy) is the
+    # and then into the checkpoint, so one large request cost memory in four places; the front door's own ceiling (deploy/shared/caddy/gateway.caddy) is the
     # outer bound and these are the reason a person is told which field was too large. A message of 32,000 characters is about 8,000 tokens, well
     # past a question; an image is a data URI, so 7,000,000 characters is about 5 MB of picture. The page attaches one image, so the default of 4 is
     # above it (PRODUCTION_REVIEW.md R14).
@@ -731,7 +731,7 @@ class Settings(BillingSettings):
     # The MCP gateway (app/adapters/inbound/mcp/gateway.py, specs/017): the two published servers over Streamable HTTP, for clients that are not a child
     # process of the person using them, with the identity taken from a verified OAuth 2.1 access token on EVERY request instead of
     # from the launcher's environment. The service is a resource server only; the tokens come from an authorization server it is
-    # pointed at (Casdoor in deploy/compose/docker-compose.yml's `gateway` profile, any OIDC provider that signs RS256 would do).
+    # pointed at (Casdoor in deploy/dev/gateway.yml's `gateway` profile, any OIDC provider that signs RS256 would do).
     #
     # The origin clients reach the gateway at, no path: each server's resource URI (the audience a token must carry) is this plus
     # its path, e.g. https://mcp.localhost:8443/ecorp/mcp. It is also the only Host/Origin the gateway answers to (DNS-rebinding guard).
@@ -760,7 +760,7 @@ class Settings(BillingSettings):
     sandbox_arg_max_chars: int = Field(default=20_000, ge=100)
 
     # Bearer token `opensandbox-mcp` sends OpenSandbox's server
-    # (sandbox_tools.py hands it over in the bridge's environment). docker-compose.yml's
+    # (sandbox_tools.py hands it over in the bridge's environment). deploy/dev/tools.yml's
     # opensandbox-server sets the same value via OPENSANDBOX_SERVER_API_KEY,
     # which overrides the TOML's `server.api_key`. Required: current
     # opensandbox-server releases refuse to start without one set — no
@@ -769,7 +769,7 @@ class Settings(BillingSettings):
     opensandbox_api_key: str = ""
 
     # crawl4ai's dockerized server (app/adapters/outbound/crawl4ai/web_crawler.py,
-    # docker-compose.yml's default-profile `crawl4ai` service). 11235 is the
+    # deploy/dev/tools.yml's default-profile `crawl4ai` service). 11235 is the
     # image's real listen port (not Crawl4aiDockerClient's stale
     # localhost:8000 constructor default).
     crawl4ai_server_url: str = "http://localhost:11235"

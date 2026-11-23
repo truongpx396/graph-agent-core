@@ -3,18 +3,18 @@
 Provisions TWO droplets (via `deploy/terraform/`):
 
 - The **app droplet**, running a lean production subset of this app's stack
-  (`docker-compose.prod.yml`): api + agent-worker + ingest-worker + postgres
+  (`deploy/prod/`): api + agent-worker + ingest-worker + postgres
   + redis + qdrant + litellm + ml-service, fronted by the same front door as
   the development stack (Caddy on three real names, `authlimit`, Casdoor and
   the MCP gateway; the Telegram bot is opt-in), plus a handful
   of lightweight observability sidecars (node-exporter, cadvisor,
   otel-collector-agent, promtail). It deliberately excludes local Ollama,
-  Langfuse, open-webui, and MinIO from `docker-compose.yml` — see that
-  file's own header comment for the tradeoffs and how to add any of them
+  Langfuse, open-webui, and MinIO from the development stack (`deploy/dev/`) — see
+  `deploy/prod/docker-compose.yml`'s header comment for the tradeoffs and how to add any of them
   back.
 - The **observability droplet**, a separate, smaller box running
   Prometheus/Loki/Grafana/Alertmanager/otel-collector
-  (`docker-compose.observability.prod.yml`), fed by the app droplet's
+  (`deploy/prod/observability.yml`), fed by the app droplet's
   sidecars above over the DO VPC's private network — never the public
   internet. Kept off the app droplet so a metrics/logs spike can't compete
   with it for CPU/mem. Grafana is the only thing exposed publicly (via its
@@ -35,6 +35,38 @@ Two separate, deliberately non-automatic-together pieces:
 - **App deploys (`.github/workflows/deploy.yml`)** — pushing new code to an
   *already-provisioned* droplet. Fully automated: runs after `CI` succeeds
   on `main`, builds+pushes images to GHCR, and SSHes in to pull and restart.
+
+## Layout
+
+One directory per environment, with the same file names, so what is changed in one is looked for in the other:
+
+```
+deploy/
+  dev/                       the local stack (`make up`)
+  prod/                      the two droplets
+    docker-compose.yml         the entry: names the parts it `include`s and nothing else
+    infra.yml                  Postgres, PgBouncer, Redis, Qdrant, LiteLLM (dev adds MinIO, Langfuse, Open WebUI; prod has a second Redis, the answer cache)
+    app.yml                    what this repo builds: the API, the workers, the ML service, the MCP gateway (prod adds the Telegram bot)
+    gateway.yml                the front door: Caddy, authlimit, Casdoor
+    collectors.yml             exporters and agents that feed the observability backends (an overlay in dev, a part of the project in prod)
+    observability.yml          a project of its own: Prometheus, Loki, Grafana, Alertmanager, Pyroscope (dev also holds SonarQube, profile `quality`)
+    litellm-config.yaml        the gateway's model list
+    caddy/Caddyfile            how each site is addressed and certified (prod also has Caddyfile.observability)
+    dev only:  tools.yml (the crawler, the OpenSandbox server), loadtest.yml, litellm-patches/
+    prod only: backup.sh, prod.env.example, observability.env.example
+  shared/caddy/gateway.caddy the front door's routing, imported by both Caddyfiles: change it once (pattern 98)
+  images/                    the sandbox image builds
+  terraform/                 provisions the droplets
+```
+
+Every path in these files, the `include` paths too, is relative to the repository root, so compose runs with `--project-directory .` (the Makefile's `COMPOSE` and every alias below do);
+without it the first `include` fails with "no such file", where a mistake used to take the wrong project name and orphan the volumes. `.env` and any extra `--env-file` reach every part.
+Each Caddyfile imports the routing by a path relative to itself (`../../shared/caddy/gateway.caddy`) and the Caddy container mounts both directories where they sit in the repo, so the import resolves
+in the container as on a checkout.
+
+Two differences are on purpose. **Production has no `tools.yml`**: the crawler must not run there as it is ([The crawler's network](#the-crawlers-network)) and the OpenSandbox server mounts the Docker
+socket, so `CRAWL4AI_SERVER_URL` and `OPENSANDBOX_MCP_DOMAIN` stay empty and those tools are absent. **The Telegram bot** is a container in production (`--profile telegram`) and a host process in
+development (`make telegram`).
 
 ## One-time setup
 
@@ -86,14 +118,14 @@ observability stack pulls only public off-the-shelf images.
 ### 4. Create each droplet's `.env` (once, by hand)
 
 The deploy workflow ships code and config, **never secrets** — it never
-writes or touches `.env` on either droplet (see `docker-compose.prod.yml`'s
+writes or touches `.env` on either droplet (see `deploy/prod/docker-compose.yml`'s
 own header). SSH into each once and create it yourself:
 
 ```
 ssh deploy@<reserved_ip>
 sudo mkdir -p /opt/graph-agent-core   # cloud-init already does this; harmless if it exists
 cd /opt/graph-agent-core
-# paste this repo's deploy/env/prod.env.example content into .env and fill in real
+# paste this repo's deploy/prod/prod.env.example content into .env and fill in real
 # values (POSTGRES_PASSWORD, LITELLM_MASTER_KEY, LLM_API_KEY, MINIO_*,
 # CORS_ALLOWED_ORIGINS, APP_IMAGE/ML_IMAGE/AUTHLIMIT_IMAGE, API_DOMAIN/AUTH_DOMAIN/
 # MCP_DOMAIN, CASDOOR_DB_PASSWORD/CASDOOR_ADMIN_PASSWORD, OBS_COLLECTOR_ENDPOINT/
@@ -107,7 +139,7 @@ chmod 600 .env
 ssh deploy@<observability_reserved_ip>
 sudo mkdir -p /opt/agent-core-observability
 cd /opt/agent-core-observability
-# paste this repo's deploy/env/observability.prod.env.example content into .env and
+# paste this repo's deploy/prod/observability.env.example content into .env and
 # fill in GRAFANA_ADMIN_PASSWORD and ALERTMANAGER_SLACK_WEBHOOK_URL (REQUIRED: the stack
 # refuses to start without it, since without a receiver no alert is ever delivered), and
 # OBS_DOMAIN_NAME if you're pointing a subdomain at it — see that file's own comments.
@@ -125,14 +157,15 @@ the front door answers 502 (it fails closed); `/health` and the web page stay up
 Merge to `main`. Once `CI` passes, `deploy.yml` fires automatically and
 runs two independent jobs:
 - `deploy`: builds the app + ml-service + authlimit images, pushes them to GHCR,
-  rsyncs `deploy/compose/docker-compose.prod.yml`, `deploy/caddy/Caddyfile`
-  and `gateway.caddy` (Caddy mounts the directory),
-  `deploy/litellm/litellm-config.prod.yaml`, `postgres-init/` and
+  rsyncs `deploy/prod/docker-compose.yml` and the four parts it includes
+  (`infra.yml`, `app.yml`, `gateway.yml`, `collectors.yml`), `deploy/prod/caddy/Caddyfile`
+  and `deploy/shared/caddy/gateway.caddy` (the Caddyfile imports it),
+  `deploy/prod/litellm-config.yaml`, `postgres-init/` and
   `observability/` to the app droplet (keeping their repo paths, so the
   droplet mirrors the repo layout), then `docker compose pull && up -d`.
 - `deploy-observability`: rsyncs
-  `deploy/compose/docker-compose.observability.prod.yml`,
-  `deploy/caddy/Caddyfile.observability` and `observability/` to the
+  `deploy/prod/observability.yml`,
+  `deploy/prod/caddy/Caddyfile.observability` and `observability/` to the
   observability droplet, then `docker compose pull && up -d`.
 
 Watch both in the Actions tab, or SSH in and use the `dc` alias from
@@ -149,9 +182,21 @@ by comparing `docker compose config --hash` before/after the move) — a few
 seconds of TLS/gateway blip. Nothing else changes, and the project names,
 so the volumes, are unchanged.
 
+**Moving an existing droplet to the `deploy/prod/` layout.** The first deploy after this layout lands changes the config of `caddy` and `litellm` on the app droplet (their mount sources moved: a few seconds
+of TLS and gateway blip) and of `caddy` on the observability droplet; `api`, `agent-worker` and `ingest-worker` are recreated as on every deploy (compared with `docker compose config --hash` before and after).
+The project names, so the volumes, do not change. Three things are yours to do, because the workflow cannot know them:
+
+1. **The backup cron line.** `backup.sh` is not shipped by the workflow; it is on the droplet from your clone. Bring `deploy/prod/backup.sh` over (`git pull`, or copy it) and change the crontab to
+   `/opt/graph-agent-core/deploy/prod/backup.sh`. Until you do, the old line keeps running the old script, which still works because the workflow leaves the old compose file where it is.
+2. **Then remove the old files** from the app droplet: `rm -rf deploy/compose deploy/litellm deploy/env deploy/backup deploy/caddy/Caddyfile deploy/caddy/Caddyfile.gateway deploy/caddy/gateway.caddy`.
+   Not before step 1: the old `backup.sh` calls `deploy/compose/docker-compose.prod.yml`, and deleting it would stop the backups without a sound. The observability workflow removes its own old files.
+3. **Spend limits that now take effect.** `MAX_COST_USD_PER_TENANT_PER_MONTH`, the two `MAX_COST_USD_PER_PRINCIPAL_*` ceilings and `UNPRICED_MODEL_POLICY` were in `prod.env.example` but never
+   passed to a container, so they did nothing. They are passed now (unset means off and `allow`, as before). A droplet whose `.env` already lists them, copied from the example, starts enforcing them
+   at this deploy: read the values first, and check that LiteLLM prices your model before `UNPRICED_MODEL_POLICY=block` refuses an unpriced one.
+
 **Upgrading an already-provisioned app droplet**: `api` no longer publishes
 a fixed host port 8000 (Caddy now load-balances across replicas via a
-`dynamic a` upstream instead — see `deploy/caddy/Caddyfile`). `terraform apply` closes
+`dynamic a` upstream instead — see `deploy/prod/caddy/Caddyfile`). `terraform apply` closes
 port 8000 at the DO cloud firewall immediately either way (that's the first
 enforcement layer), but cloud-init's matching `ufw` rule only applies on
 first boot (see `cloud-init.tpl.yaml`'s own comment) — on a droplet
@@ -236,7 +281,7 @@ docker image inspect ghcr.io/berriai/litellm:main-stable --format '{{index .Repo
 docker manifest inspect ghcr.io/berriai/litellm@sha256:<digest>   # must list linux/amd64 AND linux/arm64
 ```
 
-Put the digest in both `deploy/compose/docker-compose*.yml`, then run **`make gateway-check`** (the new
+Put the digest in both `deploy/dev/infra.yml` and `deploy/prod/infra.yml` (a test keeps the two equal), then run **`make gateway-check`** (the new
 image on the shipped dev config and a stub model backend; Docker only, about a minute) and `make
 probe-tools`, and check a budget stop by hand before shipping. `gateway-check` fails if an alias is
 unpriced, if the gateway's cost is not tokens x the configured price, or **if the end user, tenant,
@@ -252,7 +297,7 @@ is no plain-HTTP fallback, and `docker compose` refuses to start without the thr
 first use; ports 80 and 443 are already open (`main.tf`'s firewall).
 
 Likewise, if you set `OBS_DOMAIN_NAME` in the observability droplet's `.env`, point another record at `observability_reserved_ip` (that one is still
-optional: see `Caddyfile.observability` for its no-domain HTTP-only fallback).
+optional: see `deploy/prod/caddy/Caddyfile.observability` for its no-domain HTTP-only fallback).
 
 ### 8. Create authlimit's signing keys (once)
 
@@ -303,11 +348,11 @@ needs nothing public; in `webhook` mode Caddy routes `https://<API_DOMAIN>/teleg
 ```
 ssh deploy@<reserved_ip>
 cd /opt/graph-agent-core
-# Compose files live under deploy/compose/ but resolve their paths and .env
-# from this directory, so every call needs --project-directory . (an env var
-# can't replace it — COMPOSE_FILE alone makes paths resolve under
-# deploy/compose/). The alias saves the typing.
-alias dc='docker compose --project-directory . -f deploy/compose/docker-compose.prod.yml'
+# The compose files live under deploy/prod/ but every path in them (the `include`s
+# too) and .env are relative to this directory, so every call needs --project-directory .
+# (an env var can't replace it — COMPOSE_FILE alone makes paths resolve under
+# deploy/prod/). The alias saves the typing.
+alias dc='docker compose --project-directory . -f deploy/prod/docker-compose.yml'
 dc ps
 dc logs -f api
 dc logs -f authlimit caddy         # the front door: a 429 is a rate limit, a 401 a token, a 502 on a checked route authlimit not ready
@@ -319,7 +364,7 @@ Observability droplet, separately:
 ```
 ssh deploy@<observability_reserved_ip>
 cd /opt/agent-core-observability
-alias dc='docker compose --project-directory . -f deploy/compose/docker-compose.observability.prod.yml'
+alias dc='docker compose --project-directory . -f deploy/prod/observability.yml'
 dc ps
 dc logs -f grafana
 ```
@@ -348,7 +393,7 @@ Docker socket, which is a trade-off this repo has not made for you), or `dc rest
 that is merely busy is not stale: it beats while it waits for a free slot.
 
 **Prompts in the gateway's spend log**: off in production (`store_prompts_in_spend_logs: false` in
-`deploy/litellm/litellm-config.prod.yaml`), so the gateway's database holds metadata (model, tokens, cost, end user) and not what a person
+`deploy/prod/litellm-config.yaml`), so the gateway's database holds metadata (model, tokens, cost, end user) and not what a person
 asked or what was answered. To see request and response bodies for a period (debugging a guardrail, say), set it to `true` **and** add
 `maximum_spend_logs_retention_period: "7d"` under `general_settings` beside it, restart the proxy, and turn both back off afterwards. The key
 is the one in litellm 1.94.1's `proxy/_types.py`; check it against the image you have pinned before relying on it. Rows written while it was
@@ -451,17 +496,17 @@ it is what lets you rebuild after losing one. The code is ready for more (statel
 | | Today | With a managed service |
 |---|---|---|
 | availability | one instance each; a failure is an outage until you restore | a standby and automatic failover (Postgres), a replica (Redis) |
-| backups | `deploy/backup/backup.sh`, daily, from this droplet | the provider's, with point-in-time recovery for Postgres; this script's Postgres half is then retired |
+| backups | `deploy/prod/backup.sh`, daily, from this droplet | the provider's, with point-in-time recovery for Postgres; this script's Postgres half is then retired |
 | what to change | | the connection strings only: `CHECKPOINTER_DATABASE_URL`, `APPDATA_DATABASE_URL` (through PgBouncer or not), `REDIS_URL`, `QDRANT_URL` |
 | what to check first | | the managed Redis must offer streams, Lua and (for the answer cache) the search and JSON modules, which many do not; without them the cache needs another home or goes off (`SEMANTIC_CACHE_ENABLED=false`). It must also be set to `noeviction` for the queue (see "Redis" below) |
 
-**The job.** `deploy/backup/backup.sh` takes, on the app droplet: `pg_dump --format=custom` of `appdata`, `checkpointer` and `litellm` (inside the `postgres` container) and of Casdoor's `casdoor` (inside `casdoor-db`); a snapshot of every Qdrant collection, with the aliases
+**The job.** `deploy/prod/backup.sh` takes, on the app droplet: `pg_dump --format=custom` of `appdata`, `checkpointer` and `litellm` (inside the `postgres` container) and of Casdoor's `casdoor` (inside `casdoor-db`); a snapshot of every Qdrant collection, with the aliases
 (`scripts/tools/qdrant_backup.py`, from the app image: Qdrant's has no `curl`); and the queue Redis (`redis-cli --rdb -`: the locks, the buckets and the front door's **revocation list**). It reads every dump back with `pg_restore --list`, copies the directory to the uploads bucket under `backups/<UTC stamp>/`
 with a manifest of sizes and SHA-256 (`scripts/tools/backup_upload.py`), and keeps the newest `BACKUP_KEEP_LOCAL` (3) complete copies on the droplet. A directory is complete only once it has lost its `.partial` suffix, and a bucket copy only once its `manifest.json` exists; any failing step fails the run
 and leaves no complete backup. Put it in cron as the deploy user, with the Spaces settings already in `.env`:
 
 ```
-17 2 * * *  /opt/graph-agent-core/deploy/backup/backup.sh >> /var/log/graph-agent-backup.log 2>&1
+17 2 * * *  /opt/graph-agent-core/deploy/prod/backup.sh >> /var/log/graph-agent-backup.log 2>&1
 ```
 
 **Not backed up, on purpose:** the answer cache (disposable); the observability droplet; the uploaded files themselves (they live in the bucket: set versioning or a lifecycle rule there, since this job writes beside them and never deletes); and the **secrets**: `.env`, `authlimit-keys/` and the Terraform state are not in any backup, so keep them in a password manager. Casdoor's own signing keys are in its database, which is backed up.
@@ -474,7 +519,7 @@ and leaves no complete backup. Put it in cron as the deploy user, with the Space
 **Restoring onto a rebuilt droplet** (Terraform applied, the repository cloned, `.env` restored; this is the sequence `make restore-drill` performs, against fresh containers):
 
 ```
-alias dc='docker compose --project-directory . -f deploy/compose/docker-compose.prod.yml'
+alias dc='docker compose --project-directory . -f deploy/prod/docker-compose.yml'
 dc up -d postgres casdoor-db redis redis-cache qdrant                       # the stores only: no api, no workers, nothing writing yet
 mkdir -p /restore && dc run --rm --no-deps -T --user "$(id -u):$(id -g)" -v /restore:/backup api python -m scripts.tools.backup_upload --download backups/<stamp> --to /backup   # checks every file against its manifest
 for db in appdata checkpointer litellm; do dc exec -T postgres pg_restore -U langfuse --clean --if-exists -d $db < /restore/$db.dump; done
@@ -507,7 +552,7 @@ checks: row counts and a checksum over the rows, the points and the same search 
 
 ## Redis: the queue and the cache
 
-Production runs **two** Redis services from one pinned image (`docker-compose.prod.yml`; PRODUCTION_REVIEW.md R15). They cannot share a policy, because no eviction setting is right for both:
+Production runs **two** Redis services from one pinned image (`deploy/prod/infra.yml`; PRODUCTION_REVIEW.md R15). They cannot share a policy, because no eviction setting is right for both:
 
 | | `redis` (the queue) | `redis-cache` (the answer cache) |
 |---|---|---|
@@ -562,7 +607,7 @@ The web page and the CLI have no thumbs yet, and a rating is not yet attached to
 It exports **counts**, `agent_answer_sample_total{outcome=judged|no_citations|unreadable}` and `agent_answer_sample_finding_total{finding=ungrounded_marker|uncited|misattributed}`, so a rate is `finding / judged`. Nothing alerts on them: the checks are heuristics tuned on small models, a trend to watch and not a verdict. Cron, once you have decided:
 
 ```
-30 4 * * * cd /opt/graph-agent-core && docker compose --project-directory . -f deploy/compose/docker-compose.prod.yml run --rm --no-deps -T api python -m scripts.jobs.answer_sample
+30 4 * * * cd /opt/graph-agent-core && docker compose --project-directory . -f deploy/prod/docker-compose.yml run --rm --no-deps -T api python -m scripts.jobs.answer_sample
 ```
 
 **It reads answers across tenants.** Like the retention sweep it is an operator job, never reachable from a request, but unlike it, it reads CONTENT: the final answer and its citations of each sampled conversation. It emits and logs no text, tenant, person or thread id (tested, including the log records' structured fields). If your data policy does not allow an operator job to read answers, leave it unscheduled, or set `ANSWER_SAMPLE_TENANTS` to the tenants that agree.
@@ -576,7 +621,7 @@ with `ARGS=--dry-run` first: it prints how many conversations it would delete an
 stopped at its ceiling of 50,000 conversations (run it again). Nothing schedules it; from cron once the retention policy is decided:
 
 ```
-30 3 * * * cd /opt/graph-agent-core && docker compose --project-directory . -f deploy/compose/docker-compose.prod.yml run --rm --no-deps -T api python -m scripts.jobs.checkpoint_sweep
+30 3 * * * cd /opt/graph-agent-core && docker compose --project-directory . -f deploy/prod/docker-compose.yml run --rm --no-deps -T api python -m scripts.jobs.checkpoint_sweep
 ```
 
 (`-T` because cron has no terminal, and `api` because it is the service the other one-off commands in this file run from. That line was written from the compose file and the other commands here, not run on a droplet: try it by hand with `--dry-run` before relying on it.)
@@ -599,7 +644,7 @@ The crawler (`crawl4ai`, headless Chromium; `app/adapters/outbound/crawl4ai/web_
 URL it hands over (`app/core/url_safety.py`); the browser then follows redirects and loads sub-resources by itself, so a page that passes the check can send it to `http://qdrant:6333`,
 `http://litellm:4000` or the droplet's metadata address. Isolation for that is the network's job, not the application's (PRODUCTION_REVIEW.md R20, specs/009 A1).
 
-What the development compose file does (`deploy/compose/docker-compose.yml`): `crawl4ai` is alone on its own `crawler` network, and the three app roles that call it (`api`, `agent-worker`,
+What the development compose files do (`deploy/dev/tools.yml` and `app.yml`): `crawl4ai` is alone on its own `crawler` network, and the three app roles that call it (`api`, `agent-worker`,
 `ingest-worker`) are on `crawler` and on `default`. Checked on a real Docker daemon with stand-in containers: a container on `crawler` alone cannot resolve or reach one on `default`, by name
 or by address; an app container on both reaches both.
 

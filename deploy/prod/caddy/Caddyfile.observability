@@ -1,6 +1,6 @@
-# Reverse proxy + TLS termination for `grafana` (docker-compose.observability.prod.yml)
+# Reverse proxy + TLS termination for `grafana` (deploy/prod/observability.yml)
 # on the SEPARATE observability droplet — same shape as the root
-# `Caddyfile`'s handling of `api`, see that file's own comment for the full
+# `Caddyfile`'s (deploy/prod/caddy/) handling of `api`, see that file's own comment for the full
 # reasoning (OBS_SITE_ADDRESS here plays the exact same role
 # CADDY_SITE_ADDRESS does there, resolved at the compose layer, not by
 # Caddy's own placeholder syntax).

@@ -201,7 +201,7 @@ litellm_settings:
   num_retries: 2                       # retry transient failures
   # Longer than the production file's 120 on purpose: a local model on CPU can take minutes to send its first token, and the live tests give a
   # turn 420 s. Three layers retry (the app's SDK, off by default; the graph's policy, 3 attempts; this proxy, 2) and multiply: see
-  # litellm-config.prod.yaml, which is where the timeout was lowered.
+  # deploy/prod/litellm-config.yaml, which is where the timeout was lowered.
   request_timeout: 600
   # If "chat" fails, transparently retry on "chat-backup".
   fallbacks: [{"chat": ["chat-backup"]}]
@@ -217,7 +217,7 @@ litellm_settings:
   max_end_user_budget_id: person-default
   # Log every request/response to Langfuse from the proxy layer, and expose
   # LiteLLM's own built-in request/latency/token metrics for Prometheus to
-  # scrape at GET /metrics (see docker-compose.observability.yml's
+  # scrape at GET /metrics (see deploy/dev/observability.yml's
   # prometheus service — this is a separate metrics surface from this
   # app's own OTel metrics in app/core/metrics.py, at the proxy layer
   # rather than the agent layer).

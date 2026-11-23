@@ -1,0 +1,212 @@
+# Dev stack, part of docker-compose.yml: what this repo builds. The ML service starts with `make up`; the API and the two workers are the `app` profile
+# (`make up-app`) and the MCP gateway the `gateway` profile (`make mcp-gateway-up`). Everyday dev runs the app as host processes instead (`make serve`,
+# `make agent-worker`). deploy/prod/app.yml is the production counterpart: the same roles from images CI built, not built on the droplet.
+
+# Workers bind no port, so the image's API HEALTHCHECK (a probe of :8000/health/ready) would report them `unhealthy` forever. Whether a pool is
+# alive is the `WorkerUnreachable` alert's job (observability/prometheus/alerts.yml). A worker added without this inherits the probe.
+x-worker-healthcheck: &worker-healthcheck
+  disable: true
+
+# Env for the containerized app roles (api, agent-worker, ingest-worker). URLs use the other containers' service names: `localhost` is the
+# container itself here (Settings' defaults assume a host process).
+x-app-env: &app-env
+  OPENAI_API_BASE: http://litellm:4000/v1
+  # A container does not read `.env` (compose only uses it to fill `${...}`), so before this line the containers sent the dev master key and a scoped
+  # `make litellm-key` key was never used. Name as in deploy/prod/app.yml and scripts/tools/litellm_key.py. Unset falls back to `sk-anything`.
+  OPENAI_API_KEY: ${LITELLM_APP_KEY:-sk-anything}
+  QDRANT_URL: http://qdrant:6333
+  ML_SERVICE_URL: http://ml-service:80
+  # Through PgBouncer, not Postgres: Postgres sees the pooler's pool size however many replicas run. LiteLLM, Langfuse and the exporters
+  # connect directly (specs/022).
+  CHECKPOINTER_DATABASE_URL: postgresql://langfuse:langfuse@pgbouncer:6432/checkpointer
+  APPDATA_DATABASE_URL: postgresql://langfuse:langfuse@pgbouncer:6432/appdata
+  REDIS_URL: redis://redis:6379
+  MINIO_ENDPOINT: minio:9000
+  LANGFUSE_HOST: http://langfuse-web:3000
+  LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+  LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+  CRAWL4AI_SERVER_URL: http://crawl4ai:11235
+  CRAWL4AI_API_TOKEN: ${CRAWL4AI_API_TOKEN:-}
+  # Empty leaves web_search declared but answering "not set up" (app/adapters/outbound/web/serper.py). A container does not read `.env`.
+  SERPER_API_KEY: ${SERPER_API_KEY:-}
+  WEB_SEARCH_MAX_RESULTS: ${WEB_SEARCH_MAX_RESULTS:-5}
+  # opensandbox-mcp is a stdio subprocess of this process (app/adapters/outbound/mcp/sandbox_tools.py), so it resolves the in-network name. Only matters
+  # with the `sandbox` profile up; without it the sandbox tools are absent.
+  OPENSANDBOX_MCP_DOMAIN: opensandbox-server:8090
+  OPENSANDBOX_API_KEY: ${OPENSANDBOX_API_KEY:-}
+  # The collector is collectors.yml's, reached through its published port so the app never depends on it: a failed push is
+  # dropped (app/platform/telemetry.py).
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://host.docker.internal:4318
+  # Pyroscope is in the observability stack; a push to a server that is not there is dropped without a delay (specs/022). Blank turns profiling off.
+  PYROSCOPE_SERVER_ADDRESS: ${PYROSCOPE_SERVER_ADDRESS-http://host.docker.internal:4040}
+
+# The shipping Dockerfile stage, named so a reordered Dockerfile cannot make the builder stage run (ENGINEERING_PATTERNS.md 76).
+x-app-build: &app-build
+  context: .
+  target: runtime
+
+# The app roles that call the crawler: its own network plus the default one the rest of the stack is on. An anchor so a fourth caller cannot forget one of the two
+# (a role left only on `crawler` would lose Postgres and Redis; one left only on `default` could not reach the crawler).
+x-crawler-network: &crawler-network
+  networks: [default, crawler]
+
+# Runtime hardening for the images this repo builds (nothing here changes what the app does):
+#   init                  a real PID 1: reaps the sandbox bridge's children and forwards SIGTERM, so `stop_grace_period` holds
+#   no-new-privileges     no privilege gain through a setuid binary
+#   cap_drop: ALL         the app runs as uid 1000 on a port above 1024: it needs no capability
+#   read_only + tmpfs     the image filesystem is never written. /tmp and $HOME (libraries create dot-directories there: crawl4ai makes
+#                         ~/.crawl4ai on import) are RAM, capped because tmpfs counts against the memory limit. ml-service keeps a named
+#                         volume for its models, so it overrides `tmpfs`.
+x-hardened: &hardened
+  init: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  read_only: true
+  tmpfs:
+    - /tmp:size=128m
+    - /home/appuser:size=64m,uid=1000,gid=1000
+
+services:
+  # --- ML service: the reranker (app/adapters/outbound/embeddings/embeddings.py `rerank`, on every retrieval), Llama Prompt Guard 2 (app/core/moderation.py), the embedding endpoint and the
+  # label sets, in one CPU container (design: services/ml-service/main.py). Rerank used to run in the worker's process and oversubscribed its threads under a 50-turn burst; this service
+  # coalesces concurrent calls into one ONNX pass and served a 100-request burst with no rejections, where Hugging Face TEI (bge-reranker-base) rejected ~94% of it and idled at 2.26 GiB
+  # against 200-420 MiB here.
+  # Prompt Guard comes from gravitee-io's ONNX port: Meta's repo is gated behind the Llama 4 license, which an anonymous image build cannot accept.
+  ml-service:
+    <<: *hardened
+    tmpfs:
+      - /tmp:size=128m  # the models live in the named volume below, not in tmpfs
+    build:
+      context: ./services/ml-service
+      target: runtime
+    ports:
+      - "8083:80"
+    environment:
+      # Which text models (services/ml-service/models.toml) to load and the embedding endpoint's ceilings; empty = the defaults.
+      ML_MODELS_ENABLED: ${ML_MODELS_ENABLED:-}
+      ML_EMBED_MAX_ITEMS: ${ML_EMBED_MAX_ITEMS:-256}
+      ML_EMBED_MAX_CHARS: ${ML_EMBED_MAX_CHARS:-8000}
+    volumes:
+      - ml-service:/home/appuser/.cache   # model cache (every model) — avoids re-downloading on every restart
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:80/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 45s   # covers a cold pull of BOTH models on first startup
+
+  # --- Containerized app roles (profile `app`; `make up-app`): the deployable artifact (see the Dockerfile header). Everyday dev runs them as host processes instead. ---
+  api:
+    <<: [*hardened, *crawler-network]
+    build: *app-build
+    # The one role that takes uploads (up to 5 x 25 MB, app/adapters/inbound/api/routers/ingest.py): the multipart parser spools to /tmp before the handler runs, so
+    # /tmp is a disk-backed volume (a tmpfs would fill RAM at the second large upload). Only $HOME is tmpfs.
+    tmpfs:
+      - /home/appuser:size=64m,uid=1000,gid=1000
+    volumes:
+      - /tmp
+    profiles: ["app"]
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      <<: *app-env
+      # Header mode by default: this role is published on :8000 with nothing in front (`--profile app` alone), so it trusts X-Tenant-Id and
+      # X-Principal-Id and warns at start (agent_api_auth_mode). `make authlimit-up-app` sets AUTH_MODE=identity and puts Caddy in front: only the
+      # signed identity is trusted, and a request straight to :8000 is a 401. The keys URL is authlimit's in-network name; the API starts without it
+      # and answers 503 until the keys load.
+      AUTH_MODE: ${AUTH_MODE:-headers}
+      AUTHLIMIT_KEYS_URL: ${AUTHLIMIT_KEYS_URL:-http://authlimit:8080/internal/jwks.json}
+      # The API's copy of those keys; passed through so the smoke can shorten the timings (the defaults are Settings').
+      AUTHLIMIT_KEYS_CACHE_SECONDS: ${AUTHLIMIT_KEYS_CACHE_SECONDS:-60}
+      AUTHLIMIT_KEYS_STALE_GRACE_SECONDS: ${AUTHLIMIT_KEYS_STALE_GRACE_SECONDS:-600}
+      # What the built-in page signs in against: the names and defaults authlimit reads, so one override changes both.
+      WEB_AUTH_ISSUER: ${AUTHLIMIT_ISSUER:-https://auth.localhost:8443}
+      WEB_AUTH_AUDIENCE: ${AUTHLIMIT_AUDIENCE:-https://api.localhost:8443}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # so OTEL_EXPORTER_OTLP_ENDPOINT resolves on native Linux Docker too
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # One container serves every domain: each domain's requests stream, on that domain's graph (app/adapters/inbound/workers/agent_worker.py).
+  agent-worker:
+    <<: [*hardened, *crawler-network]
+    build: *app-build
+    profiles: ["app"]
+    restart: unless-stopped
+    command: ["python", "-m", "app.adapters.inbound.workers.agent_worker"]
+    healthcheck: *worker-healthcheck
+    environment:
+      <<: *app-env
+      # Names some domains instead to run separate pools (`support,ops`). The concurrency budget, AGENT_WORKER_MAX_CONCURRENCY, is shared by all of them.
+      AGENT_WORKER_DOMAINS: ${AGENT_WORKER_DOMAINS:-all}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Scale with replicas (pattern 43): docker compose --profile app up -d --scale agent-worker=3. Each pushes its own OTLP metrics, so no scrape change.
+
+  ingest-worker:
+    <<: [*hardened, *crawler-network]
+    build: *app-build
+    profiles: ["app"]
+    restart: unless-stopped
+    command: ["python", "-m", "app.adapters.inbound.workers.ingest_worker"]
+    healthcheck: *worker-healthcheck
+    environment: *app-env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+
+  # --- MCP gateway (profile `gateway`; `make mcp-gateway-up`; specs/017) ---
+  # The app image with another command, so it lives here beside the roles that share the anchors above; the front door it sits behind (Casdoor, authlimit, Caddy) is gateway.yml.
+  mcp-gateway:
+    <<: *hardened
+    build: *app-build
+    profiles: ["gateway"]
+    restart: unless-stopped
+    command: ["python", "-m", "app.adapters.inbound.mcp.gateway", "--host", "0.0.0.0", "--port", "8000"]
+    # Only what the two tools read (the app database, Prometheus) and the gateway's own settings: no LLM keys, Redis or sandbox key, as anyone
+    # holding a token can reach this process.
+    environment:
+      APPDATA_DATABASE_URL: postgresql://langfuse:langfuse@pgbouncer:6432/appdata
+      PROMETHEUS_URL: ${MCP_GATEWAY_PROMETHEUS_URL:-http://host.docker.internal:9090}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${MCP_GATEWAY_OTLP_ENDPOINT-http://host.docker.internal:4318}
+      MCP_GATEWAY_PUBLIC_URL: ${MCP_GATEWAY_PUBLIC_URL:-https://mcp.localhost:8443}
+      MCP_GATEWAY_ISSUER: ${MCP_GATEWAY_ISSUER:-https://auth.localhost:8443}
+      # In-network name, plain http: only the ISSUER has to be public.
+      MCP_GATEWAY_JWKS_URL: http://casdoor:8000/.well-known/jwks
+      MCP_GATEWAY_OPS_TENANTS: ${MCP_GATEWAY_OPS_TENANTS:-ops-team}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Ready = can check a token: a replica that cannot reach the signing keys leaves rotation instead of answering 401.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      casdoor:
+        condition: service_healthy
+    # Stateless: scale behind caddy-gateway's `dynamic a` (deploy/dev/caddy/Caddyfile):
+    #   docker compose --profile gateway up -d --scale mcp-gateway=3 --no-recreate
+
+volumes:
+  ml-service:

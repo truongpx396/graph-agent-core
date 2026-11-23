@@ -1,5 +1,5 @@
 # The front door's routing: what Caddy does with a request to the chat API, the MCP gateway and the authorization server (specs/017, 018 T069, pattern 98).
-# SHARED by the development stack (Caddyfile.gateway) and production (Caddyfile): the entry files say how each site is addressed and certified
+# SHARED by the development stack (deploy/dev/caddy/Caddyfile) and production (deploy/prod/caddy/Caddyfile): the entry files say how each site is addressed and certified
 # and what sits behind it, and nothing else, so the checks below cannot differ between the two. A change to the routing is one change here.
 #
 # What an entry file defines (snippets, so this file can use them wherever the entry file puts them):

@@ -1,7 +1,7 @@
 # Override for loadtest/locustfile_queued.py runs (`make loadtest-app-up`): points the containerized app roles' OPENAI_API_BASE at
-# loadtest/fake_llm_server.py (host-native on :9009; start it with `make fake-llm`) instead of litellm, without touching docker-compose.yml or
-# stopping a container. Compose merges `environment` key by key across -f files, so everything else still comes from docker-compose.yml's
-# `x-app-env`. Revert with `make up-app`, which recreates these services from docker-compose.yml alone.
+# loadtest/fake_llm_server.py (host-native on :9009; start it with `make fake-llm`) instead of litellm, without touching app.yml or
+# stopping a container. Compose merges `environment` key by key across -f files, so everything else still comes from app.yml's
+# `x-app-env`. Revert with `make up-app`, which recreates these services from the project's own files alone.
 services:
   api:
     environment:

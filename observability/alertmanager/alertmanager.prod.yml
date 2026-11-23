@@ -1,4 +1,4 @@
-# PRODUCTION Alertmanager config, mounted by docker-compose.observability.prod.yml.
+# PRODUCTION Alertmanager config, mounted by deploy/prod/observability.yml.
 # alertmanager.yml (the local/demo file) deliberately has no receiver; mounting THAT
 # in production meant no alert was ever delivered to anyone (spec 008 A7) while the
 # Alerts tab looked healthy. This one has a real receiver, and the compose file refuses
@@ -7,7 +7,7 @@
 # The Slack incoming-webhook URL is a secret and Alertmanager does no environment
 # expansion, so it is read from a file (`api_url_file`). The compose file writes that file
 # from ALERTMANAGER_SLACK_WEBHOOK_URL (this droplet's .env, see
-# deploy/env/observability.prod.env.example) just before starting Alertmanager.
+# deploy/prod/observability.env.example) just before starting Alertmanager.
 #
 # Severities come from observability/prometheus/alerts.yml. `critical` ones — spend that
 # is not being recorded, a daily allowance that is not being enforced, a total worker

@@ -731,7 +731,7 @@ groups:
             nothing is silently dropped. Look for a stream that grew: `docker compose exec redis
             redis-cli --bigkeys`, and `XINFO GROUPS agent:requests:<domain>` for a worker pool that is
             not keeping up. If it is simply too small for the traffic, raise `--maxmemory` and
-            `mem_limit` together in docker-compose.prod.yml (maxmemory about 75% of the limit). Not
+            `mem_limit` together in deploy/prod/infra.yml (maxmemory about 75% of the limit). Not
             evaluated where `maxmemory` is unset (development), where the gauge is 0. The answer
             cache is a different Redis, deliberately not watched: it evicts by design.
 

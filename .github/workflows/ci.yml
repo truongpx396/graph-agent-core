@@ -71,7 +71,7 @@ name: CI
 # misconfig heuristics.
 #
 # `sonarqube` (self-hosted Community Edition, not SonarCloud — see
-# docker-compose.yml's `quality` profile for the same image used
+# deploy/dev/observability.yml's `quality` profile for the same image used
 # persistently outside CI) runs its own ephemeral server as a job step
 # (same explicit `docker run` sidecar shape this file's `promptfoo` job
 # already uses for its own Ollama, not GH Actions' `services:` block or

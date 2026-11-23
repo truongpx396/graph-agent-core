@@ -73,7 +73,7 @@ ENV HOME=/home/appuser
 # main.py; the logic became an importable package so tests and the evaluation harness can use the very code the service serves with.
 COPY . ./
 
-# The named volume mounted at /home/appuser/.cache (docker-compose.yml)
+# The named volume mounted at /home/appuser/.cache (deploy/dev/app.yml)
 # only inherits this chown correctly if the directory already exists at
 # mount time — huggingface_hub doesn't create it until the first download,
 # which is too late (the volume driver seeds a NEW empty volume's

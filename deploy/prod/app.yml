@@ -1,0 +1,266 @@
+# Production stack (droplet), part of docker-compose.yml: what this repo builds, as images CI built and the droplet pulls (`image:`, never `build:`). The same roles
+# as deploy/dev/app.yml plus the opt-in Telegram bot (`--profile telegram`). The MCP gateway and the bot are the app image with another command, so they are here
+# beside the roles that share the anchors below; the front door they sit behind is gateway.yml.
+
+# Workers bind no port, so the image's API HEALTHCHECK (a probe of :8000/health/ready) would report them `unhealthy` forever. A process that has
+# nothing to probe says so here: a service added without one of the two blocks below inherits that probe.
+x-no-healthcheck: &no-healthcheck
+  disable: true
+
+# The two queue workers touch a heartbeat file from each loop (app/platform/worker_heartbeat.py) and this fails when one is more than two minutes
+# stale: a worker whose event loop is stuck stays "up" otherwise, and `WorkerUnreachable` only fires when a whole domain has no worker. The probe is
+# the standard library alone (about 20 ms). Compose does not restart an unhealthy container by itself: deploy/README.md says what does. The start
+# period covers the graph build and the checkpointer's first connection.
+x-worker-healthcheck: &worker-healthcheck
+  test: ["CMD", "python", "-m", "app.platform.worker_heartbeat"]
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 90s
+
+x-app-env: &app-env
+  OPENAI_API_BASE: http://litellm:4000/v1
+  # A SCOPED key, not the master: the master is gateway admin (it mints keys, reads every spend log, rewrites models, removes budgets) and cannot
+  # carry a budget, so an app sending it has no gateway-side cap and a compromised container hands over the gateway. Mint LITELLM_APP_KEY once with
+  # `python -m scripts.tools.litellm_key create` (deploy/README.md). The master-key fallback only keeps an existing deployment running until you do.
+  OPENAI_API_KEY: ${LITELLM_APP_KEY:-${LITELLM_MASTER_KEY}}
+  CHAT_MODEL: chat
+  EMBED_MODEL: embed
+  QDRANT_URL: http://qdrant:6333
+  ML_SERVICE_URL: http://ml-service:80
+  # Through PgBouncer, not Postgres: Postgres sees the pooler's pool size however many `--scale agent-worker=N` replicas run. LiteLLM connects directly (specs/022).
+  CHECKPOINTER_DATABASE_URL: postgresql://langfuse:${POSTGRES_PASSWORD}@pgbouncer:6432/checkpointer
+  APPDATA_DATABASE_URL: postgresql://langfuse:${POSTGRES_PASSWORD}@pgbouncer:6432/appdata
+  REDIS_URL: redis://redis:6379
+  # The answer cache has its own Redis: a cache wants `allkeys-lru`, and the queue, the locks and the front door's revocation list must never be evicted, so no one
+  # eviction policy is right for both (PRODUCTION_REVIEW.md R15). Unset, the cache would share `REDIS_URL`.
+  SEMANTIC_CACHE_REDIS_URL: redis://redis-cache:6379
+  # S3-compatible storage, DigitalOcean Spaces by default (no MinIO container here). A self-hosted MinIO works too: point these at it and set MINIO_SECURE=false.
+  MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+  MINIO_BUCKET: ${MINIO_BUCKET}
+  MINIO_SECURE: ${MINIO_SECURE:-true}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+  # Blank (the default) follows the turn's limit; deploy/prod/prod.env.example suggests 30 for a hosted model.
+  LLM_READ_TIMEOUT_SECONDS: ${LLM_READ_TIMEOUT_SECONDS:-}
+  MAX_COST_USD_PER_TURN: ${MAX_COST_USD_PER_TURN:-0.50}
+  MAX_COST_USD_PER_TENANT_PER_DAY: ${MAX_COST_USD_PER_TENANT_PER_DAY:-20.0}
+  # The three optional ceilings (0 = off, Settings' own default, so a line left unset changes nothing) and what to do with a model LiteLLM cannot price.
+  # deploy/prod/prod.env.example told operators to set them, but nothing passed them to a container: a $400 monthly cap in `.env` capped nothing.
+  # tests/core/test_env_examples_match_compose.py keeps the example and this block from drifting apart again.
+  MAX_COST_USD_PER_TENANT_PER_MONTH: ${MAX_COST_USD_PER_TENANT_PER_MONTH:-0}
+  MAX_COST_USD_PER_PRINCIPAL_PER_DAY: ${MAX_COST_USD_PER_PRINCIPAL_PER_DAY:-0}
+  MAX_COST_USD_PER_PRINCIPAL_PER_MONTH: ${MAX_COST_USD_PER_PRINCIPAL_PER_MONTH:-0}
+  UNPRICED_MODEL_POLICY: ${UNPRICED_MODEL_POLICY:-allow}
+  # Unset (empty) unless you opt in; each degrades as app/core/config.py documents: no Langfuse tracing, no crawl4ai or OpenSandbox tools, no Slack, no Telegram.
+  LANGFUSE_HOST: ${LANGFUSE_HOST:-}
+  LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+  LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+  SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+  # The local agent collector (`otel-collector-agent` below), which relays to the observability droplet over OTLP (observability/otel-collector/config.agent.yaml).
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector-agent:4318
+  # The Pyroscope server on the observability droplet, over the VPC (http://<observability_private_ipv4>:4040). Blank = no profiling, the default until
+  # it has been tried there (deploy/prod/prod.env.example).
+  PYROSCOPE_SERVER_ADDRESS: ${PYROSCOPE_SERVER_ADDRESS:-}
+  CRAWL4AI_SERVER_URL: ${CRAWL4AI_SERVER_URL:-}
+  CRAWL4AI_API_TOKEN: ${CRAWL4AI_API_TOKEN:-}
+  SERPER_API_KEY: ${SERPER_API_KEY:-}
+  WEB_SEARCH_MAX_RESULTS: ${WEB_SEARCH_MAX_RESULTS:-5}
+  OPENSANDBOX_MCP_DOMAIN: ${OPENSANDBOX_MCP_DOMAIN:-}
+  OPENSANDBOX_API_KEY: ${OPENSANDBOX_API_KEY:-}
+
+# Runtime hardening for the images this repo builds, as deploy/dev/app.yml explains it (nothing here changes what the app does): `init` (a real PID 1), no-new-privileges, `cap_drop: ALL`,
+# and a read-only image filesystem with capped RAM tmpfs for /tmp and $HOME. ml-service keeps a named volume for its models, so it overrides `tmpfs`.
+x-hardened: &hardened
+  init: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  read_only: true
+  tmpfs:
+    - /tmp:size=128m
+    - /home/appuser:size=64m,uid=1000,gid=1000
+
+services:
+  # Reranker, prompt-injection classifier and embeddings; the design is in deploy/dev/app.yml's `ml-service`. Budgets are scaled down from the dev
+  # defaults (RERANK_CPU_BUDGET=8, cpus 10) for a 4-vCPU droplet: 3 cores here, 1 left for postgres, redis, qdrant, litellm and the app. Raise both
+  # together if you size the droplet up.
+  ml-service:
+    <<: *hardened
+    tmpfs:
+      - /tmp:size=128m  # the models live in the named volume below, not in tmpfs
+    # Prebuilt in CI and pulled, not built on the droplet (compiling onnxruntime's dependency chain every deploy would be slow and compete for CPU).
+    # ML_IMAGE is in .env; IMAGE_TAG comes from the deploy workflow (deploy/prod/prod.env.example).
+    image: ${ML_IMAGE}:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    cpus: "3"
+    mem_limit: 2g
+    environment:
+      RERANK_CPU_BUDGET: "2"
+      GUARD_CPU_BUDGET: "1"
+      # Which text models (services/ml-service/models.toml) to load. Measure memory first: it idles near 0.8 GiB with bge-small and peaked at 1.07 GiB under
+      # load, against this file's 2g limit.
+      ML_MODELS_ENABLED: ${ML_MODELS_ENABLED:-}
+      ML_EMBED_MAX_ITEMS: ${ML_EMBED_MAX_ITEMS:-256}
+      ML_EMBED_MAX_CHARS: ${ML_EMBED_MAX_CHARS:-8000}
+    volumes:
+      - ml-service:/home/appuser/.cache
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:80/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 45s
+
+  # api, agent-worker and ingest-worker run ONE image (one build, three commands; the root Dockerfile's header says why), built in CI and pulled like
+  # ml-service. APP_IMAGE is set once in .env, IMAGE_TAG per deploy by .github/workflows/deploy.yml.
+  api:
+    <<: *hardened
+    image: ${APP_IMAGE}:${IMAGE_TAG:-latest}
+    # The one role that takes uploads (up to 5 x 25 MB, app/adapters/inbound/api/routers/ingest.py): the multipart parser spools to /tmp before the handler runs, so
+    # /tmp is a disk-backed volume (a tmpfs would fill RAM at the second large upload). Only $HOME is tmpfs.
+    tmpfs:
+      - /home/appuser:size=64m,uid=1000,gid=1000
+    volumes:
+      - /tmp
+    restart: unless-stopped
+    cpus: "0.5"
+    mem_limit: 512m
+    # Long enough for an in-flight SSE turn (POST /chat/stream/queued) to finish instead of being SIGKILLed on redeploy: uvicorn already drains on
+    # SIGTERM; this gives it time.
+    stop_grace_period: 60s
+    # No `ports:`: a fixed host port cannot be shared across replicas, and Caddy's `dynamic a` upstream needs `--scale api=N`. To reach the API by hand,
+    # `ssh` in and `docker compose exec api curl localhost:8000/health` (deploy/README.md).
+    environment:
+      <<: *app-env
+      # Identity mode, written down rather than left to the default: the API trusts only the identity authlimit signs on a request it verified, and a
+      # request that skips the door is a 401. NEVER `headers` here (any client could claim any tenant; the alert ApiHeaderAuthMode fires). The keys are
+      # authlimit's, by its in-network name; the API answers 503 until they load.
+      AUTH_MODE: identity
+      AUTHLIMIT_KEYS_URL: http://authlimit:8080/internal/jwks.json
+      # What the built-in page signs in against: the issuer, and this API's public address (the audience of the token it asks for). The same two
+      # values authlimit is started with, derived from the same names below, so they cannot disagree.
+      WEB_AUTH_ISSUER: https://${AUTH_DOMAIN:?set AUTH_DOMAIN in .env}
+      WEB_AUTH_AUDIENCE: https://${API_DOMAIN:?set API_DOMAIN in .env}
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  agent-worker:
+    <<: *hardened
+    image: ${APP_IMAGE}:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    cpus: "0.5"
+    mem_limit: 768m
+    stop_grace_period: 90s # let an in-flight agent turn (LLM calls, tool use) finish rather than being killed mid-turn
+    command: ["python", "-m", "app.adapters.inbound.workers.agent_worker"]
+    healthcheck: *worker-healthcheck
+    environment:
+      <<: *app-env
+      # The domains this worker serves: comma-separated names or `all` (app/adapters/inbound/workers/agent_worker.py). Ecorp only by default; the others are demo domains.
+      AGENT_WORKER_DOMAINS: ${AGENT_WORKER_DOMAINS:-ecorp}
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Scale when traffic warrants it (pattern 43): docker compose --project-directory . -f deploy/prod/docker-compose.yml up -d --scale agent-worker=3
+
+  ingest-worker:
+    <<: *hardened
+    image: ${APP_IMAGE}:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    cpus: "0.3"
+    mem_limit: 768m
+    stop_grace_period: 90s # let an in-flight document parse/embed job finish rather than being killed mid-job
+    command: ["python", "-m", "app.adapters.inbound.workers.ingest_worker"]
+    healthcheck: *worker-healthcheck
+    environment: *app-env
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # The MCP gateway (specs/017): the two read-only MCP servers over Streamable HTTP, an OAuth 2.1 resource server that verifies tokens itself and never
+  # issues one. The app image with a different command, and only what the two tools read (the app database, Prometheus): no LLM keys, Redis or sandbox
+  # key, because anyone holding a token can reach this process. Stateless, so `--scale mcp-gateway=N` works behind Caddy's `dynamic a`.
+  mcp-gateway:
+    <<: *hardened
+    image: ${APP_IMAGE}:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    cpus: "0.2"
+    mem_limit: 256m
+    command: ["python", "-m", "app.adapters.inbound.mcp.gateway", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      APPDATA_DATABASE_URL: postgresql://langfuse:${POSTGRES_PASSWORD}@pgbouncer:6432/appdata
+      # The ops server reads Prometheus. The observability droplet's is not reachable from here by default (its firewall opens Grafana, OTLP, Loki and
+      # Pyroscope only): point this at one this droplet can reach, or the ops tools report it as unreachable and the directory tools are unaffected.
+      PROMETHEUS_URL: ${MCP_GATEWAY_PROMETHEUS_URL:-http://localhost:9090}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector-agent:4318
+      MCP_GATEWAY_PUBLIC_URL: https://${MCP_DOMAIN}
+      MCP_GATEWAY_ISSUER: https://${AUTH_DOMAIN}
+      MCP_GATEWAY_JWKS_URL: http://casdoor:8000/.well-known/jwks
+      MCP_GATEWAY_OPS_TENANTS: ${MCP_GATEWAY_OPS_TENANTS:-ops-team}
+      # Read by `scripts.tools.mcp_gateway_bootstrap`, which runs inside this container (deploy/README.md): the chat API's resource identifier.
+      AUTHLIMIT_AUDIENCE: https://${API_DOMAIN}
+    # Ready = can check a token: a replica that cannot reach the signing keys leaves rotation instead of answering 401.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      casdoor:
+        condition: service_started
+
+  # The Telegram bot (specs/020, 021), opt-in: `docker compose --profile telegram up -d`. A client of the chat API through the front door like the web page
+  # and the CLI, never the queue or the graph. It reaches the API and Casdoor by their public names, which Caddy's network aliases below resolve to Caddy
+  # itself, so it needs no hairpin through the droplet's public address and the certificates verify. In `poll` mode (the default) it needs no inbound
+  # port at all; in `webhook` mode, and for the page a login returns to, Caddy routes /telegram/* to its listener (deploy/shared/caddy/gateway.caddy).
+  telegram-bot:
+    <<: *hardened
+    image: ${APP_IMAGE}:${IMAGE_TAG:-latest}
+    profiles: ["telegram"]
+    restart: unless-stopped
+    cpus: "0.1"
+    mem_limit: 192m
+    command: ["python", "-m", "app.adapters.inbound.channels.telegram.bot"]
+    healthcheck: *no-healthcheck
+    environment:
+      REDIS_URL: redis://redis:6379
+      AUTH_MODE: identity
+      CHANNEL_API_URL: https://${API_DOMAIN}
+      WEB_AUTH_ISSUER: https://${AUTH_DOMAIN}
+      WEB_AUTH_AUDIENCE: https://${API_DOMAIN}
+      AGENT_DOMAIN: ${TELEGRAM_AGENT_DOMAIN:-ecorp}
+      # Not `:?`: compose interpolates the whole file for every command, profile or not, so a required variable here would break `pull` and `up` for
+      # everyone who does not run the bot. The bot itself refuses to start without it (telegram/bot.py check_settings).
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_MODE: ${TELEGRAM_MODE:-poll}
+      TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+      # Bound to every interface of its own container, which is only reachable from Caddy over the compose network (no `ports`).
+      TELEGRAM_LISTEN_HOST: 0.0.0.0
+      TELEGRAM_PERSON_SECRET: ${TELEGRAM_PERSON_SECRET:-}
+      TELEGRAM_TENANT: ${TELEGRAM_TENANT:-}
+      TELEGRAM_LINKING: ${TELEGRAM_LINKING:-false}
+      TELEGRAM_LINK_PUBLIC_URL: https://${API_DOMAIN}
+      TELEGRAM_LINK_KEY: ${TELEGRAM_LINK_KEY:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector-agent:4318
+    depends_on:
+      redis:
+        condition: service_healthy
+      caddy:
+        condition: service_started
+
+volumes:
+  ml-service:

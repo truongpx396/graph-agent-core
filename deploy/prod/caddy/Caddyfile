@@ -1,5 +1,5 @@
-# The production entry of the front door (docker-compose.prod.yml): TLS from Let's Encrypt on three real names, and the API's replicas behind the
-# check. The routing is gateway.caddy's, the same file the development stack's Caddyfile.gateway imports, so what authlimit decides in
+# The production entry of the front door (deploy/prod/gateway.yml): TLS from Let's Encrypt on three real names, and the API's replicas behind the
+# check. The routing is deploy/shared/caddy/gateway.caddy's, the same file the development stack's Caddyfile imports, so what authlimit decides in
 # production is what the smoke checks decide in development.
 #
 # The three names are required (compose refuses to start without them): identity needs an https issuer, so there is no plain-HTTP fallback. Each
@@ -26,7 +26,7 @@
 			refresh 5s
 		}
 
-		# Active health check, so a replica that is draining (SIGTERM, see docker-compose.prod.yml's `api` stop_grace_period) or still starting up
+		# Active health check, so a replica that is draining (SIGTERM, see deploy/prod/app.yml's `api` stop_grace_period) or still starting up
 		# stops receiving new requests quickly instead of only being caught after a failed request.
 		health_uri /health/ready
 		health_interval 10s
@@ -42,7 +42,9 @@
 	reverse_proxy telegram-bot:8081
 }
 
-import gateway.caddy
+# The routing, relative to THIS file: the compose part mounts this directory and deploy/shared/caddy at the paths they have in the repo, so the
+# import resolves in the container exactly as it does on a checkout.
+import ../../shared/caddy/gateway.caddy
 
 {$API_DOMAIN} {
 	import api_site

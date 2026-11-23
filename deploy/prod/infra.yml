@@ -1,0 +1,157 @@
+# Production stack (droplet), part of docker-compose.yml: the backing services. The same roles as deploy/dev/infra.yml, leaner: a CPU and memory ceiling on every
+# container, Redis split in two (the queue must never evict, the answer cache must), LiteLLM on the hosted-endpoint config. None publishes a host port:
+# the app reaches them by service name.
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    # Ceilings, not reservations: --cpus lets a container burst when the host has spare capacity, so these summing past this droplet's 4 cores is
+    # not oversubscription at rest. They stop one runaway container from starving the rest. Starting points; revisit against the observability
+    # droplet's dashboards (observability.yml).
+    cpus: "0.3"
+    mem_limit: 768m
+    # max_connections is Postgres's default, written down so a test can read the budget: the pooler may hold 2 x 18 server connections
+    # (tests/core/test_compose_pooler.py keeps 2 x MAX_DB_CONNECTIONS + 30 <= this); LiteLLM and the admin tools get the rest.
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements", "-c", "max_connections=100"]
+    environment:
+      # The role stays `langfuse` so postgres-init/*.sql's `OWNER langfuse` runs unmodified (shared with the dev stack); only the password differs.
+      # There is no `langfuse` database here, just the role.
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # `postgres`, the database every image already has. It was `appdata`, which the image then creates itself BEFORE postgres-init/02-appdata.sql runs
+      # `CREATE DATABASE appdata`: that failed ("already exists"), the init aborted and the container exited with status 3, so a NEW volume (a new droplet, or a restore onto
+      # a rebuilt one) could not start. Found by `make restore-drill`. An existing volume ignores this setting, and the init scripts create appdata, litellm and checkpointer.
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # PgBouncer in front of the app's two databases (specs/022): the dev stack's image, settings and hardening (deploy/dev/infra.yml says why). No host
+  # port. Postgres sees at most 2 x MAX_DB_CONNECTIONS from the app however many replicas run; LiteLLM connects directly.
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.26.1-p0@sha256:488422e38cff912895d0d65d8963fcd306e6ac589a724398b6eb8e294e94d624
+    restart: unless-stopped
+    cpus: "0.2"
+    mem_limit: 128m
+    init: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs:
+      - /etc/pgbouncer:size=1m,uid=70,gid=70,mode=0700
+    environment:
+      DATABASE_URLS: postgresql://langfuse:${POSTGRES_PASSWORD}@postgres:5432/appdata,postgresql://langfuse:${POSTGRES_PASSWORD}@postgres:5432/checkpointer
+      LISTEN_PORT: "6432"
+      AUTH_TYPE: scram-sha-256
+      POOL_MODE: transaction
+      DEFAULT_POOL_SIZE: "15"
+      RESERVE_POOL_SIZE: "3"
+      RESERVE_POOL_TIMEOUT: "3"
+      MAX_DB_CONNECTIONS: "18"
+      MAX_CLIENT_CONN: "500"
+      QUERY_WAIT_TIMEOUT: "30"
+      IDLE_TRANSACTION_TIMEOUT: "60"
+      IGNORE_STARTUP_PARAMETERS: extra_float_digits,options
+      STATS_USERS: langfuse
+      LOG_CONNECTIONS: "0"
+      LOG_DISCONNECTIONS: "0"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432 -U langfuse -d appdata"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # The work queue, conversation locks, cancel flags, dedup claims, the front door's rate buckets and revocation list, and the Telegram state (PRODUCTION_REVIEW.md R15). All of it must
+  # survive and none of it may be evicted, so:
+  #   --appendonly yes --appendfsync everysec   a restart loses at most about a second of accepted jobs (it used to lose whatever the last snapshot missed: minutes)
+  #   --maxmemory 192mb --maxmemory-policy noeviction   when full a write is REFUSED (the API's publish fails and the caller sees an error) and nothing is dropped: visible, and no lock
+  #       or job silently gone. `RedisQueueMemoryHigh` (observability/prometheus/alerts.yml) fires at 80%. 192mb is 75% of `mem_limit`, the rest being for the AOF rewrite and buffers:
+  #       change the two together (sized for the default s-4vcpu-8gb droplet; the owner's number to set).
+  # The same image as `redis-cache`, not a plain Redis: the AOF this server writes holds the semantic cache's search and JSON commands, which a plain server cannot load (move both to
+  # `redis:8` only after tests/integration/test_queue_real_redis.py and the semantic-cache tests pass against it). Server flags go through `REDIS_ARGS`: the image has no entrypoint, so
+  # a `command:` would replace its start script.
+  # MIGRATING an existing deployment: switching the flags on a volume that holds only a snapshot starts EMPTY (Redis ignores `dump.rdb` once AOF is on), losing the queue and the
+  # revocation list. deploy/README.md ("Redis") has the steps; do them before you pull this file.
+  redis:
+    image: redis/redis-stack-server@sha256:798ab84d9f266936b034ab11c4d04a2b8e4b441884c5aa7d17ac951eefdf742a   # Redis 7.4.7 with search and JSON; pinned 2026-11-15
+    restart: unless-stopped
+    cpus: "0.2"
+    mem_limit: 256m
+    environment:
+      REDIS_ARGS: --appendonly yes --appendfsync everysec --maxmemory 192mb --maxmemory-policy noeviction
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # The answer cache (app/adapters/outbound/redis/semantic_cache.py): disposable by design, so no snapshot, no AOF, no volume, and `allkeys-lru` so it fills up and evicts the least
+  # recently used. A cache miss is a model call, never an error: this service being down or empty costs money, not correctness (`SemanticCacheErrors` says when it is down).
+  # 128mb of the 192m limit; the owner's number to set.
+  redis-cache:
+    image: redis/redis-stack-server@sha256:798ab84d9f266936b034ab11c4d04a2b8e4b441884c5aa7d17ac951eefdf742a   # the same image as `redis`
+    restart: unless-stopped
+    cpus: "0.2"
+    mem_limit: 192m
+    environment:
+      REDIS_ARGS: --save "" --appendonly no --maxmemory 128mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.20.1@sha256:d18c8e5061be3eaea2f53fbee1f0bf0382dc59cbb9b7112e41ffcc937ec14220
+    restart: unless-stopped
+    cpus: "0.3"
+    mem_limit: 512m
+    volumes:
+      - qdrant:/qdrant/storage
+
+  litellm:
+    # Pinned by digest, the same as deploy/dev/infra.yml (a test checks); bump it with deploy/README.md ("Bumping the LiteLLM image").
+    image: ghcr.io/berriai/litellm:main-stable@sha256:28b10a635296730007097390939b55f8696ece548530d4ddda3e31c708b4dc81
+    restart: unless-stopped
+    cpus: "0.3"
+    mem_limit: 512m
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    volumes:
+      - ./deploy/prod/litellm-config.yaml:/app/config.yaml:ro
+    environment:
+      LLM_API_BASE: ${LLM_API_BASE}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_CHAT_MODEL: ${LLM_CHAT_MODEL}
+      # The middle tier (`chat-medium`). Unset = the same as `chat`, so the proxy always starts; see deploy/prod/prod.env.example.
+      LLM_MEDIUM_CHAT_MODEL: ${LLM_MEDIUM_CHAT_MODEL:-${LLM_CHAT_MODEL}}
+      LLM_MEDIUM_API_BASE: ${LLM_MEDIUM_API_BASE:-${LLM_API_BASE}}
+      LLM_MEDIUM_API_KEY: ${LLM_MEDIUM_API_KEY:-${LLM_API_KEY}}
+      # The escalation alias (`chat-strong`). Unset = the same as `chat`, so the proxy always starts; see deploy/prod/prod.env.example.
+      LLM_STRONG_CHAT_MODEL: ${LLM_STRONG_CHAT_MODEL:-${LLM_CHAT_MODEL}}
+      LLM_STRONG_API_BASE: ${LLM_STRONG_API_BASE:-${LLM_API_BASE}}
+      LLM_STRONG_API_KEY: ${LLM_STRONG_API_KEY:-${LLM_API_KEY}}
+      LLM_EMBED_MODEL: ${LLM_EMBED_MODEL}
+      DATABASE_URL: postgresql://langfuse:${POSTGRES_PASSWORD}@postgres:5432/litellm
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      UI_USERNAME: ${LITELLM_UI_USERNAME}
+      UI_PASSWORD: ${LITELLM_UI_PASSWORD}
+      # No LANGFUSE_* (unlike the dev stack): there is no Langfuse container here, and litellm-config.yaml's callbacks are trimmed to prometheus.
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres:
+  redis:
+  qdrant:

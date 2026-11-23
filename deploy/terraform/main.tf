@@ -1,6 +1,6 @@
 resource "digitalocean_project" "this" {
   name        = var.project_name
-  description = "graph-agent-core lean production stack (see docker-compose.prod.yml)"
+  description = "graph-agent-core lean production stack (see deploy/prod/docker-compose.yml)"
   purpose     = "Web Application"
   environment = var.environment
 }
@@ -53,7 +53,7 @@ resource "digitalocean_reserved_ip_assignment" "app" {
 }
 
 # Separate, smaller droplet for Prometheus/Loki/Grafana/Alertmanager/
-# otel-collector (docker-compose.observability.prod.yml) — deliberately not
+# otel-collector (deploy/prod/observability.yml) — deliberately not
 # co-located with the app droplet so a metrics/logs spike can't compete with
 # it for CPU/mem, and so losing this box never touches the app's own data.
 # Same VPC as the app droplet (below) so the two can talk over DO's private

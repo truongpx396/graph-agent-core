@@ -1,6 +1,6 @@
 """A NEW production Postgres volume initialises (PRODUCTION_REVIEW.md R26).
 
-`docker-compose.prod.yml` set `POSTGRES_DB: appdata`, so the image created `appdata` itself and then `postgres-init/02-appdata.sql` ran `CREATE DATABASE appdata`: "already
+`deploy/prod/infra.yml` set `POSTGRES_DB: appdata`, so the image created `appdata` itself and then `postgres-init/02-appdata.sql` ran `CREATE DATABASE appdata`: "already
 exists", the init aborted, and the container exited with status 3. An existing volume never runs the init again, so nothing showed it; a new droplet, or a restore onto a
 rebuilt one, could not start Postgres. The test helpers did not see it either: they start the DEVELOPMENT layout (`POSTGRES_DB=langfuse`).
 
@@ -21,7 +21,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def _production_postgres() -> dict:
-    return yaml.safe_load((REPO / "deploy" / "compose" / "docker-compose.prod.yml").read_text(encoding="utf-8"))["services"]["postgres"]
+    return yaml.safe_load((REPO / "deploy" / "prod" / "infra.yml").read_text(encoding="utf-8"))["services"]["postgres"]
 
 
 def test_a_new_volume_initialises_and_holds_every_database_the_application_needs():

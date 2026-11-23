@@ -26,7 +26,7 @@ How tools reach data and the outside world without becoming a way around the app
 ### 50. Web crawling (crawl4ai) and a sandbox (OpenSandbox over MCP)
 crawl4ai (`app/adapters/outbound/crawl4ai/web_crawler.py`) renders JS-heavy pages; OpenSandbox, consumed over MCP through 28, runs code in isolation. Both go through the SSRF guard (`app/core/url_safety.py`) and every tool is `outward`.
 - **Wrap narrow:** a 3B model given OpenSandbox's ~19 tools hallucinated a `sandbox_id`. `app/domains/shared/sandbox_session.py` does lookup and creation in code and exposes four flat tools; `run_python_in_sandbox` takes the script as a plain argument because the model broke shell quoting.
-- **Bug:** two simultaneous tool calls arrived glued into one entry. `parallel_tool_calls=False` was a no-op; the fix is the LiteLLM chunk-index patch (`deploy/litellm/patches/sitecustomize.py`), which is load-bearing.
+- **Bug:** two simultaneous tool calls arrived glued into one entry. `parallel_tool_calls=False` was a no-op; the fix is the LiteLLM chunk-index patch (`deploy/dev/litellm-patches/sitecustomize.py`), which is load-bearing.
 - **Bug:** a many-to-one rewrite of a Telegram id let two tenants share a sandbox (Principle I). Tenant and conversation id are now separate SHA-256 tags, filtered on both, and `tenant` is a required keyword on every sandbox helper.
 - **Not verified against a real service:** that the sandbox honours the metadata filter and its "no network egress" claim (spec 009, A2).
 

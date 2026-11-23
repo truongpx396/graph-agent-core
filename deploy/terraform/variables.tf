@@ -59,7 +59,7 @@ variable "admin_ip_cidrs" {
 }
 
 variable "obs_droplet_size" {
-  description = "Droplet size slug for the separate observability box (Prometheus/Loki/Grafana/Alertmanager/otel-collector, docker-compose.observability.prod.yml) — deliberately smaller than the app droplet."
+  description = "Droplet size slug for the separate observability box (Prometheus/Loki/Grafana/Alertmanager/otel-collector, deploy/prod/observability.yml) — deliberately smaller than the app droplet."
   type        = string
   default     = "s-2vcpu-4gb"
 }
@@ -71,7 +71,7 @@ variable "obs_domain_name" {
 }
 
 variable "domain_name" {
-  description = "Optional FQDN you point an A/AAAA record at the droplet's reserved IP for — informational only here (this module's own `app_url` output), the actual DOMAIN_NAME Caddy acts on lives in the droplet's .env (docker-compose.prod.yml), set independently of this variable. When set, Caddy requests a real Let's Encrypt cert for it; leave empty to serve plain HTTP over the reserved IP only (see Caddyfile)."
+  description = "Optional FQDN you point an A/AAAA record at the droplet's reserved IP for — informational only here (this module's own `app_url` output), the actual DOMAIN_NAME Caddy acts on lives in the droplet's .env (deploy/prod/docker-compose.yml), set independently of this variable. When set, Caddy requests a real Let's Encrypt cert for it; leave empty to serve plain HTTP over the reserved IP only (see Caddyfile)."
   type        = string
   default     = ""
 }
