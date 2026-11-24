@@ -48,6 +48,17 @@ services:
       origin: ${MCP_GATEWAY_ISSUER:-https://auth.localhost:8443}
       # No default admin password in this version; `make front-door-up` generates one.
       initAdminPassword: ${CASDOOR_ADMIN_PASSWORD:-}
+      # Casdoor's own declarative config: the organizations, the chat API's and MCP's applications and the demo users, in a file `make front-door-bootstrap` writes
+      # (scripts/tools/front_door_bootstrap.py --init-data-dir). Applied at start and again within seconds of a change. `initDataMerge` makes each apply an UPDATE of what
+      # exists (only the keys the file names, a person's own password kept); the default would delete and re-create it, which resets that password. Measured on this
+      # image, docs/ACCESS_PATTERNS.md pattern 103. No file yet: Casdoor starts empty, as it did.
+      initDataFile: /casdoor-init/init_data.json
+      initDataMerge: "true"
+      initDataWatchInterval: "5"
+    volumes:
+      # The DIRECTORY, not the file: the script replaces the file by a rename, which a single-file bind mount would not follow (the directory form is what was tested).
+      # Outside the repo, mode 700, because the file holds the demo users' initial passwords. The Makefile sets CASDOOR_INIT_DIR (GATEWAY_ENV) to where it writes the file; the default is the same path, for a compose command run by hand.
+      - ${CASDOOR_INIT_DIR:-${HOME:-/tmp}/.cache/graph-agent-core-front-door/casdoor-init}:/casdoor-init:ro
     depends_on:
       casdoor-db:
         condition: service_healthy

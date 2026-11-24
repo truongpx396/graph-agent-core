@@ -288,3 +288,122 @@ def test_a_user_is_found_by_its_name_so_a_renamed_one_is_created_again_under_the
 
     assert casdoor.ensure_user("ecorp", "ethan") is None and casdoor.writes == [], "an existing user is left alone and no password is shown"
     assert casdoor.ensure_user("ecorp", "alice") is not None and [b["name"] for _, b in casdoor.writes] == ["alice"]
+
+
+# --- the init file way (`--init-data-dir`): Casdoor's own declarative config, which the development stack mounts ------------------------------
+# Measured on the pinned image (docs/ACCESS_PATTERNS.md): with `initDataMerge` each apply updates what exists, keeps a person's own password and a
+# secret the file does not name, and replaces an array wholesale. These pin what the FILE must therefore contain, and not contain.
+
+
+def render(tmp_path, *args: str) -> dict:
+    import json
+
+    bootstrap.main(["--init-data-dir", str(tmp_path), *args])
+    return json.loads((tmp_path / bootstrap.INIT_FILE).read_text(encoding="utf-8"))
+
+
+def file_apps(document: dict) -> dict[str, dict]:
+    return {a["name"]: a for a in document["applications"]}
+
+
+def test_the_init_file_way_needs_no_admin_password_and_never_calls_the_admin_api(monkeypatch, tmp_path):
+    FakeCasdoor.instances = []
+    monkeypatch.setattr(bootstrap, "Casdoor", FakeCasdoor)
+    monkeypatch.delenv("CASDOOR_ADMIN_PASSWORD", raising=False)
+
+    document = render(tmp_path)
+
+    assert FakeCasdoor.instances == [], "the file is applied by Casdoor itself: no login, no API"
+    assert [o["name"] for o in document["organizations"]] == ["ecorp", "ops-team"]
+    assert set(file_apps(document)) == {"mcp-ecorp", "api-ecorp", "mcp-ops"}
+
+
+def test_the_file_holds_the_records_the_api_way_sends_so_the_two_cannot_drift(casdoor, tmp_path):
+    api = file_apps(render(tmp_path))["api-ecorp"]
+    sent = RecordingCasdoor()
+    sent.ensure_application("api-ecorp", "ecorp", "api:chat", "chat API for ecorp", api["redirectUris"], 168, kind="API", client_id="api-ecorp")
+
+    body = {key: value for key, value in sent.writes[0][1].items() if key not in ("clientId", "clientSecret")}
+    assert {key: value for key, value in api.items() if key != "clientId"} == body, "one definition, two deliveries"
+
+
+def test_a_client_id_in_the_file_is_the_applications_name_and_no_secret_is_written(casdoor, tmp_path):
+    apps = file_apps(render(tmp_path, "--tenant", "ecorp", "--tenant", "other-co"))
+
+    assert {name: app["clientId"] for name, app in apps.items()} == {name: name for name in apps}, "a declarative file names its ids; `api-<tenant>` is the rule the web page uses"
+    assert not [name for name, app in apps.items() if "clientSecret" in app], "Casdoor makes the secret when it creates the application, and merge keeps it: a file must not set one"
+
+
+def test_the_file_never_sets_what_an_operator_sets_on_a_person(casdoor, tmp_path):
+    """Merge writes every key the file names on each apply and each restart. Naming `isForbidden` would re-enable a demo user someone disabled (deploy/README.md
+    tells an operator to), and naming `isAdmin` would demote an admin."""
+    people = render(tmp_path, "--tenant", "ecorp", "--tenant", "other-co")["users"]
+
+    assert [(u["owner"], u["name"]) for u in people] == [("ecorp", "ethan"), ("other-co", "ethan"), ("ops-team", "oncall")]
+    for person in people:
+        assert not set(bootstrap.OPERATOR_OWNED_USER_FIELDS) & set(person), person["name"]
+
+
+def test_a_second_render_is_byte_identical_and_keeps_every_initial_password(casdoor, tmp_path):
+    first = render(tmp_path)
+    before = (tmp_path / bootstrap.INIT_FILE).read_bytes()
+
+    second = render(tmp_path)
+
+    assert (tmp_path / bootstrap.INIT_FILE).read_bytes() == before, "Casdoor compares the content: an unchanged file is not applied again"
+    assert [u["password"] for u in second["users"]] == [u["password"] for u in first["users"]]
+    assert all(len(u["password"]) >= 20 for u in first["users"])
+
+
+def test_a_changed_argument_changes_the_file_and_keeps_the_people_known_password(casdoor, tmp_path):
+    first = render(tmp_path)
+
+    second = render(tmp_path, "--token-hours", "24")
+
+    assert {a["expireInHours"] for a in second["applications"]} == {24} and {a["expireInHours"] for a in first["applications"]} == {168}
+    assert [u["password"] for u in second["users"]] == [u["password"] for u in first["users"]]
+
+
+def test_the_redirect_uris_are_listed_in_full_every_time_because_merge_replaces_an_array(casdoor, tmp_path):
+    with_bot = file_apps(render(tmp_path, "--telegram-link-url", "https://bot.example.com"))["api-ecorp"]["redirectUris"]
+    without = file_apps(render(tmp_path))["api-ecorp"]["redirectUris"]
+
+    assert with_bot[-1] == "https://bot.example.com/telegram/link/callback"
+    assert without == with_bot[:-1], "what the file does not list is gone from Casdoor at the next apply: the arguments are the whole truth"
+
+
+def test_the_file_and_its_directory_are_private_because_it_holds_passwords(casdoor, tmp_path):
+    target = tmp_path / "casdoor-init"
+
+    render(target)
+
+    assert (target / bootstrap.INIT_FILE).stat().st_mode & 0o777 == 0o600
+    assert target.stat().st_mode & 0o777 == 0o700
+    assert not list(target.glob(".*.tmp")), "the rename leaves no temporary file in the directory the container mounts"
+
+
+def test_a_file_that_is_not_ours_is_replaced_not_trusted(casdoor, tmp_path):
+    (tmp_path / bootstrap.INIT_FILE).write_text("[1, 2, 3]", encoding="utf-8")
+
+    document = render(tmp_path)
+
+    assert len(document["users"]) == 2 and all(u["password"] for u in document["users"])
+
+
+def test_a_directory_that_cannot_be_written_exits_with_a_message_not_a_traceback(casdoor, tmp_path):
+    (tmp_path / "in-the-way").write_text("", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as stop:
+        bootstrap.main(["--init-data-dir", str(tmp_path / "in-the-way" / "casdoor-init")])
+
+    assert str(stop.value).startswith("front-door-bootstrap:")
+
+
+def test_the_output_says_where_the_file_is_and_that_the_passwords_are_initial_ones(casdoor, tmp_path, capsys):
+    render(tmp_path, "--demo-user", "priya")
+
+    out = capsys.readouterr().out
+    assert "log in as ecorp/priya  password: " in out and "generated-password" not in out, "the passwords are the file's, not a recorder's"
+    assert f"Wrote {tmp_path / bootstrap.INIT_FILE}" in out
+    assert "INITIAL" in out and "keeps the new one" in out
+    assert "claude mcp add --transport http --callback-port 33418 --client-id mcp-ecorp ecorp" in out, "an MCP client's id is its application's name, printed"

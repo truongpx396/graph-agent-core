@@ -11,13 +11,19 @@ front-door-secrets:  # internal: create the generated passwords once (never over
 authlimit-keys-ensure:  # internal: create the first signing key if there is none (never replaces one)
 	@test -f $(AUTHLIMIT_KEYS_DIR)/keyset.json || $(MAKE) --no-print-directory authlimit-keys
 
-# specs/017, 018: Casdoor and its Postgres, authlimit, Caddy with local TLS and the OAuth-protected MCP gateway behind them. Then `make front-door-bootstrap`.
-front-door-up: front-door-secrets authlimit-keys-ensure  ## Start the front door (Casdoor, authlimit, Caddy on https://*.localhost:8443) and the MCP gateway behind it; needs `make up`
+# Casdoor's own declarative config, the way its documentation has it (`initDataFile`): written once BEFORE Casdoor first starts, so a fresh stack comes up with its organizations,
+# the chat API's clients and the demo users already in it, and no second step to forget. `front-door-bootstrap` writes it again on purpose.
+front-door-init-data:  # internal: write Casdoor's init file if there is none
+	@test -f $(FRONT_DOOR_INIT_DIR)/init_data.json || { $(PYTHON) -m scripts.tools.front_door_bootstrap --init-data-dir $(FRONT_DOOR_INIT_DIR) >/dev/null && echo "wrote $(FRONT_DOOR_INIT_DIR)/init_data.json (make front-door-bootstrap shows the demo users' initial passwords)"; }
+
+# specs/017, 018: Casdoor and its Postgres, authlimit, Caddy with local TLS and the OAuth-protected MCP gateway behind them. Casdoor applies its init file when it starts.
+front-door-up: front-door-secrets front-door-init-data authlimit-keys-ensure  ## Start the front door (Casdoor, authlimit, Caddy on https://*.localhost:8443) and the MCP gateway behind it; needs `make up`
 	$(GATEWAY_COMPOSE) up -d --build --no-deps casdoor-db casdoor mcp-gateway authlimit authlimit-echo caddy-gateway
 
-# Idempotent; ARGS="--tenant acme --tenant other-co" adds tenants (default ecorp).
-front-door-bootstrap: front-door-secrets  ## Create the Casdoor organizations, the chat API's and MCP's applications and the demo users; prints the `claude mcp add` commands: ARGS="--tenant acme"
-	@. $(FRONT_DOOR_SECRETS) && export CASDOOR_ADMIN_PASSWORD && $(GATEWAY_COMPOSE) exec -T -e CASDOOR_ADMIN_PASSWORD mcp-gateway python -m scripts.tools.front_door_bootstrap $(ARGS)
+# Writes the file from the arguments (ARGS="--tenant acme --tenant other-co": the file lists exactly those, default ecorp) and prints the `claude mcp add` commands and the demo users'
+# initial passwords. A running Casdoor applies a changed file within seconds, but only one started with the mount, so `make front-door-up` once if it predates it. No admin password, no exec.
+front-door-bootstrap: front-door-secrets  ## Write Casdoor's init file (organizations, the chat API's and MCP's applications, demo users) and print the sign-in details: ARGS="--tenant acme"
+	@$(PYTHON) -m scripts.tools.front_door_bootstrap --init-data-dir $(FRONT_DOOR_INIT_DIR) $(ARGS)
 
 front-door-ca: front-door-secrets  ## Export Caddy's local root certificate so a client can trust https://*.localhost:8443
 	$(GATEWAY_COMPOSE) cp caddy-gateway:/data/caddy/pki/authorities/local/root.crt $(FRONT_DOOR_DIR)/caddy-root.crt
@@ -44,7 +50,7 @@ authlimit-keys: authlimit-build  ## Manage the signing keys outside the repo: AR
 authlimit-up: front-door-up  ## Alias of front-door-up (Casdoor, authlimit x2, the MCP gateway, an echo stub, Caddy)
 
 # specs/018. Needs `make up`, `make front-door-bootstrap` and `make front-door-ca`; web UI https://api.localhost:8443/.
-authlimit-up-app: front-door-secrets authlimit-keys-ensure  ## Like authlimit-up, with the real API (identity mode) and a worker behind the door instead of the echo stub
+authlimit-up-app: front-door-secrets front-door-init-data authlimit-keys-ensure  ## Like authlimit-up, with the real API (identity mode) and a worker behind the door instead of the echo stub
 	AUTH_MODE=identity AUTHLIMIT_UPSTREAM=api:8000 $(GATEWAY_COMPOSE) --profile app up -d --build --no-deps casdoor-db casdoor authlimit authlimit-echo mcp-gateway api agent-worker caddy-gateway
 
 # The next `--profile app up` brings the API back in header mode.
