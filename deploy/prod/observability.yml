@@ -2,7 +2,7 @@
 # (digitalocean_droplet.observability), so a metrics or logs spike cannot compete with the app for CPU and memory, and losing this box never touches
 # the app's data. Deployed by .github/workflows/deploy.yml's `deploy-observability` job, independently of the app droplet.
 #
-# Unlike the dev file, nothing bridges through `host.docker.internal`: the app droplet reaches IN, over the two ports deploy/terraform/main.tf's
+# Unlike the dev file, nothing bridges through `host.docker.internal`: the app droplet reaches IN, over the two ports deploy/terraform/prod/main.tf's
 # digitalocean_firewall.observability scopes to the VPC's CIDR: OTLP (4318, from its otel-collector-agent) and Loki's push (3100, from its promtail).
 # docker-compose.yml (this directory) has the other half of the topology.
 #

@@ -208,5 +208,51 @@ services:
     # Stateless: scale behind caddy-gateway's `dynamic a` (deploy/dev/caddy/Caddyfile):
     #   docker compose --profile gateway up -d --scale mcp-gateway=3 --no-recreate
 
+  # --- Telegram bot (profile `telegram`; `make telegram-up`; specs/020, 021) ---
+  # The bot `make telegram` runs on the host, as a container in the shape production runs it (deploy/prod/app.yml). A client of the chat API through the front door like the web page
+  # and the CLI, never the queue or the graph. It reaches the API and Casdoor by their public names, which Caddy's network aliases (gateway.yml) resolve to Caddy itself, and trusts
+  # Caddy's local CA through CHANNEL_CA_FILE: the certificate `make mcp-gateway-ca` exports, which `make telegram-up` mounts (unset it is /dev/null, and the bot refuses to start).
+  # In `poll` mode (the default) it needs no inbound port; in `webhook` mode, and for the page a login returns to, Caddy sends /telegram/* to its listener (TELEGRAM_UPSTREAM).
+  telegram-bot:
+    <<: *hardened
+    build: *app-build
+    profiles: ["telegram"]
+    restart: unless-stopped
+    command: ["python", "-m", "app.adapters.inbound.channels.telegram.bot"]
+    healthcheck: *worker-healthcheck
+    environment:
+      REDIS_URL: redis://redis:6379
+      AUTH_MODE: identity
+      CHANNEL_API_URL: ${AUTHLIMIT_AUDIENCE:-https://api.localhost:8443}
+      CHANNEL_CA_FILE: /ca/caddy-root.crt
+      WEB_AUTH_ISSUER: ${AUTHLIMIT_ISSUER:-https://auth.localhost:8443}
+      WEB_AUTH_AUDIENCE: ${AUTHLIMIT_AUDIENCE:-https://api.localhost:8443}
+      AGENT_DOMAIN: ${TELEGRAM_AGENT_DOMAIN:-ecorp}
+      # Not `:?`: compose interpolates the whole file for every command, profile or not, so a required variable here would break `make up` for everyone. The bot itself
+      # refuses to start without a token (telegram/bot.py check_settings).
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_MODE: ${TELEGRAM_MODE:-poll}
+      TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+      # Bound to every interface of its own container, which only Caddy reaches over the compose network (no `ports`).
+      TELEGRAM_LISTEN_HOST: 0.0.0.0
+      TELEGRAM_PERSON_SECRET: ${TELEGRAM_PERSON_SECRET:-}
+      TELEGRAM_TENANT: ${TELEGRAM_TENANT:-}
+      TELEGRAM_LINKING: ${TELEGRAM_LINKING:-false}
+      TELEGRAM_LINK_PUBLIC_URL: ${TELEGRAM_LINK_PUBLIC_URL:-}
+      TELEGRAM_LINK_KEY: ${TELEGRAM_LINK_KEY:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://host.docker.internal:4318
+    volumes:
+      - ${TELEGRAM_CA_FILE:-/dev/null}:/ca/caddy-root.crt:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # so OTEL_EXPORTER_OTLP_ENDPOINT resolves on native Linux Docker too
+    depends_on:
+      redis:
+        condition: service_healthy
+      caddy-gateway:
+        condition: service_started
+        # Its own profile (`gateway`): the bot needs the front door, but `docker compose --profile telegram` alone must still parse. `make telegram-up` enables both.
+        required: false
+
 volumes:
   ml-service:

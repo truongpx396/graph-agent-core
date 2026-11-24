@@ -45,6 +45,14 @@ authlimit-down-app: mcp-gateway-secrets  ## Stop what authlimit-up-app started, 
 
 authlimit-down: mcp-gateway-down  ## Stop the authlimit stack's containers (same as mcp-gateway-down)
 
+# The bot as a container (profile `telegram`), the shape production runs it in. It reaches the front door by its public names, which Caddy's aliases resolve to Caddy itself, and trusts
+# Caddy's local CA from the certificate `mcp-gateway-ca` exports. Caddy is recreated so /telegram/* goes to the container; `make mcp-gateway-up` later sends it back to a host bot.
+telegram-up: mcp-gateway-ca  ## Run the Telegram bot as a container behind the front door (needs `make mcp-gateway-up` and TELEGRAM_BOT_TOKEN)
+	TELEGRAM_UPSTREAM=telegram-bot:8081 TELEGRAM_CA_FILE=$(GATEWAY_DIR)/caddy-root.crt $(GATEWAY_COMPOSE) --profile telegram up -d --build --no-deps telegram-bot caddy-gateway
+
+telegram-down: mcp-gateway-secrets  ## Stop and remove the Telegram bot container
+	$(GATEWAY_COMPOSE) --profile telegram rm -sf telegram-bot
+
 ##@ Front door: checks (manual)
 
 authlimit-test:  ## go vet and the authlimit service's tests with the race detector (specs/018; needs Go, no Docker)

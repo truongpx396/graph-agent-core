@@ -140,9 +140,19 @@ services:
       # What sits behind the chat-API site's check (deploy/dev/caddy/Caddyfile): the echo stub or `api:8000`. Resolved by compose's `:-` because
       # Caddy's own default only fires on an UNSET variable, not an empty one.
       AUTHLIMIT_UPSTREAM: ${AUTHLIMIT_UPSTREAM:-authlimit-echo:8000}
+      # Where /telegram/* goes: the bot on the host (the default; `make telegram`) or its container (`make telegram-up` sets telegram-bot:8081). Resolved by `:-` for the same reason.
+      TELEGRAM_UPSTREAM: ${TELEGRAM_UPSTREAM:-host.docker.internal:8081}
     ports:
       # Loopback only: this is a development stack with Casdoor's admin UI behind it.
       - "127.0.0.1:8443:8443"
+    networks:
+      default:
+        # The front door's names resolve to Caddy itself for a container that calls it the way a client does (the Telegram bot): no hairpin through the host, and Caddy's
+        # local CA, once trusted, verifies the certificate for exactly these names.
+        aliases:
+          - api.localhost
+          - auth.localhost
+          - mcp.localhost
     # Two directories, not files, each mounted at the path it has in the repo: the Caddyfile imports ../../shared/caddy/gateway.caddy, the routing
     # production's Caddyfile imports too, and that relative path then resolves in the container as it does on a checkout. Read-only, so the
     # container cannot rewrite its own configuration.
@@ -153,7 +163,7 @@ services:
       - caddy-gateway-data:/data    # the local CA (and its root certificate: `make mcp-gateway-ca`) lives here
       - caddy-gateway-config:/config
     extra_hosts:
-      - "host.docker.internal:host-gateway"   # the Telegram bot's own listener runs on the host (`make telegram`); see the Caddyfile's telegram_proxy
+      - "host.docker.internal:host-gateway"   # the Telegram bot may run on the host (`make telegram`); see the Caddyfile's telegram_proxy
     depends_on:
       mcp-gateway:
         condition: service_healthy

@@ -20,10 +20,11 @@
 	}
 }
 
-# The Telegram bot's own listener. In development the bot runs on the host (`make telegram`) and listens on TELEGRAM_LISTEN_PORT (default 8081);
-# it binds loopback unless TELEGRAM_LISTEN_HOST=0.0.0.0, which a container reaching it as host.docker.internal needs.
+# The Telegram bot's own listener (TELEGRAM_LISTEN_PORT, default 8081). By default the bot runs on the host (`make telegram`; it binds loopback unless TELEGRAM_LISTEN_HOST=0.0.0.0,
+# which a container reaching it as host.docker.internal needs); `make telegram-up` runs it as a container and sets TELEGRAM_UPSTREAM=telegram-bot:8081. Resolved by compose's `:-`,
+# as AUTHLIMIT_UPSTREAM is, because Caddy's own default only fires on an UNSET variable.
 (telegram_proxy) {
-	reverse_proxy host.docker.internal:8081
+	reverse_proxy {$TELEGRAM_UPSTREAM:host.docker.internal:8081}
 }
 
 # The routing, relative to THIS file: the compose part mounts this directory and deploy/shared/caddy at the paths they have in the repo, so the

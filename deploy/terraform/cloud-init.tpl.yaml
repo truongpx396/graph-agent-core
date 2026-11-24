@@ -28,6 +28,9 @@ packages:
   - ufw
   - unattended-upgrades
   - fail2ban
+%{ for package in extra_packages ~}
+  - ${package}
+%{ endfor ~}
 
 write_files:
   - path: /etc/apt/apt.conf.d/20auto-upgrades

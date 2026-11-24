@@ -60,16 +60,16 @@ zap_reports/
 .scannerwork/
 .sonar/
 
-# Terraform (deploy/terraform, see deploy/README.md) — local state and any
-# real tfvars; terraform.tfvars.example and .terraform.lock.hcl (both
-# meant to be committed) are unaffected since neither matches these globs.
-deploy/terraform/.terraform/
-deploy/terraform/*.tfstate
-deploy/terraform/*.tfstate.*
-deploy/terraform/*.tfplan
-deploy/terraform/terraform.tfvars
-deploy/terraform/*.auto.tfvars
-deploy/terraform/crash.log
+# Terraform (deploy/terraform/prod and dev, see deploy/README.md) — local state and any
+# real tfvars (terraform.tfvars holds the DigitalOcean token); terraform.tfvars.example
+# and .terraform.lock.hcl (both meant to be committed) match none of these globs.
+deploy/terraform/**/.terraform/
+deploy/terraform/**/*.tfstate
+deploy/terraform/**/*.tfstate.*
+deploy/terraform/**/*.tfplan
+deploy/terraform/**/terraform.tfvars
+deploy/terraform/**/*.auto.tfvars
+deploy/terraform/**/crash.log
 
 # Production secrets — must exist only on the droplet itself, never in this
 # repo (see deploy/prod/docker-compose.yml's own header comment); deploy/prod/prod.env.example

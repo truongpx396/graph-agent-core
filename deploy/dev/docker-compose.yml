@@ -10,7 +10,8 @@
 #   collectors.yml      an overlay (`make collectors-up`): exporters, OTel collector, cAdvisor, Promtail; they need this project's network
 #   loadtest.yml        an overlay (`make loadtest-app-up`): points the containerized app at the fake LLM
 #
-# Unlike production, the Telegram bot is not a service here: it runs on the host (`make telegram`) and the front door's Caddy sends /telegram/* to it.
+# The Telegram bot is a container here too (profile `telegram`, `make telegram-up`) or a host process (`make telegram`): the front door's Caddy sends /telegram/* to whichever runs.
+# An overlay added through COMPOSE_OVERLAYS, not part of the project: hosted-llm.yml (a hosted LLM instead of the host's Ollama; the dev droplet, `make droplet-up`).
 #
 # Every path in these files, the `include` paths too, is relative to the REPO ROOT, so run compose with `--project-directory .` (the Makefile's COMPOSE does). Without it the first
 # `include` fails with "no such file"; the old single file silently took the wrong project name and orphaned the volumes. `.env` and any `--env-file` reach every part.

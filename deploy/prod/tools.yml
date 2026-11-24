@@ -1,0 +1,52 @@
+# OPT-IN overlay on the production project: the crawler (headless Chromium) on a network of its own. Not part of docker-compose.yml, so a droplet runs it only when `.env` says
+# CRAWLER_ENABLED=true; deploy/prod/compose.sh then adds this file to every compose command, CI's deploy included (without that, `up --remove-orphans` would remove the crawler).
+#
+# Do not enable it before deploy/prod/crawler-firewall.sh is installed on the droplet, and compose.sh refuses to start anything until it is. The browser follows redirects and loads
+# sub-resources by itself, after the app checked only the first URL, so a page can steer it to the droplet's metadata address (169.254.169.254: instance credentials), the VPC or another
+# container. Isolation is the network's job: its own network here (it reaches nothing on `default`), and the host firewall for what a bridge network still reaches (PRODUCTION_REVIEW.md R20;
+# deploy/README.md, "The crawler's network"). Sandbox tools are not here: the OpenSandbox server mounts the Docker socket, which does not belong on this droplet.
+services:
+  crawl4ai:
+    # Pinned by digest, like the other images here. The same server as dev's (deploy/dev/tools.yml).
+    image: unclecode/crawl4ai:0.9.3@sha256:84751dab794259db05d5bd4e5c766a8041a65f0554326e4516e620abdf2fa18b
+    restart: unless-stopped
+    # Only `crawler`: it cannot resolve or reach a container on `default`, by name or by address (checked on a real daemon). No `ports`: the app reaches it by service name.
+    networks: [crawler]
+    cpus: "1"
+    mem_limit: 2g
+    pids_limit: 512
+    shm_size: 1g # Chromium needs a real /dev/shm
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      # Required since crawl4ai 0.9.0: without it the server binds loopback inside its own container and nothing can reach it.
+      CRAWL4AI_API_TOKEN: ${CRAWL4AI_API_TOKEN:?set CRAWL4AI_API_TOKEN in .env (crawl4ai refuses to listen beyond loopback without one)}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11235/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  # The roles that call it join `crawler` as well as `default` (the same shape as dev's `x-crawler-network`), and learn where it is.
+  api:
+    networks: [default, crawler]
+    environment:
+      CRAWL4AI_SERVER_URL: http://crawl4ai:11235
+  agent-worker:
+    networks: [default, crawler]
+    environment:
+      CRAWL4AI_SERVER_URL: http://crawl4ai:11235
+  ingest-worker:
+    networks: [default, crawler]
+    environment:
+      CRAWL4AI_SERVER_URL: http://crawl4ai:11235
+
+networks:
+  crawler:
+    ipam:
+      config:
+        # Named and pinned so the firewall can say which traffic is the crawler's. Equal to the default in crawler-firewall.sh (tests/core/test_compose_layout.py holds the two together).
+        - subnet: 172.30.50.0/24

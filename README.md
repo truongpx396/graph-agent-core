@@ -182,7 +182,7 @@ flowchart TB
     Retrieve --> Qdrant[("Qdrant<br/>hybrid search")]
     ToolsNode -.->|"MCP stdio, one long-lived child process"| SandboxBridge["opensandbox-mcp bridge<br/>(opt-in: make sandbox-up)"]
     SandboxBridge -.->|"HTTP + API key"| OpenSandbox["OpenSandbox server<br/>isolated code execution"]
-    ToolsNode -.->|"SSRF-checked page render"| Crawl4ai["crawl4ai container<br/>(JS rendering; not in prod)"]
+    ToolsNode -.->|"SSRF-checked page render"| Crawl4ai["crawl4ai container<br/>(JS rendering; opt-in in prod, behind a host firewall)"]
     Retrieve -. rerank .-> MLService["ml-service<br/>(reranker, Prompt Guard)"]
     Moderate -. classify .-> MLService
     Route -. label .-> MLService
@@ -228,7 +228,7 @@ The same code runs in both; only configuration and the compose files differ. Bot
 | **Credits, payments** | Off | Off until `CREDITS_PER_USD` is set (a price is your decision); `BILLING_PROVIDERS` enables a signed webhook ([Credit billing](#credit-billing-optional)) |
 | **Provisioning** | `make up` | Terraform (human-run) + `deploy.yml` (automatic after CI passes on `main`) |
 
-Prod ships no Langfuse, open-webui, MinIO, crawl4ai or OpenSandbox; the tools that need them fail gracefully. It runs one
+Prod ships no Langfuse, open-webui, MinIO or OpenSandbox, and the crawler only when you opt in (`CRAWLER_ENABLED=true`, behind a host firewall: [deploy/README.md](deploy/README.md#the-crawlers-network)); the tools that need them fail gracefully. It runs one
 `agent-worker`, serving the Ecorp domain unless `AGENT_WORKER_DOMAINS` names more; the dev `app` profile's serves all four.
 
 * * *
@@ -628,7 +628,7 @@ policy check, is what "sandboxed" means. Skills (`app/domains/<domain>/skills/*/
 
 ## 🚢 Deploying to production
 
-`deploy/terraform/` provisions two DigitalOcean droplets: an **app droplet** (the lean prod stack behind Caddy) and a smaller
+`deploy/terraform/prod/` provisions two DigitalOcean droplets (`deploy/terraform/dev/` runs the dev stack on one, [deploy/README.md](deploy/README.md#the-dev-droplet)): an **app droplet** (the lean prod stack behind Caddy) and a smaller
 **observability droplet** (Prometheus, Loki, Grafana, Alertmanager) fed over the private network. Creating or destroying
 droplets is always a human-run `terraform apply`; `.github/workflows/deploy.yml` then builds images to GHCR and redeploys
 automatically once CI passes on `main`.
@@ -807,7 +807,7 @@ until configured**.
 
 ## 🔧 Make targets
 
-`make help` lists everything. The `Makefile` holds the shared settings and the includes; the targets are in `make/`, one file per topic: `stack.mk` (start, stop, reset, observability), `data.mk` (models, the vector store), `host.mk` (the app's processes on your machine), `gateway.mk` (the front door and its checks), `test.mk` (tests, lint, load tests, smoke checks), `evals.mk`, `security.mk` and `admin.mk` (back-office operator commands). The ones you will use:
+`make help` lists everything. The `Makefile` holds the shared settings and the includes; the targets are in `make/`, one file per topic: `stack.mk` (start, stop, reset, observability), `data.mk` (models, the vector store), `host.mk` (the app's processes on your machine), `gateway.mk` (the front door and its checks), `droplet.mk` (the dev stack on one droplet), `test.mk` (tests, lint, load tests, smoke checks), `evals.mk`, `security.mk` and `admin.mk` (back-office operator commands). The ones you will use:
 
 | Target | Does |
 |---|---|
@@ -870,7 +870,7 @@ services/      what runs as its own process, each with its own Dockerfile: authl
 Dockerfile     the app image (at the root: the build context)
 evals/ scripts/model_eval/   the model-evaluation harness and its frozen datasets, candidates, baselines
 specs/ .specify/          Spec Kit specs 001–022 and the constitution
-deploy/                   compose/ (dev, prod, observability, load test), caddy/, litellm/ (configs, patches/), images/ (sandbox builds), terraform/ (DigitalOcean droplets), env/; deploy/README.md is the runbook
+deploy/                   dev/ and prod/ (compose parts, Caddyfile, LiteLLM config, env example), shared/caddy/ (the front door's routing), images/ (sandbox builds), terraform/{prod,dev}/ (DigitalOcean droplets); deploy/README.md is the runbook
 observability/            Prometheus (+ alerts.yml), Alertmanager, Loki, Promtail, otel-collector, Grafana
 postgres-init/            numbered SQL schema (fresh volumes only)
 tests/                    mirrors app/ (adapters/inbound, adapters/outbound, services/, scripts/); fakes/ (in-memory ports); integration/, live/, deepeval/ are the marked tiers
@@ -878,7 +878,7 @@ packages/billing/         the independent billing package: src, tests, schema, a
 promptfoo/ garak/ loadtest/   prompt checks (the repo's only package.json), jailbreak scan, Locust
 bruno/                    the HTTP API as a Bruno collection (.bru requests, environments, a sample PDF)
 openapi.json              the chat API's OpenAPI document (generated: make openapi); the ML service's and authlimit's sit beside their Dockerfiles
-make/                     host.mk, admin.mk, evals.mk, security.mk, test.mk: targets the Makefile includes
+make/                     stack.mk, data.mk, host.mk, gateway.mk, droplet.mk, test.mk, evals.mk, security.mk, admin.mk: targets the Makefile includes
 .github/workflows/        ci, deploy, ai-review, terraform-validate, redteam, strix, zap
 ```
 

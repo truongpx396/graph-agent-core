@@ -11,7 +11,7 @@ up-app:  ## Start the infra plus the containerized API and workers (profile `app
 # One compose call over the app and gateway profiles (not sandbox or quality), in identity mode like authlimit-up-app; observability and its collectors follow.
 # Web UI: https://api.localhost:8443/
 up-all: mcp-gateway-secrets authlimit-keys-ensure  ## The whole stack in containers behind the front door, plus observability (not the sandbox or SonarQube)
-	@curl -sf -o /dev/null http://localhost:11434/api/version || echo "warning: no Ollama on :11434 (start it with: ollama serve)"
+	@test -n "$(COMPOSE_OVERLAYS)" || curl -sf -o /dev/null http://localhost:11434/api/version || echo "warning: no Ollama on :11434 (start it with: ollama serve)"
 	AUTH_MODE=identity AUTHLIMIT_UPSTREAM=api:8000 $(GATEWAY_COMPOSE) --profile app up -d --build
 	$(MAKE) obs-up
 	@echo "up. Web UI https://api.localhost:8443/ · Grafana http://localhost:3300 · Langfuse http://localhost:3000"

@@ -1,12 +1,12 @@
 # Dev stack, part of docker-compose.yml: what the agent's tools run on. The crawler starts with `make up`; the OpenSandbox server is the `sandbox` profile
-# (`make sandbox-up`). Production runs neither: CRAWL4AI_SERVER_URL and OPENSANDBOX_MCP_DOMAIN stay empty there and the tools are absent
-# (deploy/README.md, "The crawler's network", is the precondition for ever running the crawler).
+# (`make sandbox-up`). Production never runs the sandbox server (OPENSANDBOX_MCP_DOMAIN stays empty there) and runs the crawler only as an opt-in overlay behind a host firewall
+# (deploy/prod/tools.yml; deploy/README.md, "The crawler's network").
 
 services:
   # --- crawl4ai's official server (headless Chromium, warm and pooled; pattern 50) instead of a browser launch per tool call in the app.
   # Default profile: it needs no host Docker socket, only a published port. ---
   crawl4ai:
-    image: unclecode/crawl4ai:0.9.3
+    image: unclecode/crawl4ai:0.9.3@sha256:84751dab794259db05d5bd4e5c766a8041a65f0554326e4516e620abdf2fa18b   # the same image, by digest, as deploy/prod/tools.yml
     shm_size: 1g   # Chromium needs real /dev/shm — crawl4ai's own docker run docs
     # Its own network (PRODUCTION_REVIEW.md R20): the headless browser follows redirects and loads sub-resources by itself, after the app checked only the first URL,
     # so a page can send it to `http://qdrant:6333` or `http://litellm:4000`. On `default` it would reach them; here it reaches only what a bridge network reaches
