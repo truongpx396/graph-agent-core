@@ -698,7 +698,7 @@ class Settings(BillingSettings):
     max_upload_files_per_request: int = 5
 
     # What one chat request may carry (`ChatRequest`, app/adapters/inbound/api/schemas.py). A body is parsed whole, copied into a Redis stream entry
-    # and then into the checkpoint, so one large request cost memory in four places; the front door's own ceiling (deploy/shared/caddy/gateway.caddy) is the
+    # and then into the checkpoint, so one large request cost memory in four places; the front door's own ceiling (deploy/shared/caddy/gateway.caddyfile) is the
     # outer bound and these are the reason a person is told which field was too large. A message of 32,000 characters is about 8,000 tokens, well
     # past a question; an image is a data URI, so 7,000,000 characters is about 5 MB of picture. The page attaches one image, so the default of 4 is
     # above it (PRODUCTION_REVIEW.md R14).

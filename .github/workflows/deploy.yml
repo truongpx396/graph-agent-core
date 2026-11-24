@@ -142,12 +142,12 @@ jobs:
           # ./postgres-init, ...) resolve identically there and in dev. The
           # entry file includes the other four, so ship all five: a missing one
           # fails `docker compose` at parse time, before it touches a container.
-          # The Caddyfile imports ../../shared/caddy/gateway.caddy: ship both.
+          # The Caddyfile imports ../../shared/caddy/gateway.caddyfile: ship both.
           rsync -azR -e "ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts" \
             deploy/prod/docker-compose.yml deploy/prod/infra.yml deploy/prod/app.yml \
             deploy/prod/gateway.yml deploy/prod/collectors.yml \
             deploy/prod/tools.yml deploy/prod/compose.sh deploy/prod/crawler-firewall.sh \
-            deploy/prod/caddy/Caddyfile deploy/shared/caddy/gateway.caddy \
+            deploy/prod/caddy/Caddyfile deploy/shared/caddy/gateway.caddyfile \
             deploy/prod/litellm-config.yaml \
             deploy@${{ secrets.DROPLET_HOST }}:/opt/graph-agent-core/
           rsync -az --delete -e "ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts" \

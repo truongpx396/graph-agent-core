@@ -19,7 +19,7 @@ from tests.compose_project import REPO, load, parts, services
 DEV_DIR, PROD_DIR = REPO / "deploy" / "dev", REPO / "deploy" / "prod"
 DEV, COLLECTORS, OBS = DEV_DIR / "docker-compose.yml", DEV_DIR / "collectors.yml", DEV_DIR / "observability.yml"
 PROD, OBS_PROD = PROD_DIR / "docker-compose.yml", PROD_DIR / "observability.yml"
-SHARED_ROUTING = REPO / "deploy" / "shared" / "caddy" / "gateway.caddy"
+SHARED_ROUTING = REPO / "deploy" / "shared" / "caddy" / "gateway.caddyfile"
 
 # What each environment directory holds that its entry does NOT include, and why: an overlay on the app's project, or a project of its own.
 NOT_INCLUDED = {
@@ -93,7 +93,7 @@ def test_the_caddyfiles_import_resolves_inside_the_container_to_the_shared_routi
         raise AssertionError(f"{service} reads {container_path}, which no volume mounts")
 
     entry_file = on_host(config)
-    imports = re.findall(r"^import (\S+\.caddy)\s*$", entry_file.read_text(encoding="utf-8"), re.MULTILINE)
+    imports = re.findall(r"^import (\S+\.caddyfile)\s*$", entry_file.read_text(encoding="utf-8"), re.MULTILINE)
     assert imports, f"{entry_file.name} imports no routing file"
     for relative in imports:
         in_container = on_host(posixpath.normpath(posixpath.join(posixpath.dirname(config), relative)))

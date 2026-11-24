@@ -225,7 +225,7 @@ services:
   # The Telegram bot (specs/020, 021), opt-in: `docker compose --profile telegram up -d`. A client of the chat API through the front door like the web page
   # and the CLI, never the queue or the graph. It reaches the API and Casdoor by their public names, which Caddy's network aliases below resolve to Caddy
   # itself, so it needs no hairpin through the droplet's public address and the certificates verify. In `poll` mode (the default) it needs no inbound
-  # port at all; in `webhook` mode, and for the page a login returns to, Caddy routes /telegram/* to its listener (deploy/shared/caddy/gateway.caddy).
+  # port at all; in `webhook` mode, and for the page a login returns to, Caddy routes /telegram/* to its listener (deploy/shared/caddy/gateway.caddyfile).
   telegram-bot:
     <<: *hardened
     image: ${APP_IMAGE}:${IMAGE_TAG:-latest}

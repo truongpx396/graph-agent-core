@@ -789,7 +789,7 @@ reading with `Last-Event-ID` returns only later events; another person's request
 
 **Problem.** `app/adapters/inbound/api/schemas.py::ChatRequest`: `message` has `min_length=1` and no maximum;
 `thread_id` is any string; `images` is a list of any length of strings of any size. The front door sets no body limit
-(`deploy/shared/caddy/gateway.caddy` has no `request_body`). A request body is parsed whole, copied into a Redis stream entry,
+(`deploy/shared/caddy/gateway.caddyfile` has no `request_body`). A request body is parsed whole, copied into a Redis stream entry,
 and then into the checkpoint. One large request costs memory in four places, and the conversation id becomes part of
 several Redis keys.
 
@@ -800,7 +800,7 @@ several Redis keys.
   `images`: at most `chat_max_images` (default 4; first read the page's own limit in
   `app/adapters/inbound/api/static/` and do not go below it), each at most `chat_image_max_chars` (default 7,000,000,
   about 5 MB as base64).
-- `deploy/shared/caddy/gateway.caddy`, in `(api_site)`: `request_body { max_size 140MB }` as the ceiling (uploads are 5 files
+- `deploy/shared/caddy/gateway.caddyfile`, in `(api_site)`: `request_body { max_size 140MB }` as the ceiling (uploads are 5 files
   of 25 MB), and a matcher for `/chat/*` with `max_size 32MB`. Run `make authlimit-smoke` if you touch that file; it is
   imported by both the development and the production Caddyfile.
 - This narrows a request schema. `make openapi-breaking` will report it: add the entries to
@@ -1003,7 +1003,7 @@ connected to at that address.
 |---|---|---|
 | the docstring of `app/adapters/outbound/qdrant/qdrant_store.py::scope_filter` | `tests/integration/test_tenant_isolation_real_qdrant.py` "proves the result against a real Qdrant" | No such file exists. R09 creates it; until then the sentence should say "pinned against a fake only" |
 | `README.md`, "Roadmap and known gaps" | "Several domains in one process. Each domain is its own process" (not built) | Built: pattern 96, `AGENT_WORKER_DOMAINS` |
-| `README.md`, same section | "The shipped proxy doesn't authenticate, and neither sets nor strips the identity headers" | The production stack runs the authlimit front door, which verifies tokens and strips those headers (pattern 98, `deploy/shared/caddy/gateway.caddy`) |
+| `README.md`, same section | "The shipped proxy doesn't authenticate, and neither sets nor strips the identity headers" | The production stack runs the authlimit front door, which verifies tokens and strips those headers (pattern 98, `deploy/shared/caddy/gateway.caddyfile`) |
 | `GRAPH_PATTERNS.md`, "Not built" | "Real authentication" | Built: specs/018, patterns 84 to 86 |
 | `GRAPH_PATTERNS.md` and `README.md` | "nothing restarts a crashed [worker]" | `restart: unless-stopped` restarts a worker that exits. What is true: nothing restarts one that hangs (R22), and nothing scales on queue depth (R17) |
 

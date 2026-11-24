@@ -78,7 +78,7 @@ flowchart LR
 ```
 
 - The API and the workers share no memory, only Redis and Postgres, so the tier that holds SSE connections and the tier that runs turns scale on their own (pattern 43).
-- The production compose file ships the same front door as the dev stack (pattern 98): Caddy on three real names, `authlimit`, Casdoor and its own Postgres, the MCP gateway, and the Telegram bot as an opt-in service, in front of `api`, `agent-worker`, `ingest-worker`, PgBouncer, Postgres, Redis, Qdrant, LiteLLM and `ml-service`. Langfuse, MinIO, crawl4ai and OpenSandbox are in the dev stack only. Both stacks' Caddyfiles import one routing file, `deploy/shared/caddy/gateway.caddy` ([deploy/README.md](../deploy/README.md)).
+- The production compose file ships the same front door as the dev stack (pattern 98): Caddy on three real names, `authlimit`, Casdoor and its own Postgres, the MCP gateway, and the Telegram bot as an opt-in service, in front of `api`, `agent-worker`, `ingest-worker`, PgBouncer, Postgres, Redis, Qdrant, LiteLLM and `ml-service`. Langfuse, MinIO, crawl4ai and OpenSandbox are in the dev stack only. Both stacks' Caddyfiles import one routing file, `deploy/shared/caddy/gateway.caddyfile` ([deploy/README.md](../deploy/README.md)).
 - The README's [architecture diagram](../README.md#-architecture) draws the same system at node level, including the upload pipeline.
 
 ### 2. The rings: ports and adapters

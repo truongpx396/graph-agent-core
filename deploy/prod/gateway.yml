@@ -93,7 +93,7 @@ services:
         condition: service_started
 
   # Reverse proxy and TLS, the only service with host ports 80/443 (deploy/terraform's firewall): Let's Encrypt on the three names. The same image,
-  # pinned by digest, as the development stack's. deploy/prod/caddy/Caddyfile is the entry; it imports ../../shared/caddy/gateway.caddy, so both directories
+  # pinned by digest, as the development stack's. deploy/prod/caddy/Caddyfile is the entry; it imports ../../shared/caddy/gateway.caddyfile, so both directories
   # are mounted, each at the path it has in the repo (the import then resolves in the container as it does on a checkout).
   caddy:
     image: caddy:2.11.7@sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489

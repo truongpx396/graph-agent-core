@@ -4,7 +4,7 @@
 # One compose project made of the parts under `include`, named as dev's are:
 #   infra.yml       Postgres, PgBouncer, the queue's Redis and the answer cache's, Qdrant, LiteLLM
 #   app.yml         the ML service, the API, the two workers, the MCP gateway and the opt-in Telegram bot
-#   gateway.yml     the front door: Caddy, authlimit, Casdoor (as dev's; the routing is deploy/shared/caddy/gateway.caddy)
+#   gateway.yml     the front door: Caddy, authlimit, Casdoor (as dev's; the routing is deploy/shared/caddy/gateway.caddyfile)
 #   collectors.yml  the exporters and agents that feed the observability droplet
 #
 # Not here, on purpose: the Grafana/Prometheus/Loki stack, which runs on a separate droplet (observability.yml here) so a metrics spike cannot compete with the app; the OpenSandbox
