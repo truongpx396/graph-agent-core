@@ -1,6 +1,6 @@
 # Dev stack, part of docker-compose.yml: the front door, profile `gateway` (`make mcp-gateway-up`). Casdoor issues the tokens, authlimit decides who may call and how often, Caddy
 # terminates TLS and asks authlimit about every request. Local only: *.localhost names, Caddy's own CA, one loopback port. The MCP gateway behind it and the API are app.yml;
-# deploy/prod/gateway.yml is the production counterpart (real names, ACME, the same routing in deploy/shared/caddy/gateway.caddy).
+# deploy/prod/gateway.yml is the production counterpart (real names, ACME, the same routing in deploy/shared/caddy/gateway.caddyfile).
 
 # The authlimit service's own Dockerfile and context, shared by `authlimit` and its smoke-check stand-in `authlimit-echo`.
 x-authlimit-image: &authlimit-image
@@ -153,7 +153,7 @@ services:
           - api.localhost
           - auth.localhost
           - mcp.localhost
-    # Two directories, not files, each mounted at the path it has in the repo: the Caddyfile imports ../../shared/caddy/gateway.caddy, the routing
+    # Two directories, not files, each mounted at the path it has in the repo: the Caddyfile imports ../../shared/caddy/gateway.caddyfile, the routing
     # production's Caddyfile imports too, and that relative path then resolves in the container as it does on a checkout. Read-only, so the
     # container cannot rewrite its own configuration.
     command: ["caddy", "run", "--config", "/deploy/dev/caddy/Caddyfile", "--adapter", "caddyfile"]

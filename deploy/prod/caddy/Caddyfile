@@ -1,5 +1,5 @@
 # The production entry of the front door (deploy/prod/gateway.yml): TLS from Let's Encrypt on three real names, and the API's replicas behind the
-# check. The routing is deploy/shared/caddy/gateway.caddy's, the same file the development stack's Caddyfile imports, so what authlimit decides in
+# check. The routing is deploy/shared/caddy/gateway.caddyfile's, the same file the development stack's Caddyfile imports, so what authlimit decides in
 # production is what the smoke checks decide in development.
 #
 # The three names are required (compose refuses to start without them): identity needs an https issuer, so there is no plain-HTTP fallback. Each
@@ -44,7 +44,7 @@
 
 # The routing, relative to THIS file: the compose part mounts this directory and deploy/shared/caddy at the paths they have in the repo, so the
 # import resolves in the container exactly as it does on a checkout.
-import ../../shared/caddy/gateway.caddy
+import ../../shared/caddy/gateway.caddyfile
 
 {$API_DOMAIN} {
 	import api_site

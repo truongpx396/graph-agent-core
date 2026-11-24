@@ -55,7 +55,7 @@ deploy/
     tools.yml                  what the agent's tools run on: the crawler (dev: part of the project, with the OpenSandbox server; prod: an opt-in overlay, see The crawler's network)
     dev only:  hosted-llm.yml (an overlay: LiteLLM on a hosted endpoint, for the dev droplet), droplet.env.example, loadtest.yml, litellm-patches/
     prod only: backup.sh, compose.sh, crawler-firewall.sh, prod.env.example, observability.env.example
-  shared/caddy/gateway.caddy the front door's routing, imported by both Caddyfiles: change it once (pattern 98)
+  shared/caddy/gateway.caddyfile the front door's routing, imported by both Caddyfiles: change it once (pattern 98)
   images/                    the sandbox image builds
   terraform/                 one root per environment over a shared cloud-init.tpl.yaml
     prod/                      the two droplets (app and observability)
@@ -64,7 +64,7 @@ deploy/
 
 Every path in these files, the `include` paths too, is relative to the repository root, so compose runs with `--project-directory .` (the Makefile's `COMPOSE` and every alias below do);
 without it the first `include` fails with "no such file", where a mistake used to take the wrong project name and orphan the volumes. `.env` and any extra `--env-file` reach every part.
-Each Caddyfile imports the routing by a path relative to itself (`../../shared/caddy/gateway.caddy`) and the Caddy container mounts both directories where they sit in the repo, so the import resolves
+Each Caddyfile imports the routing by a path relative to itself (`../../shared/caddy/gateway.caddyfile`) and the Caddy container mounts both directories where they sit in the repo, so the import resolves
 in the container as on a checkout.
 
 Two differences are on purpose. **The OpenSandbox server is never in production** (it mounts the Docker socket), so `OPENSANDBOX_MCP_DOMAIN` stays empty there and the sandbox tools are absent;
@@ -162,7 +162,7 @@ runs two independent jobs:
 - `deploy`: builds the app + ml-service + authlimit images, pushes them to GHCR,
   rsyncs `deploy/prod/docker-compose.yml` and the four parts it includes
   (`infra.yml`, `app.yml`, `gateway.yml`, `collectors.yml`), `deploy/prod/caddy/Caddyfile`
-  and `deploy/shared/caddy/gateway.caddy` (the Caddyfile imports it),
+  and `deploy/shared/caddy/gateway.caddyfile` (the Caddyfile imports it),
   `deploy/prod/litellm-config.yaml`, `postgres-init/` and
   `observability/` to the app droplet (keeping their repo paths, so the
   droplet mirrors the repo layout), then `docker compose pull && up -d`.
@@ -197,6 +197,8 @@ The project names, so the volumes, do not change. Three things are yours to do, 
    `/opt/graph-agent-core/deploy/prod/backup.sh`. Until you do, the old line keeps running the old script, which still works because the workflow leaves the old compose file where it is.
 2. **Then remove the old files** from the app droplet: `rm -rf deploy/compose deploy/litellm deploy/env deploy/backup deploy/caddy/Caddyfile deploy/caddy/Caddyfile.gateway deploy/caddy/gateway.caddy`.
    Not before step 1: the old `backup.sh` calls `deploy/compose/docker-compose.prod.yml`, and deleting it would stop the backups without a sound. The observability workflow removes its own old files.
+   A droplet that already ran the layout above also has `deploy/shared/caddy/gateway.caddy`, from before the routing file became `gateway.caddyfile` (so an editor highlights it). The deploy ships the new name and Caddy imports it,
+   so the old file is dead weight: `rm deploy/shared/caddy/gateway.caddy` once a deploy has finished.
 3. **Spend limits that now take effect.** `MAX_COST_USD_PER_TENANT_PER_MONTH`, the two `MAX_COST_USD_PER_PRINCIPAL_*` ceilings and `UNPRICED_MODEL_POLICY` were in `prod.env.example` but never
    passed to a container, so they did nothing. They are passed now (unset means off and `allow`, as before). A droplet whose `.env` already lists them, copied from the example, starts enforcing them
    at this deploy: read the values first, and check that LiteLLM prices your model before `UNPRICED_MODEL_POLICY=block` refuses an unpriced one.
