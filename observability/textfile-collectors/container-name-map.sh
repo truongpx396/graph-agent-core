@@ -5,7 +5,7 @@
 # via `* on(id) group_left(name) container_id_name_map`. Exists because
 # cAdvisor's own docker-container-factory can't resolve names on this host
 # (needs containerd, which Docker Desktop for Mac doesn't expose to
-# containers — see deploy/dev/collectors.yml's cadvisor service comment and
+# containers — see deploy/dev/observability.yml's cadvisor service comment and
 # google/cadvisor#3772) — this sidecar gets the same names a plain
 # `docker ps` already has, over docker.sock, with no cAdvisor involvement.
 #

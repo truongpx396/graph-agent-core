@@ -80,11 +80,11 @@ authlimit-smoke: front-door-secrets  ## End-to-end check of the front door: sign
 
 # specs/018. Run after `make authlimit-up-app`, `make front-door-bootstrap ARGS="--tenant ecorp --tenant other-co"` and `make front-door-ca`,
 # with the worker on loadtest/fake_llm_server.py.
-authlimit-web-check:  ## The web page in a real browser (Playwright): sign in through Casdoor, chat, tenant isolation, sign out; manual
+authlimit-web-check: front-door-secrets  ## The web page in a real browser (Playwright): sign in through Casdoor, chat, tenant isolation, sign out; manual
 	@. $(FRONT_DOOR_SECRETS) && export CASDOOR_ADMIN_PASSWORD && python -m scripts.checks.authlimit_web_check --ca $(FRONT_DOOR_DIR)/caddy-root.crt $(ARGS)
 
 # A checked route against a public one, alternating. Run after `make authlimit-up` and `make front-door-bootstrap`.
-authlimit-latency:  ## Time what the front door's check adds to a request (specs/018 SC-008): ARGS="-n 1000 --path /chat/sessions"
+authlimit-latency: front-door-secrets  ## Time what the front door's check adds to a request (specs/018 SC-008): ARGS="-n 1000 --path /chat/sessions"
 	@. $(FRONT_DOOR_SECRETS) && export CASDOOR_ADMIN_PASSWORD && python -m scripts.checks.authlimit_latency --ca $(FRONT_DOOR_DIR)/caddy-root.crt $(ARGS)
 
 # Needs Go.

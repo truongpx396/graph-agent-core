@@ -34,7 +34,7 @@ x-app-env: &app-env
   # with the `sandbox` profile up; without it the sandbox tools are absent.
   OPENSANDBOX_MCP_DOMAIN: opensandbox-server:8090
   OPENSANDBOX_API_KEY: ${OPENSANDBOX_API_KEY:-}
-  # The collector is collectors.yml's, reached through its published port so the app never depends on it: a failed push is
+  # The collector is observability.yml's, reached through its published port so the app never depends on it: a failed push is
   # dropped (app/platform/telemetry.py).
   OTEL_EXPORTER_OTLP_ENDPOINT: http://host.docker.internal:4318
   # Pyroscope is in the observability stack; a push to a server that is not there is dropped without a delay (specs/022). Blank turns profiling off.

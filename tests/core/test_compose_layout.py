@@ -1,8 +1,8 @@
 """References that cross the compose project boundary agree with each other.
 
-The telemetry collectors (exporters, cAdvisor, OTel collector, Promtail) are an overlay on the app's project (`deploy/dev/collectors.yml`);
-the observability backends are a project of their own. A service moved between them keeps working only if what used to be an in-network name is
-rewritten, and compose reports a dangling `depends_on` only when it is run. Nothing else adds these up.
+The three database exporters are an overlay on the app's project (`deploy/dev/collectors.yml`); the observability backends and the agents that feed them
+(OTel collector, Promtail, node-exporter, cAdvisor) are a project of their own. A service moved between them keeps working only if what used to be an
+in-network name is rewritten, and compose reports a dangling `depends_on` only when it is run. Nothing else adds these up.
 
 Each environment's `docker-compose.yml` only `include`s parts, so a part that is added and not listed, or a path that stops resolving inside a
 container, is a service nobody deploys or a front door that does not start: both are checked here, because compose finds out when it is run.
@@ -14,7 +14,7 @@ import pytest
 
 from app.adapters.inbound.workers.agent_worker import parse_worker_domains
 from app.domains.registry import DOMAINS
-from tests.compose_project import REPO, load, parts, services
+from tests.compose_project import REPO, load, parts, services, strings
 
 DEV_DIR, PROD_DIR = REPO / "deploy" / "dev", REPO / "deploy" / "prod"
 DEV, COLLECTORS, OBS = DEV_DIR / "docker-compose.yml", DEV_DIR / "collectors.yml", DEV_DIR / "observability.yml"
@@ -37,6 +37,28 @@ def _label(files) -> str:
 def test_the_makefile_starts_and_removes_exactly_the_collectors_file_services():
     listed = re.search(r"^COLLECTORS\s*:=\s*(.+)$", (REPO / "Makefile").read_text(encoding="utf-8"), re.MULTILINE)
     assert listed and set(listed.group(1).split()) == set(services(COLLECTORS))
+
+
+def _app_service_hosts(service: dict, app_services: set[str]) -> set[str]:
+    """The app-project services this service names as a host, in a URL or a connection string (`redis://redis:6379`, `user:pw@pgbouncer:6432/db`)."""
+    text = "\n".join(strings(service))
+    return {name for name in app_services if re.search(rf"(?:@|//){re.escape(name)}(?::\d+|/|\s|$)", text)}
+
+
+def test_the_observability_project_never_dials_an_app_service_by_name():
+    """The observability project shares no network with the app's (`make up` and `make obs-up` work in either order), so a service there that names `postgres`,
+    `redis` or `pgbouncer` as a host starts and then cannot connect: compose accepts it. It belongs in collectors.yml, with the network and the health wait."""
+    app_services = set(services(DEV, COLLECTORS))
+    reaching = {name: sorted(hosts) for name, service in services(OBS).items() if (hosts := _app_service_hosts(service, app_services))}
+    assert not reaching, f"in {OBS.name} but dial an app service by name, which another project's network does not resolve: {reaching}"
+
+
+def test_every_service_in_the_collectors_overlay_needs_the_app_network():
+    """The overlay exists only because its services dial an app service by name. One that does not is a telemetry agent that Docker Desktop shows
+    under the app instead of next to Grafana: it belongs in observability.yml."""
+    app_services = set(services(DEV))
+    idle = [name for name, service in services(COLLECTORS).items() if not _app_service_hosts(service, app_services)]
+    assert not idle, f"in {COLLECTORS.name} but dial no app service by name, so they can live in {OBS.name}: {idle}"
 
 
 @pytest.mark.parametrize("files", [(DEV,), (DEV, COLLECTORS), (OBS,), (PROD,), (OBS_PROD,)], ids=_label)

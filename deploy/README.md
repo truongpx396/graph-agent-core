@@ -48,8 +48,8 @@ deploy/
     infra.yml                  Postgres, PgBouncer, Redis, Qdrant, LiteLLM (dev adds MinIO, Langfuse, Open WebUI; prod has a second Redis, the answer cache)
     app.yml                    what this repo builds: the API, the workers, the ML service, the MCP gateway (prod adds the Telegram bot)
     gateway.yml                the front door: Caddy, authlimit, Casdoor
-    collectors.yml             exporters and agents that feed the observability backends (an overlay in dev, a part of the project in prod)
-    observability.yml          a project of its own: Prometheus, Loki, Grafana, Alertmanager, Pyroscope (dev also holds SonarQube, profile `quality`)
+    collectors.yml             exporters and agents that feed the observability backends (a part of the project in prod; in dev an overlay of the three database exporters)
+    observability.yml          a project of its own: Prometheus, Loki, Grafana, Alertmanager, Pyroscope (dev also holds the OTel collector, Promtail, node-exporter, cAdvisor and SonarQube, profile `quality`)
     litellm-config.yaml        the gateway's model list
     caddy/Caddyfile            how each site is addressed and certified (prod also has Caddyfile.observability)
     tools.yml                  what the agent's tools run on: the crawler (dev: part of the project, with the OpenSandbox server; prod: an opt-in overlay, see The crawler's network)

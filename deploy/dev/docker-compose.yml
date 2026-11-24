@@ -6,8 +6,8 @@
 #   gateway.yml   the front door, profile `gateway` (`make front-door-up`): Caddy, authlimit, Casdoor
 #
 # Run from this directory but not part of the project:
-#   observability.yml   its own project (`make obs-up`): Prometheus, Alertmanager, Loki, Pyroscope, Grafana, and SonarQube under profile `quality` (`make sonar-up`)
-#   collectors.yml      an overlay (`make collectors-up`): exporters, OTel collector, cAdvisor, Promtail; they need this project's network
+#   observability.yml   its own project (`make obs-up`): Prometheus, Alertmanager, Loki, Pyroscope, Grafana, the agents that feed them (OTel collector, Promtail, node-exporter, cAdvisor), and SonarQube under profile `quality` (`make sonar-up`)
+#   collectors.yml      an overlay (`make collectors-up`): the postgres, redis and PgBouncer exporters, which dial those services by name and so need this project's network
 #   loadtest.yml        an overlay (`make loadtest-app-up`): points the containerized app at the fake LLM
 #
 # The Telegram bot is a container here too (profile `telegram`, `make telegram-up`) or a host process (`make telegram`): the front door's Caddy sends /telegram/* to whichever runs.

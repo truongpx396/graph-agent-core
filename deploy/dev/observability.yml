@@ -2,12 +2,14 @@
 # so each can be torn down without orphaning the other.
 name: agent-core-observability
 
-# The observability backends (`make obs-up`): Prometheus, Alertmanager, Loki, Pyroscope and Grafana. What feeds them is
-# collectors.yml. Optional: with every container here down the app runs as before, with nowhere for metrics and logs to go.
+# The observability backends (`make obs-up`): Prometheus, Alertmanager, Loki, Pyroscope and Grafana, and the agents that feed them (OTel collector, Promtail,
+# node-exporter, cAdvisor, container-name-mapper). Only the three database exporters feed them from the app's project (collectors.yml), because they dial
+# postgres, redis and pgbouncer by name. Optional: with every container here down the app runs as before, with nowhere for metrics and logs to go.
 #
 # No shared Docker network with the app stack, so `make up` and `make obs-up` work in either order. They meet through the host: Prometheus scrapes
 # the collectors' published ports via `host.docker.internal` (Docker Desktop resolves it; `extra_hosts: host-gateway` does on native Linux),
-# and Promtail pushes to Loki's published port the same way.
+# the app pushes its metrics to the OTel collector's published port the same way, and Promtail pushes to Loki's. A service that needs an app service's
+# NAME belongs in collectors.yml, not here (tests/core/test_compose_layout.py).
 services:
   prometheus:
     image: prom/prometheus:latest
@@ -81,6 +83,78 @@ services:
       - prometheus
       - loki
 
+  # --- Telemetry collectors: what feeds the backends above (moved here from collectors.yml). None of them dials an app service by name, so they need no shared network ---
+
+  # --- Metrics ---
+
+  # What the app pushes its OTel metrics to (OTEL_EXPORTER_OTLP_ENDPOINT in app.yml's `x-app-env`).
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./observability/otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC (unused by the app; for any other client)
+      - "4318:4318"   # OTLP HTTP: what app/platform/telemetry.py pushes to
+      - "8889:8889"   # its Prometheus exporter, scraped by Prometheus
+
+  # --- Host and container resources, for the "Docker and system monitoring" dashboard (grafana.com 16310;
+  # observability/grafana/dashboards/docker-system-monitoring.json). On Docker Desktop for Mac both report its hidden Linux VM, not the Mac. ---
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+      - textfile_collector:/textfile-collector:ro
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+      - "--collector.textfile.directory=/textfile-collector"
+    ports:
+      - "9100:9100"
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    # No /dev/kmsg mount (the usual recipe): the path is absent in Docker Desktop's VM and crash-loops cAdvisor on Mac. The cost is no OOM-event metrics.
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # Docker Desktop for Mac: cAdvisor 0.54.1+ needs containerd for container names, and Docker Desktop's lives inside its VM
+    # (google/cadvisor#3772, open), so its metrics stay keyed by cgroup id. container-name-mapper supplies id -> name. Native Linux has no gap.
+    ports:
+      - "8081:8080"   # 8080 is open-webui's
+
+  # id -> name for cAdvisor's cgroup-id metrics; the dashboard joins `container_id_name_map` onto them, which also filters its $container selector.
+  container-name-mapper:
+    image: docker:cli
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./observability/textfile-collectors/container-name-map.sh:/container-name-map.sh:ro
+      - textfile_collector:/textfile-collector
+    entrypoint: ["/bin/sh", "/container-name-map.sh"]
+
+  # --- Logs ---
+
+  # Ships the app's container logs to Loki through its published port. The config keeps to this app's services: docker_sd sees every container
+  # on the host, and old logs from an unrelated project made Loki reject whole batches.
+  promtail:
+    image: grafana/promtail:latest
+    command: ["-config.file=/etc/promtail/promtail-config.yaml"]
+    volumes:
+      - ./observability/promtail/promtail-config.yaml:/etc/promtail/promtail-config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # so the Loki address resolves on native Linux Docker too
+
   # --- SonarQube Community (profile `quality`; `make sonar-up`) ---
   # A persistent server with history and trends, which CI's ephemeral per-run `sonarqube` job (.github/workflows/ci.yml) cannot give: a GitHub
   # runner cannot reach a local server. Opt-in for its memory cost (2 GB+ heap). Own Postgres, since SonarQube migrates its schema on upgrade.
@@ -125,6 +199,7 @@ services:
       start_period: 60s
 
 volumes:
+  textfile_collector:
   prometheus:
   alertmanager:
   loki:

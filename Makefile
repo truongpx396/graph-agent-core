@@ -21,9 +21,9 @@ export PYTHONPATH := $(CURDIR)/packages/billing/src:$(CURDIR)/services/ml-servic
 COMPOSE_OVERLAYS ?=
 COMPOSE     := docker compose --project-directory . -f deploy/dev/docker-compose.yml $(COMPOSE_OVERLAYS)
 COMPOSE_OBS := docker compose --project-directory . -f deploy/dev/observability.yml
-# collectors.yml is an overlay on the app's project (the exporters need its network), not a project of its own. COLLECTORS names its services, so `up --no-deps` and
-# the remove command touch only them.
-COLLECTORS         := otel-collector promtail postgres-exporter redis-exporter pgbouncer-exporter node-exporter cadvisor container-name-mapper
+# collectors.yml is an overlay on the app's project (these exporters dial postgres, redis and pgbouncer by name, so they need its network), not a project of its own.
+# COLLECTORS names its services, so `up --no-deps` and the remove command touch only them. The other telemetry agents are in observability.yml, started by obs-up.
+COLLECTORS         := postgres-exporter redis-exporter pgbouncer-exporter
 COMPOSE_COLLECTORS := $(COMPOSE) -f deploy/dev/collectors.yml
 # Their containers belong to the project but not to its docker-compose.yml: without this every `make up` warns about them as orphans.
 export COMPOSE_IGNORE_ORPHANS := true
