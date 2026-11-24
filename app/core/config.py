@@ -636,11 +636,11 @@ class Settings(BillingSettings):
     # The CLI and the Telegram channel are clients of the chat API through the front door (specs/020; app/adapters/inbound/channels/door.py). Where they
     # send a turn: the front door's address (`https://api.localhost:8443` on the local stack), or the API itself in header mode. They sign in
     # at `web_auth_issuer` for `web_auth_audience` and `web_auth_scope`, as the web page does. `channel_ca_file` is the PEM of the CA that
-    # signed the door's certificate when it is not in the system store (`make mcp-gateway-ca` exports Caddy's local root); empty = system store.
+    # signed the door's certificate when it is not in the system store (`make front-door-ca` exports Caddy's local root); empty = system store.
     channel_api_url: str = "http://localhost:8000"
     channel_ca_file: str = ""
     # The CLI signs in with a browser and a one-shot listener on this loopback port, registered as a redirect URI of the tenant's chat client
-    # (scripts/tools/mcp_gateway_bootstrap.py): the authorization server compares redirect URIs exactly, so the port cannot be chosen per run.
+    # (scripts/tools/front_door_bootstrap.py): the authorization server compares redirect URIs exactly, so the port cannot be chosen per run.
     channel_cli_callback_port: int = Field(default=33420, ge=1024, le=65535)
     # The tenant the CLI's person belongs to (the Casdoor organization whose `api-<tenant>` client it signs in at); empty = DEFAULT_TENANT.
     channel_cli_tenant: str = ""
@@ -680,7 +680,7 @@ class Settings(BillingSettings):
     telegram_stream_edit_interval_seconds: float = Field(default=2.0, ge=0.5, le=30.0)
     # Account linking: `/login` sends the person to the authorization server's own page and binds their Telegram id to the account they sign in
     # as, instead of the bot signing in as a `telegram-<id>` person. `telegram_link_public_url` is the bot's public HTTPS base (the callback is
-    # `<it>/telegram/link/callback`, registered at the tenant's client by scripts/tools/mcp_gateway_bootstrap.py); `telegram_link_key` is a Fernet key that
+    # `<it>/telegram/link/callback`, registered at the tenant's client by scripts/tools/front_door_bootstrap.py); `telegram_link_key` is a Fernet key that
     # encrypts the refresh token kept per link (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`).
     telegram_linking: bool = False
     telegram_link_public_url: str = ""

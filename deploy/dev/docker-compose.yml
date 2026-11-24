@@ -3,7 +3,7 @@
 #   infra.yml     the backing services the app calls: Postgres, PgBouncer, Redis, Qdrant, MinIO, LiteLLM, Langfuse, Open WebUI
 #   app.yml       what this repo builds: the ML service; profile `app` (`make up-app`) the API and workers; profile `gateway` the MCP gateway
 #   tools.yml     what the agent's tools run on: the crawler; profile `sandbox` (`make sandbox-up`) the OpenSandbox server
-#   gateway.yml   the front door, profile `gateway` (`make mcp-gateway-up`): Caddy, authlimit, Casdoor
+#   gateway.yml   the front door, profile `gateway` (`make front-door-up`): Caddy, authlimit, Casdoor
 #
 # Run from this directory but not part of the project:
 #   observability.yml   its own project (`make obs-up`): Prometheus, Alertmanager, Loki, Pyroscope, Grafana, and SonarQube under profile `quality` (`make sonar-up`)

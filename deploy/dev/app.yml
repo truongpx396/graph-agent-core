@@ -1,5 +1,5 @@
 # Dev stack, part of docker-compose.yml: what this repo builds. The ML service starts with `make up`; the API and the two workers are the `app` profile
-# (`make up-app`) and the MCP gateway the `gateway` profile (`make mcp-gateway-up`). Everyday dev runs the app as host processes instead (`make serve`,
+# (`make up-app`) and the MCP gateway the `gateway` profile (`make front-door-up`). Everyday dev runs the app as host processes instead (`make serve`,
 # `make agent-worker`). deploy/prod/app.yml is the production counterpart: the same roles from images CI built, not built on the droplet.
 
 # Workers bind no port, so the image's API HEALTHCHECK (a probe of :8000/health/ready) would report them `unhealthy` forever. Whether a pool is
@@ -172,7 +172,7 @@ services:
       minio:
         condition: service_started
 
-  # --- MCP gateway (profile `gateway`; `make mcp-gateway-up`; specs/017) ---
+  # --- MCP gateway (profile `gateway`; `make front-door-up`; specs/017) ---
   # The app image with another command, so it lives here beside the roles that share the anchors above; the front door it sits behind (Casdoor, authlimit, Caddy) is gateway.yml.
   mcp-gateway:
     <<: *hardened
@@ -211,7 +211,7 @@ services:
   # --- Telegram bot (profile `telegram`; `make telegram-up`; specs/020, 021) ---
   # The bot `make telegram` runs on the host, as a container in the shape production runs it (deploy/prod/app.yml). A client of the chat API through the front door like the web page
   # and the CLI, never the queue or the graph. It reaches the API and Casdoor by their public names, which Caddy's network aliases (gateway.yml) resolve to Caddy itself, and trusts
-  # Caddy's local CA through CHANNEL_CA_FILE: the certificate `make mcp-gateway-ca` exports, which `make telegram-up` mounts (unset it is /dev/null, and the bot refuses to start).
+  # Caddy's local CA through CHANNEL_CA_FILE: the certificate `make front-door-ca` exports, which `make telegram-up` mounts (unset it is /dev/null, and the bot refuses to start).
   # In `poll` mode (the default) it needs no inbound port; in `webhook` mode, and for the page a login returns to, Caddy sends /telegram/* to its listener (TELEGRAM_UPSTREAM).
   telegram-bot:
     <<: *hardened

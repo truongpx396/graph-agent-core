@@ -1,5 +1,5 @@
 # The development entry of the front door (deploy/dev/gateway.yml, profile `gateway`; specs/017 and specs/018). Development only: `tls internal` has
-# Caddy sign the certificates with its own local CA (`make mcp-gateway-ca` exports the root so a client can trust it), the names are *.localhost
+# Caddy sign the certificates with its own local CA (`make front-door-ca` exports the root so a client can trust it), the names are *.localhost
 # (they resolve to the loopback address with no /etc/hosts entry), and one port serves all three so that an issuer or a resource URL written in a
 # token matches what the client dialled.
 #

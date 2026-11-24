@@ -20,7 +20,7 @@ Sign in once with the CLI against the door (`CHANNEL_API_URL=https://api.localho
 jq -r .access_token ~/.config/graph-agent-core/channel-session.json
 ```
 
-The door's certificate is signed by Caddy's local CA: `make mcp-gateway-ca` exports it and prints where, and Bruno has to trust it.
+The door's certificate is signed by Caddy's local CA: `make front-door-ca` exports it and prints where, and Bruno has to trust it.
 
 ## From a terminal
 

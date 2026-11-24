@@ -26,8 +26,8 @@ Stages (default: those that change nothing; `--all` adds those that stop things)
   outage      Casdoor down: existing tokens work inside the grace, are refused beyond it, and service resumes
   (Q7)
 
-Needs the stack up and bootstrapped (`make authlimit-up`, `make mcp-gateway-bootstrap`, `make
-mcp-gateway-ca`). It creates throwaway users and deletes them however the run ends. A manual tier like `make
+Needs the stack up and bootstrapped (`make authlimit-up`, `make front-door-bootstrap`, `make
+front-door-ca`). It creates throwaway users and deletes them however the run ends. A manual tier like `make
 mcp-gateway-smoke`, not part of CI; exit status 0 only if every check passed.
 
 `--upstream api` runs the same door against the REAL API (`make authlimit-up-app`, identity mode; the worker's
@@ -65,7 +65,7 @@ import httpx
 import jwt
 from cryptography.hazmat.primitives import serialization
 
-CALLBACK_API = "http://localhost:33419/callback"  # registered for api-<tenant> by scripts/tools/mcp_gateway_bootstrap.py
+CALLBACK_API = "http://localhost:33419/callback"  # registered for api-<tenant> by scripts/tools/front_door_bootstrap.py
 CALLBACK_MCP = "http://localhost:33418/callback"  # registered for mcp-<tenant>
 IDENTITY_ISSUER = "urn:agent-core:authlimit"
 IDENTITY_AUDIENCE = "agent-core-api"
@@ -151,7 +151,7 @@ class Door:
         if name not in self.apps:
             data = (await self.admin.get("/api/get-application", params={"id": f"admin/{name}"})).json().get("data")
             if not data:
-                sys.exit(f"no Casdoor application {name!r}: run make mcp-gateway-bootstrap first")
+                sys.exit(f"no Casdoor application {name!r}: run make front-door-bootstrap first")
             self.apps[name] = data
         return self.apps[name]
 
@@ -898,7 +898,7 @@ async def run(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="End-to-end check of the front door (specs/018).")
-    parser.add_argument("--ca", required=True, help="Caddy's local root certificate (make mcp-gateway-ca)")
+    parser.add_argument("--ca", required=True, help="Caddy's local root certificate (make front-door-ca)")
     parser.add_argument("--api", default="https://api.localhost:8443")
     parser.add_argument("--mcp", default="https://mcp.localhost:8443")
     parser.add_argument("--auth", default="https://auth.localhost:8443")

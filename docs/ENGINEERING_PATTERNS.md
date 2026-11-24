@@ -92,7 +92,7 @@ Spec 016 made the ML service answer typed decisions in the shape of the hosted J
 
 ### 83. Compose interpolates the whole file on every command, so a required variable in an opt-in profile breaks every other command
 The MCP gateway services wrote `${CASDOOR_DB_PASSWORD:?...}`; it passed every hermetic test, and when started for real **every compose command failed for everyone who never starts that stack**.
-- **Rule:** the dev compose file requires nothing and has no `${NAME:?`. A secret defaults to empty (`${VAR:-}`) and the service fails loudly itself; `make mcp-gateway-up` generates passwords into a private directory outside the repo and passes a second `--env-file`.
+- **Rule:** the dev compose file requires nothing and has no `${NAME:?`. A secret defaults to empty (`${VAR:-}`) and the service fails loudly itself; `make front-door-up` generates passwords into a private directory outside the repo and passes a second `--env-file`.
 - A message that helps the person starting one service is a regression for everyone who is not.
 
 ### 86. A smoke check that shares state with its previous run passes once and fails the second time, and a mutation list kept runnable finds the test a review missed

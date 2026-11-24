@@ -29,7 +29,7 @@ sandbox is deliberately not behind this gateway: Principle II puts side effects 
 gate, which an outside caller doesn't pass through), stale-key grace when the authorization server is down,
 production TLS/DNS wiring.
 
-Run with `make mcp-gateway-up`, or `python -m app.adapters.inbound.mcp.gateway --host 0.0.0.0 --port 8000`.
+Run with `make front-door-up`, or `python -m app.adapters.inbound.mcp.gateway --host 0.0.0.0 --port 8000`.
 """
 import argparse
 import contextlib

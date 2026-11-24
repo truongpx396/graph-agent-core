@@ -13,8 +13,8 @@ user and then:
 - reloads and is still signed in; signs out and is back at the box with the conversation gone; a 401 (revoked
   token) puts it back at the box with "no longer valid".
 
-Needs the app stack behind the door, bootstrapped (`make authlimit-up-app`, `make mcp-gateway-bootstrap
-ARGS="--tenant ecorp --tenant other-co"`, `make mcp-gateway-ca`), a worker on a model double that can call
+Needs the app stack behind the door, bootstrapped (`make authlimit-up-app`, `make front-door-bootstrap
+ARGS="--tenant ecorp --tenant other-co"`, `make front-door-ca`), a worker on a model double that can call
 `query_employees` (loadtest/fake_llm_server.py via `make fake-llm`, the worker's OPENAI_API_BASE pointed at
 it), a second tenant with employees, and Playwright with Chromium (`playwright install chromium`). A manual
 tier like `make authlimit-smoke`, never CI; exit 0 only if every check passed.
@@ -150,7 +150,7 @@ async def run(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Sign in to the built-in web page in a real browser, through the front door (specs/018).")
-    parser.add_argument("--ca", required=True, help="Caddy's local root certificate (make mcp-gateway-ca), used for the admin calls; the browser ignores certificate errors")
+    parser.add_argument("--ca", required=True, help="Caddy's local root certificate (make front-door-ca), used for the admin calls; the browser ignores certificate errors")
     parser.add_argument("--api", default="https://api.localhost:8443")
     parser.add_argument("--mcp", default="https://mcp.localhost:8443")
     parser.add_argument("--auth", default="https://auth.localhost:8443")

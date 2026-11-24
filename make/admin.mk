@@ -67,7 +67,7 @@ usage-reconcile:  ## Meter check against the LLM gateway's spend log. Exit 0 agr
 # Needs TELEGRAM_PERSON_SECRET and the gateway stack's Casdoor.
 telegram-person:  ## Add, disable or enable a Telegram person at the authorization server: ACTION=add|disable|enable TELEGRAM_ID=<id>
 	@test -n "$(TELEGRAM_ID)" || { echo "usage: make telegram-person ACTION=add|disable|enable TELEGRAM_ID=<telegram user id>"; exit 2; }
-	@. $(GATEWAY_SECRETS) && export CASDOOR_ADMIN_PASSWORD && python -m scripts.tools.telegram_person $(or $(ACTION),add) --telegram-id "$(TELEGRAM_ID)"
+	@. $(FRONT_DOOR_SECRETS) && export CASDOOR_ADMIN_PASSWORD && python -m scripts.tools.telegram_person $(or $(ACTION),add) --telegram-id "$(TELEGRAM_ID)"
 
 authlimit-revoke:  ## Void a person's tokens on every authlimit replica within seconds: TENANT=ecorp SUB=<person id>
 	@test -n "$(TENANT)" -a -n "$(SUB)" || { echo "usage: make authlimit-revoke TENANT=<tenant> SUB=<subject>"; exit 2; }
