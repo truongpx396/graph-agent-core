@@ -34,6 +34,10 @@ OBS_NETWORK := agent-core-observability_default
 # Casdoor's generated passwords live outside the repo and go to compose as a second --env-file (`.env` first, so every other variable still comes from it).
 FRONT_DOOR_DIR     := $(HOME)/.cache/graph-agent-core-front-door
 FRONT_DOOR_SECRETS := $(FRONT_DOOR_DIR)/secrets.env
+# Casdoor's own declarative config (organizations, applications, demo users), written by `front-door-bootstrap`; the casdoor service mounts this directory (gateway.yml, CASDOOR_INIT_DIR).
+FRONT_DOOR_INIT_DIR := $(FRONT_DOOR_DIR)/casdoor-init
+# What runs the standard-library-only scripts that need no venv; the dev droplet has python3 and no `python` (droplet.mk).
+PYTHON ?= python
 # Where an older checkout kept them, while the front door was only the MCP gateway's (spec 017). `front-door-secrets` moves it: a fresh folder would mint new Casdoor
 # database passwords that do not match an existing volume, and Casdoor would not start.
 FRONT_DOOR_DIR_OLD := $(HOME)/.cache/graph-agent-core-mcp-gateway
@@ -41,7 +45,7 @@ FRONT_DOOR_DIR_OLD := $(HOME)/.cache/graph-agent-core-mcp-gateway
 AUTHLIMIT_DIR      := $(HOME)/.cache/graph-agent-core-authlimit
 AUTHLIMIT_KEYS_DIR := $(AUTHLIMIT_DIR)/keys
 # Recursive (`=`), so they see a COMPOSE the command line overrides (the tests of this stack do). AUTHLIMIT_UID/GID run authlimit as the host user.
-GATEWAY_ENV = AUTHLIMIT_UID=$$(id -u) AUTHLIMIT_GID=$$(id -g) AUTHLIMIT_KEYS_DIR=$(AUTHLIMIT_KEYS_DIR)
+GATEWAY_ENV = AUTHLIMIT_UID=$$(id -u) AUTHLIMIT_GID=$$(id -g) AUTHLIMIT_KEYS_DIR=$(AUTHLIMIT_KEYS_DIR) CASDOOR_INIT_DIR=$(FRONT_DOOR_INIT_DIR)
 GATEWAY_COMPOSE_CMD = $(COMPOSE) $(if $(wildcard .env),--env-file .env) --env-file $(FRONT_DOOR_SECRETS) --profile gateway
 GATEWAY_COMPOSE = $(GATEWAY_ENV) $(GATEWAY_COMPOSE_CMD)
 

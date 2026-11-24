@@ -514,8 +514,8 @@ them (a remote agent, Claude Code, several replicas).
 - ❌ Not built: production DNS/TLS and an identity provider. Contract and gaps: `specs/017-mcp-gateway/`.
 
 ```bash
-make front-door-up           # Casdoor + authlimit + Caddy + this gateway (generates the passwords once, outside the repo)
-make front-door-bootstrap    # organizations, applications, scopes, demo users; prints the `claude mcp add` commands (the user is `ethan`; ARGS="--demo-user <name>" changes it)
+make front-door-up           # Casdoor + authlimit + Caddy + this gateway; generates the passwords and Casdoor's init file (organizations, clients, demo users) once, outside the repo
+make front-door-bootstrap    # writes that file again from the arguments and prints the `claude mcp add` commands and the demo users' initial passwords (the user is `ethan`; ARGS="--demo-user <name>" changes it)
 make front-door-ca           # export Caddy's root certificate; prints the NODE_EXTRA_CA_CERTS line
 make mcp-gateway-smoke       # the OAuth + MCP end-to-end check as a client does it
 ```
@@ -551,7 +551,7 @@ the chat API or the MCP routes.
 | `make authlimit-revoke TENANT=ecorp SUB=<subject>` | Void a person's tokens on every replica |
 | `make authlimit-keys ARGS=rotate` | Rotate the signing key (keys live outside the repo) |
 
-`make front-door-bootstrap` also creates an API application per tenant (client id `api-<tenant>`; tokens last 7 days,
+Casdoor's init file (`make front-door-bootstrap` writes it, [pattern 103](docs/ACCESS_PATTERNS.md)) also holds an API application per tenant (client id `api-<tenant>`; tokens last 7 days,
 `--token-hours`). `make authlimit-latency` measures the added latency; `make authlimit-mutants` runs 26 deliberate defects, each of which must fail a test.
 
 ### The CLI and Telegram go through the front door
@@ -818,7 +818,7 @@ until configured**.
 | **▶️ Run** | |
 | `make up` · `make down` | Start / stop the dev stack (keeps data) |
 | `make up-app` | `make up` plus the containerized `api`, `agent-worker` (every domain) and `ingest-worker` |
-| `make up-all` · `make down-all` | Everything in containers behind the front door (infra, app, MCP gateway, observability; not the sandbox or SonarQube), web UI https://api.localhost:8443/; first time also `make front-door-bootstrap` and `make front-door-ca`. `down-all` stops every container, any profile (keeps data) |
+| `make up-all` · `make down-all` | Everything in containers behind the front door (infra, app, MCP gateway, observability; not the sandbox or SonarQube), web UI https://api.localhost:8443/; first time also `make front-door-ca` (then trust the CA); `make front-door-bootstrap` prints the demo users' initial passwords. `down-all` stops every container, any profile (keeps data) |
 | `make serve` | API + web UI on :8000 |
 | `make chat` · `make chat-hitl` | CLI agent · with approval prompts. Both sign you in at the front door (`python -m app.adapters.inbound.channels.cli.chat --sign-out` forgets it) and need that domain's worker: `AGENT_DOMAIN` picks it |
 | `make agent-worker` · `make agent-worker-all` · `make ingest-worker` | Queue consumers: one domain (`AGENT_WORKER_DOMAINS=support,ops` picks others) · every domain · ingestion |

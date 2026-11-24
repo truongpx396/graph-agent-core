@@ -5,8 +5,8 @@
 DEV_DROPLET ?=
 DROPLET_DIR := /opt/graph-agent-core-dev
 DROPLET_SSH  = ssh $(DEV_DROPLET)
-# The same targets as on a laptop, with the hosted-LLM overlay (deploy/dev/hosted-llm.yml) added to the compose project.
-DROPLET_MAKE = cd $(DROPLET_DIR) && make COMPOSE_OVERLAYS="-f deploy/dev/hosted-llm.yml"
+# The same targets as on a laptop, with the hosted-LLM overlay (deploy/dev/hosted-llm.yml) added to the compose project, and python3 for the one script that needs no venv (front-door-bootstrap).
+DROPLET_MAKE = cd $(DROPLET_DIR) && make PYTHON=python3 COMPOSE_OVERLAYS="-f deploy/dev/hosted-llm.yml"
 
 ##@ The dev droplet (one machine)
 

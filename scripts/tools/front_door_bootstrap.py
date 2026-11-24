@@ -25,18 +25,30 @@ Casdoor has dynamic client registration off by default (anyone reaching it could
 Client ID Metadata Document support (both measured, specs/017 research.md), and it compares redirect URIs
 exactly.
 
-Runs INSIDE the gateway container (`docker compose exec`), where Casdoor is `http://casdoor:8000` (no TLS to
-trust; the admin API isn't published). Needs CASDOOR_ADMIN_PASSWORD. Standard library plus httpx, nothing from
-`app`.
+Two ways to deliver the same objects (one definition of each, below):
+
+- `--init-data-dir DIR` (the development stack, `make front-door-bootstrap`): write Casdoor's OWN declarative file, `DIR/init_data.json`. The casdoor
+  service reads it at start and again within seconds of a change (`initDataFile`, `initDataMerge`, `initDataWatchInterval`), so a fresh stack needs no
+  second step and no admin password. Merge mode updates what exists and keeps a person's own password; Casdoor's default would delete and re-create it.
+  Measured on the pinned image (docs/ACCESS_PATTERNS.md, pattern 103).
+- without it (production, deploy/README.md step 9): call the admin API from INSIDE the gateway container (`docker compose exec`), where Casdoor is
+  `http://casdoor:8000` (no TLS to trust; the admin API isn't published). Needs CASDOOR_ADMIN_PASSWORD.
+
+Standard library, plus httpx for the API way only, nothing from `app`.
 """
 import argparse
+import json
 import os
 import re
 import secrets
 import sys
+from pathlib import Path
 from typing import Any, cast
 
-import httpx
+try:
+    import httpx
+except ImportError:  # --init-data-dir needs only the standard library: the dev droplet runs it with a bare python3
+    httpx = None  # type: ignore[assignment]  # the API way says so when it needs it (Casdoor.__init__)
 
 ADMIN_ORG = "built-in"
 ADMIN_USER = "admin"
@@ -52,14 +64,127 @@ API_SMOKE_CALLBACK = "http://localhost:33419/callback"
 TELEGRAM_LINK_CALLBACK_PATH = "/telegram/link/callback"
 
 
+INIT_FILE = "init_data.json"
+# Set by an operator in Casdoor's UI and absent from the file on purpose: merge mode writes every key the file names on each apply, so naming them would
+# re-enable a person someone disabled (and demote an admin) at the next restart. A new person is created with both false anyway.
+OPERATOR_OWNED_USER_FIELDS = ("isAdmin", "isForbidden")
+
+
 class CasdoorError(Exception):
     pass
+
+
+# -- what to create: one definition, delivered by the admin API (`Casdoor`) or by the init file (`InitData`) -------------------------------------
+
+
+def organization_record(name: str) -> dict[str, Any]:
+    return {"owner": "admin", "name": name, "displayName": name, "passwordType": "bcrypt", "defaultApplication": "", "enableSoftDeletion": False}
+
+
+def user_record(organization: str, name: str, password: str) -> dict[str, Any]:
+    return {
+        "owner": organization,
+        "name": name,
+        "displayName": name,
+        "password": password,
+        "email": f"{name}@{organization}.localhost",
+        "type": "normal-user",
+        "isAdmin": False,
+        "isForbidden": False,
+    }
+
+
+def application_record(name: str, organization: str, scope: str, description: str, redirect_uris: list[str], token_hours: int, kind: str) -> dict[str, Any]:
+    """Everything but the client id and secret, which each delivery decides."""
+    return {
+        "owner": "admin",
+        "name": name,
+        "displayName": f"{kind}: {description}",
+        "organization": organization,
+        "category": "Agent",
+        "type": "MCP",
+        "cert": "cert-built-in",
+        "enablePassword": True,
+        "enableSignUp": False,
+        "grantTypes": ["authorization_code", "refresh_token"],
+        "redirectUris": redirect_uris,
+        "tokenFormat": "JWT-Standard",
+        "expireInHours": token_hours,
+        "refreshExpireInHours": REFRESH_HOURS,
+        "scopes": [{"name": scope, "displayName": scope, "description": description}],
+    }
+
+
+class InitData:
+    """The same `ensure_*` calls as `Casdoor`, collected into the file Casdoor reads itself (`initDataFile`) instead of sent to its admin API.
+
+    A file is declarative, so two things differ from the API way. A client id is the application's name (`mcp-ecorp`, `api-ecorp`): it is not a secret,
+    and there is no "generated once and kept" to remember. The client SECRET is left out: Casdoor makes one when it creates the application and merge
+    keeps it. A person's password is generated once and kept IN the file across renders: it is only their initial password (Casdoor keeps whatever they
+    change it to), but it makes a re-render byte-identical, so Casdoor sees no change."""
+
+    def __init__(self, directory: Path) -> None:
+        self.directory = directory
+        self.file = directory / INIT_FILE
+        self.organizations: dict[str, dict[str, Any]] = {}
+        self.applications: dict[str, dict[str, Any]] = {}
+        self.users: dict[tuple[str, str], dict[str, Any]] = {}
+        try:
+            self.known = {(u["owner"], u["name"]): u["password"] for u in json.loads(self.file.read_text(encoding="utf-8")).get("users", []) if u.get("password")}
+        except (OSError, ValueError, KeyError, AttributeError):  # no file yet, or one that is not ours: start over
+            self.known = {}
+
+    def ensure_organization(self, name: str) -> None:
+        self.organizations[name] = organization_record(name)
+
+    def ensure_user(self, organization: str, name: str) -> str:
+        password = self.known.get((organization, name)) or secrets.token_urlsafe(18)
+        record = user_record(organization, name, password)
+        self.users[(organization, name)] = {key: value for key, value in record.items() if key not in OPERATOR_OWNED_USER_FIELDS}
+        return password
+
+    def ensure_application(
+        self,
+        name: str,
+        organization: str,
+        scope: str,
+        description: str,
+        redirect_uris: list[str],
+        token_hours: int,
+        kind: str = "MCP",
+        client_id: str | None = None,
+    ) -> str:
+        client_id = client_id or name
+        self.applications[name] = {**application_record(name, organization, scope, description, redirect_uris, token_hours, kind), "clientId": client_id}
+        return client_id
+
+    def write(self) -> None:
+        """Atomically (a rename inside the directory the container mounts, never an in-place write it could read half of), mode 0600: it holds passwords."""
+        document = {
+            "organizations": list(self.organizations.values()),
+            "applications": list(self.applications.values()),
+            "users": list(self.users.values()),
+        }
+        text = json.dumps(document, indent=2) + "\n"
+        try:
+            if self.file.read_text(encoding="utf-8") == text:
+                return
+        except OSError:
+            pass
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self.directory.chmod(0o700)
+        temporary = self.directory / f".{INIT_FILE}.tmp"
+        with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(temporary, self.file)
 
 
 class Casdoor:
     """The few admin endpoints this needs. Every call checks Casdoor's own `status` field: it answers HTTP 200 for failures."""
 
     def __init__(self, base_url: str, admin_password: str) -> None:
+        if httpx is None:
+            raise CasdoorError("the admin API way needs httpx (pip install httpx); `--init-data-dir` does not")
         self.http = httpx.Client(base_url=base_url, timeout=20.0)
         reply = self.http.post(
             "/api/login",
@@ -91,10 +216,7 @@ class Casdoor:
     def ensure_organization(self, name: str) -> None:
         if self.read("/api/get-organization", id=f"admin/{name}"):
             return
-        self.write(
-            "/api/add-organization",
-            {"owner": "admin", "name": name, "displayName": name, "passwordType": "bcrypt", "defaultApplication": "", "enableSoftDeletion": False},
-        )
+        self.write("/api/add-organization", organization_record(name))
         print(f"created organization {name}")
 
     def ensure_user(self, organization: str, name: str) -> str | None:
@@ -102,19 +224,7 @@ class Casdoor:
         if self.read("/api/get-user", id=f"{organization}/{name}"):
             return None
         password = secrets.token_urlsafe(18)
-        self.write(
-            "/api/add-user",
-            {
-                "owner": organization,
-                "name": name,
-                "displayName": name,
-                "password": password,
-                "email": f"{name}@{organization}.localhost",
-                "type": "normal-user",
-                "isAdmin": False,
-                "isForbidden": False,
-            },
-        )
+        self.write("/api/add-user", user_record(organization, name, password))
         return password
 
     def ensure_application(
@@ -135,23 +245,7 @@ class Casdoor:
         page finds a tenant's client by the rule `api-<tenant>` (app/adapters/inbound/api/web_auth.py) instead of being told every tenant's random id, and a
         client id is not a secret."""
         existing = self.read("/api/get-application", id=f"admin/{name}")
-        record = {
-            "owner": "admin",
-            "name": name,
-            "displayName": f"{kind}: {description}",
-            "organization": organization,
-            "category": "Agent",
-            "type": "MCP",
-            "cert": "cert-built-in",
-            "enablePassword": True,
-            "enableSignUp": False,
-            "grantTypes": ["authorization_code", "refresh_token"],
-            "redirectUris": redirect_uris,
-            "tokenFormat": "JWT-Standard",
-            "expireInHours": token_hours,
-            "refreshExpireInHours": REFRESH_HOURS,
-            "scopes": [{"name": scope, "displayName": scope, "description": description}],
-        }
+        record = application_record(name, organization, scope, description, redirect_uris, token_hours, kind)
         if existing:
             kept = client_id or existing["clientId"]
             record = {**existing, **record, "clientId": kept, "clientSecret": existing["clientSecret"]}
@@ -189,6 +283,12 @@ def main(argv: list[str] | None = None) -> None:
         help="how long an access token lasts, for every application this creates (default 168 = seven days; TOKEN_HOURS sets the default). "
         "A shorter lifetime with a refresh token is the production recommendation",
     )
+    parser.add_argument(
+        "--init-data-dir",
+        default="",
+        help="write Casdoor's own init file, DIR/init_data.json, instead of calling its admin API (the development stack: `make front-door-bootstrap`). Casdoor applies it at "
+        "start and within seconds of a change, and no admin password is needed. The file lists exactly what is given: Casdoor never deletes what it no longer names",
+    )
     args = parser.parse_args(argv)
     if not 1 <= args.token_hours <= 8760:
         sys.exit("front-door-bootstrap: --token-hours must be between 1 and 8760")
@@ -197,9 +297,10 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(f"front-door-bootstrap: {option} must be letters, digits, '.', '_' or '-' and start with a letter or digit (got {user!r})")
     tenants = args.tenant or ["ecorp"]
 
+    init_dir = args.init_data_dir
     password = os.environ.get("CASDOOR_ADMIN_PASSWORD", "")
-    if not password:
-        sys.exit("CASDOOR_ADMIN_PASSWORD is not set (make front-door-bootstrap passes it)")
+    if not init_dir and not password:
+        sys.exit("CASDOOR_ADMIN_PASSWORD is not set (the admin API way needs it, as deploy/README.md step 9 passes it; `--init-data-dir` does not)")
     public = os.environ.get("MCP_GATEWAY_PUBLIC_URL", "https://mcp.localhost:8443").rstrip("/")
     callback = f"http://localhost:{args.callback_port}/callback"
     cli_callback = f"http://localhost:{args.cli_callback_port}/callback"
@@ -207,8 +308,9 @@ def main(argv: list[str] | None = None) -> None:
     link_callbacks = [f"{link_url}{TELEGRAM_LINK_CALLBACK_PATH}"] if link_url else []
     api_public = os.environ.get("AUTHLIMIT_AUDIENCE", "https://api.localhost:8443").rstrip("/")  # the chat API's resource identifier (the token's audience)
 
+    errors: tuple[type[Exception], ...] = (CasdoorError, OSError, httpx.HTTPError) if httpx else (CasdoorError, OSError)
     try:
-        casdoor = Casdoor(os.environ.get("CASDOOR_URL", "http://casdoor:8000"), password)
+        casdoor: Casdoor | InitData = InitData(Path(init_dir)) if init_dir else Casdoor(os.environ.get("CASDOOR_URL", "http://casdoor:8000"), password)
         commands = []
         api_clients = []
         for tenant in tenants:
@@ -231,7 +333,9 @@ def main(argv: list[str] | None = None) -> None:
         casdoor.ensure_organization(args.ops_org)
         client_id = casdoor.ensure_application("mcp-ops", args.ops_org, "ops:read", "operations metrics and incidents", [callback], args.token_hours)
         commands.append(("ops", args.ops_org, "/ops/mcp", client_id, args.ops_user, casdoor.ensure_user(args.ops_org, args.ops_user)))
-    except (CasdoorError, httpx.HTTPError) as exc:
+        if isinstance(casdoor, InitData):
+            casdoor.write()
+    except errors as exc:
         sys.exit(f"front-door-bootstrap: {exc}")
 
     issuer = os.environ.get("MCP_GATEWAY_ISSUER", "https://auth.localhost:8443").rstrip("/")
@@ -246,6 +350,9 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  {tenant}: client id {api_client_id}")
     print(f"\nAccess tokens last {args.token_hours} hours. `make authlimit-revoke TENANT=<tenant> SUB=<subject>` voids a person's tokens at once.")
     print(f"The browser login is {issuer} (Casdoor" + (", signed by Caddy's local CA" if local else "") + ").")
+    if init_dir:
+        print(f"\nWrote {Path(init_dir) / INIT_FILE}: Casdoor reads it at start and again within seconds of a change (its log says `Applied the changed init data file`).")
+        print("The passwords above are each person's INITIAL one: a person who changed theirs keeps the new one.")
 
 
 if __name__ == "__main__":
