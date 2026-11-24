@@ -62,26 +62,29 @@ clear-all: clear-cache clear-streams clear-checkpoints clear-langfuse clear-lite
 
 ##@ Observability and collectors
 
-obs-up:  ## Start observability (Grafana :3300, Prometheus :9090, Loki, Alertmanager, Pyroscope) and its collectors
+# Before the first `obs-up` after the OTel collector, Promtail, node-exporter, cAdvisor and container-name-mapper moved from the app's project into this one, remove the old
+# copies, which still hold their ports: for s in otel-collector promtail node-exporter cadvisor container-name-mapper; do docker ps -aq --filter label=com.docker.compose.project=graph-agent-core
+# --filter label=com.docker.compose.service=$s; done | xargs docker rm -f   (the project label is your checkout directory's name).
+obs-up:  ## Start observability (Grafana :3300, Prometheus :9090, Loki, Alertmanager, Pyroscope) with its agents, then the database exporters
 	$(COMPOSE_OBS) up -d
 	$(MAKE) collectors-up
 
-obs-down:  ## Stop observability and the collectors (keep volumes)
+obs-down:  ## Stop observability and the database exporters (keep volumes)
 	$(COMPOSE_OBS) down
 	$(MAKE) collectors-down
 
 obs-logs:  ## Tail logs from the observability stack
 	$(COMPOSE_OBS) logs -f
 
-obs-clean:  ## Stop observability and the collectors and delete the observability volumes
+obs-clean:  ## Stop observability and the database exporters and delete the observability volumes
 	$(COMPOSE_OBS) down -v
 	$(MAKE) collectors-down
 
-collectors-up:  ## Start the telemetry collectors (OTel collector, exporters, cAdvisor, Promtail) beside `make up`
+collectors-up:  ## Start the database exporters (postgres, redis, PgBouncer) beside `make up`; the other agents are part of `make obs-up`
 	$(COMPOSE_COLLECTORS) up -d --no-deps $(COLLECTORS)
 
-collectors-down:  ## Stop and remove the telemetry collectors
+collectors-down:  ## Stop and remove the database exporters
 	$(COMPOSE_COLLECTORS) rm -sf $(COLLECTORS)
 
-collectors-logs:  ## Tail logs from the telemetry collectors
+collectors-logs:  ## Tail logs from the database exporters
 	$(COMPOSE_COLLECTORS) logs -f $(COLLECTORS)

@@ -718,9 +718,10 @@ hand, in order (`psql -U langfuse -d appdata -f postgres-init/NN-….sql`).
 - 🔭 **Traces:** Langfuse, grouped by `thread_id`.
 - 💵 **Cost:** one usage event per model call (tenant- and principal-scoped, with the concrete model behind each alias) is what the dollar caps sum ([COST_GOVERNANCE.md](docs/COST_GOVERNANCE.md), patterns 38, 51).
 
-`make obs-up` starts the backends, [`observability.yml`](deploy/dev/observability.yml), and the collectors that
-feed them, [`collectors.yml`](deploy/dev/collectors.yml) (the OTel collector, the exporters, cAdvisor, Promtail;
-`make collectors-up` starts only those, beside `make up`). Nothing in the app depends on either (`make obs-down` keeps data, `make obs-clean`
+`make obs-up` starts the backends and the agents that feed them (the OTel collector, Promtail, node-exporter, cAdvisor), all in
+[`observability.yml`](deploy/dev/observability.yml), which Docker Desktop shows as its own `agent-core-observability` group, then the three database exporters,
+[`collectors.yml`](deploy/dev/collectors.yml): they dial Postgres, Redis and PgBouncer by service name, so they stay in the app's project and group
+(`make collectors-up` starts only those, beside `make up`). Nothing in the app depends on either (`make obs-down` keeps data, `make obs-clean`
 drops it; config in [`observability/`](observability/); prod runs the backends on their own droplet, [deploy/README.md](deploy/README.md)).
 
 | Piece | Role |
@@ -844,7 +845,7 @@ until configured**.
 | **✅ Gates and tools** | |
 | `make lint` · `make typecheck` · `make test` | The CI gates |
 | `make openapi` · `make openapi-breaking` | Rewrite the committed OpenAPI documents from the code · fail a change that breaks a client of main's (needs `oasdiff`, see the target) |
-| `make obs-up` · `make obs-down` · `make collectors-up` · `make sandbox-up` | Observability with its collectors · the collectors alone · OpenSandbox (opt-in) |
+| `make obs-up` · `make obs-down` · `make collectors-up` · `make sandbox-up` | Observability with its agents and the database exporters · the database exporters alone · OpenSandbox (opt-in) |
 
 ⚠️ `make clean`, `make clear-*`, `make obs-clean` and `make restart-all` delete volumes or kill running processes; don't run them
 casually. The compose files live in `deploy/dev/` (the stack's entry, `docker-compose.yml`, includes its parts) but resolve paths and `.env` from the repo root, so a bare
