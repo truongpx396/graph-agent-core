@@ -1,7 +1,8 @@
-"""Create, idempotently, what the MCP gateway expects to find in Casdoor (specs/017): `make
-mcp-gateway-bootstrap`. The gateway is a resource server and trusts whatever the authorization server signed
-for it, which needs an APPLICATION per published server whose tokens carry the right claims, and a user to log
-in as. A second run changes nothing it shouldn't.
+"""Create, idempotently, what the front door and the MCP gateway expect to find in Casdoor (specs/017, 018): `make
+front-door-bootstrap` (named `mcp-gateway-bootstrap` while only the MCP gateway needed it, and still answering to it). The chat API and the MCP gateway
+are resource servers and trust whatever the authorization server signed for them, which needs an APPLICATION per
+published server whose tokens carry the right claims, and a user to log in as. A second run changes nothing it
+shouldn't.
 
 - one ORGANIZATION per tenant (default `ecorp`, which owns the seeded rows) and one for operators
   (`ops-team`). The token's `owner` claim is the organization, which the gateway reads as the tenant
@@ -190,15 +191,15 @@ def main(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
     if not 1 <= args.token_hours <= 8760:
-        sys.exit("mcp-gateway-bootstrap: --token-hours must be between 1 and 8760")
+        sys.exit("front-door-bootstrap: --token-hours must be between 1 and 8760")
     for option, user in (("--demo-user", args.demo_user), ("--ops-user", args.ops_user)):
         if not USER_NAME.fullmatch(user):
-            sys.exit(f"mcp-gateway-bootstrap: {option} must be letters, digits, '.', '_' or '-' and start with a letter or digit (got {user!r})")
+            sys.exit(f"front-door-bootstrap: {option} must be letters, digits, '.', '_' or '-' and start with a letter or digit (got {user!r})")
     tenants = args.tenant or ["ecorp"]
 
     password = os.environ.get("CASDOOR_ADMIN_PASSWORD", "")
     if not password:
-        sys.exit("CASDOOR_ADMIN_PASSWORD is not set (make mcp-gateway-bootstrap passes it)")
+        sys.exit("CASDOOR_ADMIN_PASSWORD is not set (make front-door-bootstrap passes it)")
     public = os.environ.get("MCP_GATEWAY_PUBLIC_URL", "https://mcp.localhost:8443").rstrip("/")
     callback = f"http://localhost:{args.callback_port}/callback"
     cli_callback = f"http://localhost:{args.cli_callback_port}/callback"
@@ -231,11 +232,11 @@ def main(argv: list[str] | None = None) -> None:
         client_id = casdoor.ensure_application("mcp-ops", args.ops_org, "ops:read", "operations metrics and incidents", [callback], args.token_hours)
         commands.append(("ops", args.ops_org, "/ops/mcp", client_id, args.ops_user, casdoor.ensure_user(args.ops_org, args.ops_user)))
     except (CasdoorError, httpx.HTTPError) as exc:
-        sys.exit(f"mcp-gateway-bootstrap: {exc}")
+        sys.exit(f"front-door-bootstrap: {exc}")
 
     issuer = os.environ.get("MCP_GATEWAY_ISSUER", "https://auth.localhost:8443").rstrip("/")
     local = ".localhost" in issuer  # the development stack's names, signed by Caddy's own CA; a real deployment's are not
-    print("\nRegister each server in Claude Code (a pre-registered client" + ("; trust the local CA first: make mcp-gateway-ca" if local else "") + "):\n")
+    print("\nRegister each server in Claude Code (a pre-registered client" + ("; trust the local CA first: make front-door-ca" if local else "") + "):\n")
     for label, organization, path, client_id, user, user_password in commands:
         print(f"  claude mcp add --transport http --callback-port {args.callback_port} --client-id {client_id} {label} {public}{path}")
         shown = user_password if user_password else "(already existed: password unchanged)"

@@ -32,14 +32,17 @@ OBS_NETWORK := agent-core-observability_default
 
 # --- The front door (gateway.mk; here because the admin and test targets use them too) ---
 # Casdoor's generated passwords live outside the repo and go to compose as a second --env-file (`.env` first, so every other variable still comes from it).
-GATEWAY_DIR     := $(HOME)/.cache/graph-agent-core-mcp-gateway
-GATEWAY_SECRETS := $(GATEWAY_DIR)/secrets.env
+FRONT_DOOR_DIR     := $(HOME)/.cache/graph-agent-core-front-door
+FRONT_DOOR_SECRETS := $(FRONT_DOOR_DIR)/secrets.env
+# Where an older checkout kept them, while the front door was only the MCP gateway's (spec 017). `front-door-secrets` moves it: a fresh folder would mint new Casdoor
+# database passwords that do not match an existing volume, and Casdoor would not start.
+FRONT_DOOR_DIR_OLD := $(HOME)/.cache/graph-agent-core-mcp-gateway
 # authlimit's signing keys also live outside the repo, in a directory owned by the host user (the container runs as that user). Never committed, never in an image.
 AUTHLIMIT_DIR      := $(HOME)/.cache/graph-agent-core-authlimit
 AUTHLIMIT_KEYS_DIR := $(AUTHLIMIT_DIR)/keys
 # Recursive (`=`), so they see a COMPOSE the command line overrides (the tests of this stack do). AUTHLIMIT_UID/GID run authlimit as the host user.
 GATEWAY_ENV = AUTHLIMIT_UID=$$(id -u) AUTHLIMIT_GID=$$(id -g) AUTHLIMIT_KEYS_DIR=$(AUTHLIMIT_KEYS_DIR)
-GATEWAY_COMPOSE_CMD = $(COMPOSE) $(if $(wildcard .env),--env-file .env) --env-file $(GATEWAY_SECRETS) --profile gateway
+GATEWAY_COMPOSE_CMD = $(COMPOSE) $(if $(wildcard .env),--env-file .env) --env-file $(FRONT_DOOR_SECRETS) --profile gateway
 GATEWAY_COMPOSE = $(GATEWAY_ENV) $(GATEWAY_COMPOSE_CMD)
 
 # Named explicitly: the included files bring targets of their own.

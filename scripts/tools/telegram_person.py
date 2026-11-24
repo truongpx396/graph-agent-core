@@ -2,14 +2,14 @@
 
 A Telegram user is a person `telegram-<id>` of one tenant, and the bot signs in as them with a password it DERIVES from TELEGRAM_PERSON_SECRET
 (app/adapters/inbound/channels/telegram/people.py). This tool is how an operator creates that person without the bot ever holding a credential that can: it logs in
-to Casdoor as the administrator (the generated password in the secrets file `make mcp-gateway-secrets` keeps outside the repo) and writes the user
+to Casdoor as the administrator (the generated password in the secrets file `make front-door-secrets` keeps outside the repo) and writes the user
 with the same derived password. It never prints the password.
 
   make telegram-person ACTION=add TELEGRAM_ID=123456789
   make telegram-person ACTION=disable TELEGRAM_ID=123456789   # sign-in refused from now; a disabled person's refresh tokens stop working at once
 
 Disabling does not void an access token already issued (seven days by default): the command prints the `make authlimit-revoke` line that does.
-If the door uses Caddy's local CA, set SSL_CERT_FILE to the root `make mcp-gateway-ca` exports.
+If the door uses Caddy's local CA, set SSL_CERT_FILE to the root `make front-door-ca` exports.
 """
 import argparse
 import os
@@ -23,7 +23,7 @@ from app.adapters.inbound.channels.telegram.people import (
     person_password,
 )
 from app.core.config import settings
-from scripts.tools.mcp_gateway_bootstrap import Casdoor, CasdoorError
+from scripts.tools.front_door_bootstrap import Casdoor, CasdoorError
 
 
 def main(argv: list[str] | None = None) -> None:

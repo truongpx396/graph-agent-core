@@ -20,15 +20,15 @@ droplet-up: droplet-sync  ## Build and start the whole dev stack there with the 
 	$(DROPLET_SSH) '$(DROPLET_MAKE) up-all'
 
 droplet-bootstrap:  ## First time: create the Casdoor tenants and demo users on the droplet
-	$(DROPLET_SSH) '$(DROPLET_MAKE) mcp-gateway-bootstrap'
+	$(DROPLET_SSH) '$(DROPLET_MAKE) front-door-bootstrap'
 
 droplet-ingest:  ## Load the sample documents and the skills catalog into the droplet's Qdrant (inside the api container: the droplet has no venv)
 	$(DROPLET_SSH) 'cd $(DROPLET_DIR) && docker compose --project-directory . -f deploy/dev/docker-compose.yml -f deploy/dev/hosted-llm.yml exec -T api sh -c "python -m scripts.tools.seed && python -m scripts.tools.index_skills"'
 
 droplet-ca:  ## Fetch the droplet's Caddy root certificate so this machine can trust https://*.localhost:8443 through the tunnel
-	$(DROPLET_SSH) '$(DROPLET_MAKE) mcp-gateway-ca'
-	@mkdir -p $(GATEWAY_DIR) && scp -q $(DEV_DROPLET):.cache/graph-agent-core-mcp-gateway/caddy-root.crt $(GATEWAY_DIR)/caddy-droplet-root.crt
-	@echo "trust $(GATEWAY_DIR)/caddy-droplet-root.crt in your browser or OS; for Claude Code: export NODE_EXTRA_CA_CERTS=$(GATEWAY_DIR)/caddy-droplet-root.crt"
+	$(DROPLET_SSH) '$(DROPLET_MAKE) front-door-ca'
+	@mkdir -p $(FRONT_DOOR_DIR) && scp -q $(DEV_DROPLET):.cache/graph-agent-core-front-door/caddy-root.crt $(FRONT_DOOR_DIR)/caddy-droplet-root.crt
+	@echo "trust $(FRONT_DOOR_DIR)/caddy-droplet-root.crt in your browser or OS; for Claude Code: export NODE_EXTRA_CA_CERTS=$(FRONT_DOOR_DIR)/caddy-droplet-root.crt"
 
 droplet-tunnel:  ## Forward the front door (https://api.localhost:8443/), Grafana :3300, Langfuse :3000, LiteLLM :4000 and Open WebUI :8080 here; Ctrl-C stops it
 	$(DROPLET_SSH) -N -L 8443:localhost:8443 -L 3300:localhost:3300 -L 3000:localhost:3000 -L 4000:localhost:4000 -L 8080:localhost:8080

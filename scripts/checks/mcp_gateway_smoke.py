@@ -5,7 +5,7 @@ Unit tests replace the authorization server; what this repo depends on from Casd
 public clients, issuer) is measured behaviour of one version, so run this after changing the Casdoor digest in
 deploy/dev/gateway.yml.
 
-Needs the stack up and bootstrapped (`make mcp-gateway-up`, `mcp-gateway-bootstrap`, `mcp-gateway-ca`). It
+Needs the stack up and bootstrapped (`make front-door-up`, `front-door-bootstrap`, `front-door-ca`). It
 creates a throwaway user in each organization (a demo user's password is never touched) and deletes them
 however the run ends. A manual tier like `make test-sandbox`, not CI; exit 0 only if every check passed.
 """
@@ -27,7 +27,7 @@ from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import TextContent
 
-CALLBACK = "http://localhost:33418/callback"  # what scripts/tools/mcp_gateway_bootstrap.py registers
+CALLBACK = "http://localhost:33418/callback"  # what scripts/tools/front_door_bootstrap.py registers
 FAILED: list[str] = []
 
 
@@ -88,7 +88,7 @@ class Stack:
         """Log in and exchange the code, as a public client (no secret). Returns (access token or None, the last reply)."""
         app = await self.application(application)
         if app is None:
-            sys.exit(f"no Casdoor application {application!r}: run make mcp-gateway-bootstrap first")
+            sys.exit(f"no Casdoor application {application!r}: run make front-door-bootstrap first")
         verifier = secrets.token_urlsafe(48)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
         query = {"clientId": app["clientId"], "responseType": "code", "redirectUri": CALLBACK, "scope": scope, "state": "s", "nonce": "",
@@ -164,7 +164,7 @@ async def run(stack: Stack) -> None:
         a, b = await asyncio.gather(stack.call(token, "/ecorp/mcp", "query_employees"), stack.call(other_token, "/ecorp/mcp", "query_employees"))
         check("two tenants at the same time each read only their own rows", "Priya Nair" in a and "Jordan Lee" not in a and "Jordan Lee" in b and "Priya Nair" not in b)
     else:
-        print("SKIP  the second-tenant check (no mcp-other-co application: make mcp-gateway-bootstrap ARGS=\"--tenant ecorp --tenant other-co\")")
+        print("SKIP  the second-tenant check (no mcp-other-co application: make front-door-bootstrap ARGS=\"--tenant ecorp --tenant other-co\")")
 
     ops_token, reply = await stack.token("mcp-ops", operator, ops_url, "ops:read")
     check("an operator logs in to the ops application", ops_token is not None, str(reply)[:200])
@@ -180,7 +180,7 @@ async def run(stack: Stack) -> None:
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description="End-to-end check of the MCP gateway stack (OAuth login + MCP calls).")
-    parser.add_argument("--ca", required=True, help="Caddy's root certificate (make mcp-gateway-ca)")
+    parser.add_argument("--ca", required=True, help="Caddy's root certificate (make front-door-ca)")
     parser.add_argument("--auth", default="https://auth.localhost:8443")
     parser.add_argument("--mcp", default="https://mcp.localhost:8443")
     args = parser.parse_args()

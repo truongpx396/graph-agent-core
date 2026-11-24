@@ -32,7 +32,7 @@ SET_ELSEWHERE = {
         "AUTHLIMIT_UID", "AUTHLIMIT_GID", "AUTHLIMIT_KEYS_DIR",  # the Makefile's GATEWAY_ENV: the host user and where `make authlimit-keys` made the keys
         "AUTHLIMIT_UPSTREAM",  # chosen per make target (the echo stub, or the API behind the door)
         "TELEGRAM_UPSTREAM", "TELEGRAM_CA_FILE",  # `make telegram-up`: Caddy's upstream for /telegram/*, and the root certificate it exports for the bot to trust
-        "CASDOOR_DB_PASSWORD", "CASDOOR_ADMIN_PASSWORD",  # generated once by `make mcp-gateway-up` into a second --env-file outside the repo
+        "CASDOOR_DB_PASSWORD", "CASDOOR_ADMIN_PASSWORD",  # generated once by `make front-door-up` into a second --env-file outside the repo
         "HOME",  # the shell's
     },
     "prod": {"IMAGE_TAG"},  # passed by .github/workflows/deploy.yml at deploy time (prod.env.example says so)

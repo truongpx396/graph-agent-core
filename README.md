@@ -503,7 +503,7 @@ A server started without them exits and says why on stderr. The tools declare th
 `mcp_tool_call` audit line (who, which tool, outcome, duration; never an argument) as JSON on stderr. The same fail-closed
 policy applies, but nothing authenticates whoever starts the process, and there is no networked transport here (patterns 21, 78).
 
-### MCP gateway (`make mcp-gateway-up`, spec 017)
+### MCP gateway (`make front-door-up`, spec 017)
 
 The same two servers over **Streamable HTTP behind OAuth 2.1**, for clients that aren't a child process of the person using
 them (a remote agent, Claude Code, several replicas).
@@ -514,11 +514,14 @@ them (a remote agent, Claude Code, several replicas).
 - ❌ Not built: production DNS/TLS and an identity provider. Contract and gaps: `specs/017-mcp-gateway/`.
 
 ```bash
-make mcp-gateway-up           # Casdoor + gateway + Caddy (generates the passwords once, outside the repo)
-make mcp-gateway-bootstrap    # organizations, applications, scopes, demo users; prints the `claude mcp add` commands (the user is `ethan`; ARGS="--demo-user <name>" changes it)
-make mcp-gateway-ca           # export Caddy's root certificate; prints the NODE_EXTRA_CA_CERTS line
-make mcp-gateway-smoke        # the OAuth + MCP end-to-end check as a client does it
+make front-door-up           # Casdoor + authlimit + Caddy + this gateway (generates the passwords once, outside the repo)
+make front-door-bootstrap    # organizations, applications, scopes, demo users; prints the `claude mcp add` commands (the user is `ethan`; ARGS="--demo-user <name>" changes it)
+make front-door-ca           # export Caddy's root certificate; prints the NODE_EXTRA_CA_CERTS line
+make mcp-gateway-smoke       # the OAuth + MCP end-to-end check as a client does it
 ```
+
+The first three, and `front-door-down`, were `mcp-gateway-up`, `-bootstrap`, `-ca` and `-down` while this gateway was all that sat behind Casdoor and Caddy; those names still work.
+Only `mcp-gateway-smoke` is about MCP alone. The folder with the generated passwords moved from `~/.cache/graph-agent-core-mcp-gateway` to `~/.cache/graph-agent-core-front-door`, and the first `make` that needs it moves an existing one.
 
 ### Front door: authlimit
 
@@ -541,21 +544,21 @@ the chat API or the MCP routes.
 | Command | Does |
 |---|---|
 | `make authlimit-test` | `go vet` + the service's tests with the race detector (needs Go; no Docker) |
-| `make authlimit-up` | = `mcp-gateway-up`: Casdoor, authlimit ×2, the MCP gateway, a stub upstream, Caddy on `https://{api,mcp,auth}.localhost:8443` |
+| `make authlimit-up` | = `front-door-up`: Casdoor, authlimit ×2, the MCP gateway, a stub upstream, Caddy on `https://{api,mcp,auth}.localhost:8443` |
 | `make authlimit-up-app` | The same with the **real API** (`AUTH_MODE=identity`) and a worker behind the door instead of the stub; the page is `https://api.localhost:8443/` |
 | `make authlimit-smoke` | The end-to-end check as a client sees it; `ARGS=--all` adds replica kill, observe mode, key rotation, Casdoor outage; `ARGS="--upstream api"` runs it against the real API (two tenants see only their own rows; forged headers or a signed forged identity change nothing) |
 | `make authlimit-web-check` | The web page in a real browser (Playwright): sign in through Casdoor, chat, sign out, two tenants |
 | `make authlimit-revoke TENANT=ecorp SUB=<subject>` | Void a person's tokens on every replica |
 | `make authlimit-keys ARGS=rotate` | Rotate the signing key (keys live outside the repo) |
 
-`make mcp-gateway-bootstrap` also creates an API application per tenant (client id `api-<tenant>`; tokens last 7 days,
+`make front-door-bootstrap` also creates an API application per tenant (client id `api-<tenant>`; tokens last 7 days,
 `--token-hours`). `make authlimit-latency` measures the added latency; `make authlimit-mutants` runs 26 deliberate defects, each of which must fail a test.
 
 ### The CLI and Telegram go through the front door
 
 Both are clients of the chat API, signed in as a person, so they get the same limits, signed identity and revocation as the web UI (spec 020, patterns 89 and 91).
 
-- 💻 **CLI:** `make chat` opens your browser at the authorization server the first time (the address is also printed), catches the redirect on a fixed loopback port (`CHANNEL_CLI_CALLBACK_PORT`, registered by `make mcp-gateway-bootstrap`), and keeps the session in a file only you can read (`~/.config/graph-agent-core/channel-session.json`), renewed before it expires. Point it at the door with `CHANNEL_API_URL` (and `CHANNEL_CA_FILE` for Caddy's local CA, `make mcp-gateway-ca`); `python -m app.adapters.inbound.channels.cli.chat --sign-out` forgets the session. With `AUTH_MODE=headers` (development, announced loudly by the API) nothing is signed in and the API is reached directly.
+- 💻 **CLI:** `make chat` opens your browser at the authorization server the first time (the address is also printed), catches the redirect on a fixed loopback port (`CHANNEL_CLI_CALLBACK_PORT`, registered by `make front-door-bootstrap`), and keeps the session in a file only you can read (`~/.config/graph-agent-core/channel-session.json`), renewed before it expires. Point it at the door with `CHANNEL_API_URL` (and `CHANNEL_CA_FILE` for Caddy's local CA, `make front-door-ca`); `python -m app.adapters.inbound.channels.cli.chat --sign-out` forgets the session. With `AUTH_MODE=headers` (development, announced loudly by the API) nothing is signed in and the API is reached directly.
 - 📱 **Telegram:** each Telegram user is a person `telegram-<id>` of one tenant (`TELEGRAM_TENANT`, default `DEFAULT_TENANT`); the bot signs in as them with a password it **derives** from `TELEGRAM_PERSON_SECRET` (`openssl rand -hex 32`), so it stores nothing per person. By default an operator adds a person (`make telegram-person ACTION=add TELEGRAM_ID=<id>`) and an unregistered user is told to ask an administrator. `make telegram-person ACTION=disable` ends their sign-in at once (the command prints the `make authlimit-revoke` line that voids a token already issued). Each person has their own conversation per chat, named `telegram:<person>:<chat>`; in a group chat that means one per person.
 - ⚠️ **`TELEGRAM_AUTO_PROVISION=true` lets the bot create the person on a first message, and puts a tenant-wide credential in its environment.** Measured on Casdoor 4.24.0: an application's client id and secret are an administrator's of the whole organization (they reset any person's password). Leave it off, or give the bot a tenant of its own. A leak of `TELEGRAM_PERSON_SECRET` exposes the Telegram people and nobody else, but a Telegram person's password also signs in at the web page.
 - 🔒 **Not changed:** an unattended Telegram turn (`TELEGRAM_APPROVALS=false`) declines an approval pause and never approves it, and with buttons (below) only a tap approves; a redelivered update is one turn; the worker's lock, reclaim and dead letters cover all three clients. Production runs behind the same door (spec 018, T069), so those limits and the signed identity apply to every client there.
@@ -568,7 +571,7 @@ Spec 021 (patterns 92 to 94). All of it is settings of the bot; `.env.example` h
 - ⚡ **Parallel chats.** Updates are put on a Redis list first and answered from there, up to `TELEGRAM_MAX_CONCURRENT_CHATS` (8) chats at a time and each chat in order, so one slow turn delays only its own chat. After a crash what was in flight is run again (a redelivered update is still one turn); one that keeps crashing the bot is dropped after three tries (`TelegramUpdatesDropped`). One bot process per domain.
 - ✍️ **Growing replies.** The answer appears as one message that is edited as it is written (`TELEGRAM_STREAM_REPLIES`, at most once per `TELEGRAM_STREAM_EDIT_INTERVAL_SECONDS`); the final text is always exact. Photos, voice and files get a reply saying the bot reads text only.
 - 🌐 **Webhook.** `TELEGRAM_MODE=webhook` with `TELEGRAM_WEBHOOK_URL` (public HTTPS, ending in `/telegram/webhook`) and `TELEGRAM_WEBHOOK_SECRET` (`openssl rand -hex 32`). The bot registers it at start-up and listens on `TELEGRAM_LISTEN_HOST:TELEGRAM_LISTEN_PORT` (loopback by default); your reverse proxy terminates TLS, forwards `/telegram/*` to it, and must **not** ask for the front door's token there (Telegram has none; the secret is the check). A request without the secret is refused and queued nowhere (`TelegramWebhookProbed`). Polling (the default) needs no public address; switching back removes the webhook.
-- 🔗 **Account linking.** `TELEGRAM_LINKING=true` replaces the `telegram-<id>` people: `/login` (in a private chat) gives a one-time button to the authorization server's own login page, then a confirmation page ("connect Telegram user X to account Y?") and the bot acts as that account; `/unlink` disconnects. The bot keeps only a refresh token, sealed with `TELEGRAM_LINK_KEY`, and the door verifies a fresh access token every turn, so disabling the person ends it. Needs `AUTH_MODE=identity`, `TELEGRAM_LINK_PUBLIC_URL`, and the return address registered: `make mcp-gateway-bootstrap ARGS="--telegram-link-url https://bot.example.com"`.
+- 🔗 **Account linking.** `TELEGRAM_LINKING=true` replaces the `telegram-<id>` people: `/login` (in a private chat) gives a one-time button to the authorization server's own login page, then a confirmation page ("connect Telegram user X to account Y?") and the bot acts as that account; `/unlink` disconnects. The bot keeps only a refresh token, sealed with `TELEGRAM_LINK_KEY`, and the door verifies a fresh access token every turn, so disabling the person ends it. Needs `AUTH_MODE=identity`, `TELEGRAM_LINK_PUBLIC_URL`, and the return address registered: `make front-door-bootstrap ARGS="--telegram-link-url https://bot.example.com"`.
 - ⚠️ **Not verified against the real services:** the Bot API requests follow Telegram's documentation (read on 2026-11-02) and were exercised against fakes, never the real Telegram; linking was exercised with the authorization server's two calls replaced (Casdoor's refresh-token rotation is not measured). Telegram's edit rate limit is undocumented where it could be read, so an edit that fails is ignored and the last text is always sent again.
 
 ### MCP client, crawling, search and the sandbox
@@ -814,7 +817,7 @@ until configured**.
 | **▶️ Run** | |
 | `make up` · `make down` | Start / stop the dev stack (keeps data) |
 | `make up-app` | `make up` plus the containerized `api`, `agent-worker` (every domain) and `ingest-worker` |
-| `make up-all` · `make down-all` | Everything in containers behind the front door (infra, app, MCP gateway, observability; not the sandbox or SonarQube), web UI https://api.localhost:8443/; first time also `make mcp-gateway-bootstrap` and `make mcp-gateway-ca`. `down-all` stops every container, any profile (keeps data) |
+| `make up-all` · `make down-all` | Everything in containers behind the front door (infra, app, MCP gateway, observability; not the sandbox or SonarQube), web UI https://api.localhost:8443/; first time also `make front-door-bootstrap` and `make front-door-ca`. `down-all` stops every container, any profile (keeps data) |
 | `make serve` | API + web UI on :8000 |
 | `make chat` · `make chat-hitl` | CLI agent · with approval prompts. Both sign you in at the front door (`python -m app.adapters.inbound.channels.cli.chat --sign-out` forgets it) and need that domain's worker: `AGENT_DOMAIN` picks it |
 | `make agent-worker` · `make agent-worker-all` · `make ingest-worker` | Queue consumers: one domain (`AGENT_WORKER_DOMAINS=support,ops` picks others) · every domain · ingestion |
@@ -831,7 +834,7 @@ until configured**.
 | `make usage-events-carry-over` · `make usage-events-sweep` | One-time copy of `usage_ledger` history (`ARGS=--dry-run` first) · delete events past `USAGE_EVENT_RETENTION_DAYS` (floor 35) |
 | **🔌 MCP and front door** | |
 | `make mcp-serve[-ops]` · `make mcp-inspect` | MCP servers · MCP Inspector |
-| `make mcp-gateway-up` · `-bootstrap` · `-ca` · `-smoke` · `-down` | The local MCP gateway stack |
+| `make front-door-up` · `-bootstrap` · `-ca` · `-down` · `make mcp-gateway-smoke` | The local front door (Casdoor, authlimit, Caddy) and the MCP gateway behind it · the MCP end-to-end check (the older `mcp-gateway-up`, `-bootstrap`, `-ca` and `-down` still work) |
 | `make authlimit-test` · `-up` · `-up-app` · `-keys` · `-smoke` · `-revoke` · `-latency` · `-mutants` · `-web-check` | The front door ([commands](#front-door-authlimit)) |
 | **⏰ One-shot jobs** (for cron; nothing schedules them) | |
 | `make ops-digest` · `make followup-sweep` · `make tool-call-dedup-sweep` | The ops digest · the sales follow-up sweep · the dedup-table sweep |

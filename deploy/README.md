@@ -328,14 +328,14 @@ If it is lost, run `keys init` again: every replica and the API fetch the new pu
 
 ### 9. Create the tenants and sign-in clients (once)
 
-Casdoor starts empty. `mcp_gateway_bootstrap` creates, idempotently, one Casdoor organization per tenant, the chat API's public sign-in client for it
+Casdoor starts empty. `front_door_bootstrap` creates, idempotently, one Casdoor organization per tenant, the chat API's public sign-in client for it
 (`api-<tenant>`, which the web page, the CLI and the Telegram bot look up by that name), the MCP applications, and one demo user per organization. It runs
 inside the MCP gateway container, where Casdoor is `http://casdoor:8000`, and needs the admin password from your shell's environment, never as an argument:
 
 ```
 cd /opt/graph-agent-core
 export CASDOOR_ADMIN_PASSWORD="$(grep '^CASDOOR_ADMIN_PASSWORD=' .env | cut -d= -f2-)"
-dc exec -T -e CASDOOR_ADMIN_PASSWORD mcp-gateway python -m scripts.tools.mcp_gateway_bootstrap --tenant ecorp --token-hours 24 \
+dc exec -T -e CASDOOR_ADMIN_PASSWORD mcp-gateway python -m scripts.tools.front_door_bootstrap --tenant ecorp --token-hours 24 \
   [--tenant acme ...] [--telegram-link-url https://<API_DOMAIN>]
 unset CASDOOR_ADMIN_PASSWORD
 ```

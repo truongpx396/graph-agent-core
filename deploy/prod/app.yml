@@ -207,7 +207,7 @@ services:
       MCP_GATEWAY_ISSUER: https://${AUTH_DOMAIN}
       MCP_GATEWAY_JWKS_URL: http://casdoor:8000/.well-known/jwks
       MCP_GATEWAY_OPS_TENANTS: ${MCP_GATEWAY_OPS_TENANTS:-ops-team}
-      # Read by `scripts.tools.mcp_gateway_bootstrap`, which runs inside this container (deploy/README.md): the chat API's resource identifier.
+      # Read by `scripts.tools.front_door_bootstrap`, which runs inside this container (deploy/README.md): the chat API's resource identifier.
       AUTHLIMIT_AUDIENCE: https://${API_DOMAIN}
     # Ready = can check a token: a replica that cannot reach the signing keys leaves rotation instead of answering 401.
     healthcheck:

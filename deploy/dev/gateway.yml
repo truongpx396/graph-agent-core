@@ -1,4 +1,4 @@
-# Dev stack, part of docker-compose.yml: the front door, profile `gateway` (`make mcp-gateway-up`). Casdoor issues the tokens, authlimit decides who may call and how often, Caddy
+# Dev stack, part of docker-compose.yml: the front door, profile `gateway` (`make front-door-up`). Casdoor issues the tokens, authlimit decides who may call and how often, Caddy
 # terminates TLS and asks authlimit about every request. Local only: *.localhost names, Caddy's own CA, one loopback port. The MCP gateway behind it and the API are app.yml;
 # deploy/prod/gateway.yml is the production counterpart (real names, ACME, the same routing in deploy/shared/caddy/gateway.caddyfile).
 
@@ -9,13 +9,13 @@ x-authlimit-image: &authlimit-image
     context: ./services/authlimit
 
 services:
-  # --- MCP gateway (profile `gateway`; `make mcp-gateway-up`; specs/017) ---
+  # --- MCP gateway (profile `gateway`; `make front-door-up`; specs/017) ---
   # The published MCP servers (app/adapters/inbound/mcp/server.py, ops_server.py) run over Streamable HTTP behind OAuth 2.1: caddy-gateway terminates TLS, mcp-gateway is the resource
   # server, casdoor issues the tokens. A deployment swaps in real names, ACME and its own identity provider (the gateway needs only an issuer URL and a JWKS URL).
   #
-  # Casdoor is pinned by digest because it releases almost daily. To move it, take the new tag's digest, run `make mcp-gateway-up` and `make mcp-gateway-bootstrap`, and read the minted
+  # Casdoor is pinned by digest because it releases almost daily. To move it, take the new tag's digest, run `make front-door-up` and `make front-door-bootstrap`, and read the minted
   # token (specs/017-mcp-gateway/research.md lists the claims this depends on). It gets its own Postgres: Casdoor migrates its schema on upgrade (as sonarqube-db does).
-  # The passwords come from `make mcp-gateway-up` (a second --env-file outside the repo) and default to EMPTY, not `${VAR:?}`: compose interpolates the whole file on every command, so a
+  # The passwords come from `make front-door-up` (a second --env-file outside the repo) and default to EMPTY, not `${VAR:?}`: compose interpolates the whole file on every command, so a
   # required variable would break `make up` for everyone. Empty fails safe: Postgres will not initialise without a password and Casdoor reports the admin password unset.
   casdoor-db:
     image: postgres:16-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36
@@ -46,7 +46,7 @@ services:
       runmode: prod
       # Every URL Casdoor generates (the token's `iss`, the discovery document) derives from this, not the request's Host (measured). Must equal MCP_GATEWAY_ISSUER.
       origin: ${MCP_GATEWAY_ISSUER:-https://auth.localhost:8443}
-      # No default admin password in this version; `make mcp-gateway-up` generates one.
+      # No default admin password in this version; `make front-door-up` generates one.
       initAdminPassword: ${CASDOOR_ADMIN_PASSWORD:-}
     depends_on:
       casdoor-db:
@@ -160,7 +160,7 @@ services:
     volumes:
       - ./deploy/dev/caddy:/deploy/dev/caddy:ro
       - ./deploy/shared/caddy:/deploy/shared/caddy:ro
-      - caddy-gateway-data:/data    # the local CA (and its root certificate: `make mcp-gateway-ca`) lives here
+      - caddy-gateway-data:/data    # the local CA (and its root certificate: `make front-door-ca`) lives here
       - caddy-gateway-config:/config
     extra_hosts:
       - "host.docker.internal:host-gateway"   # the Telegram bot may run on the host (`make telegram`); see the Caddyfile's telegram_proxy
