@@ -178,7 +178,7 @@ agent_output_check_fired_total = Counter(
     "false positive costs another full model round; this says which ones still earn their place once ROUTER_MODE sends turns to a stronger model. The "
     "per-check counters (agent_deferred_instead_of_acting_total, ...) stay: alerts and dashboards use them. PRODUCTION_REVIEW.md R32.",
     ["check", "tier"],
-)  # check: a code in output_checks.CHECKS; tier: local | medium | strong
+)  # check: a code in output_checks.CHECKS, or "misattributed" (repaired, not retried); tier: local | medium | strong
 
 agent_zero_citations_total = Counter(
     "agent_zero_citations_total",
@@ -200,8 +200,10 @@ agent_misattributed_citations_total = Counter(
     "\"misattributed\" check) — a real marker attached to unsupported content, as opposed "
     "to a fabricated marker (ungrounded_claims_count) or a real source used "
     "with no marker at all (the opposite failure, the \"uncited\" check). "
-    "Acted on by graph_edge_route_after_check_output: unlike zero_citations/ungrounded_claims, "
-    "this one triggers a retry.",
+    "Repaired in place: check_output drops the marker from those sentences "
+    "(citations.drop_citation_markers) and the answer stands, with no retry "
+    "(docs/GRAPH_PATTERNS.md pattern 104). Also counted in "
+    "agent_output_check_fired_total{check=\"misattributed\"}.",
 )
 
 agent_reference_footer_stripped_total = Counter(
@@ -292,7 +294,7 @@ agent_retry_exhausted_total = Counter(
     "agent_retry_exhausted_total",
     "Turns that gave up on retry_output's repair loop because the SAME "
     "check_output rejection reason (too_short/deferred/uncited/"
-    "misattributed) fired on MAX_CONSECUTIVE_SAME_RETRY_REASON consecutive "
+    "...) fired on MAX_CONSECUTIVE_SAME_RETRY_REASON consecutive "
     "rounds — the model wasn't converging, just repeating. Routes to "
     "retry_exhausted instead of another retry_output round: real bug, "
     "found live — a stuck deferral loop burned 6 full retry rounds and "

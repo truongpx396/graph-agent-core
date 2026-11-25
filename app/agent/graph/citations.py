@@ -3,7 +3,7 @@ the registry's two citation checks (`graph/output_checks.py`): which offered cit
 actually used (`find_used_citations`), which cited markers were invented
 (`count_ungrounded_claims`), and two directional "used without attributing" checks plus their shared
 sentence-matching machinery (`_uncited_citation_matches`, `find_likely_uncited`,
-`insert_missing_citation_markers`, `find_likely_misattributed`).
+`insert_missing_citation_markers`, `find_likely_misattributed`, `drop_citation_markers`).
 """
 import re
 from typing import Any
@@ -224,3 +224,19 @@ def find_likely_misattributed(
         if judged and not supported:
             flagged.append(citation)
     return flagged
+
+
+def drop_citation_markers(content: str, markers: list[str]) -> str:
+    """`content` without the given bracket markers (`["[2]"]`), and nothing else changed.
+
+    The repair for `find_likely_misattributed`, which names a marker only when NONE of the sentences that carry it share vocabulary with its source: the
+    marker is decoration everywhere it appears, so it is dropped everywhere, and the sentences stay. Asking the model to do it instead did not work (the
+    same sentence came back with the same marker, then `retry_exhausted` replaced a correct "I could not find that" answer with a failure message), and
+    on the one retry that did converge it dropped content to satisfy the check; docs/GRAPH_PATTERNS.md pattern 104.
+
+    A marker takes the space before it with it (`"free [1]."` is `"free."`), or the space after it when it opens a line (`"[1] Free."` is `"Free."`), so
+    no gap is left. `[1]` never matches inside `[10]`."""
+    if not markers or not content:
+        return content
+    alternatives = "|".join(re.escape(marker) for marker in markers)
+    return re.sub(rf"(?m)^(?:{alternatives})[ \t]*|[ \t]*(?:{alternatives})", "", content)

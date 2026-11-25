@@ -516,13 +516,10 @@ class TestRetryEventClearsTheStream:
         assert "".join(before) == "Yes."
         assert "".join(after) == "Here is a sufficiently long final answer now."
 
-    async def test_a_likely_misattributed_answer_retry_also_emits_a_retry_event(self, monkeypatch):
-        """Was an "uncited" scenario; a genuinely uncited-but-matching answer now gets fixed in place by
-        check_output's own citation auto-correction on the SAME round (see
-        TestCheckOutputCitationAutoCorrectionStreaming below for that case) rather than triggering a real
-        retry_output round, so it can no longer stand in for "a genuine model-retry round still emits a retry
-        event" here.
-        """
+    async def test_an_unsupported_marker_is_removed_on_screen_without_a_second_model_call(self, monkeypatch):
+        """A marker on sentences its source does not support is dropped by check_output (pattern 104), like a missing one is inserted: no `retry_output`
+        round and no second answer streamed. The client still gets one `retry` (what it showed had `[1]`) followed by the corrected text, the way it does
+        for an inserted marker (TestCheckOutputCitationAutoCorrectionStreaming)."""
         source_text = "Checkpointers persist state across a thread's whole lifetime reliably."
 
         async def fake_search(query, ctx):
@@ -535,20 +532,21 @@ class TestRetryEventClearsTheStream:
             }
             return f"[1] {source_text}", [cited]
 
-        misattributed = "Vector databases use approximate nearest neighbor search for speed [1]."
-        llm = GenericFakeChatModel(
-            messages=iter(
-                [
-                    AIMessage(content=misattributed),  # [1] cited, unrelated to its source -> retry_output
-                    AIMessage(content=f"{source_text} [1]"),
-                ]
-            )
+        answers = iter(
+            [
+                AIMessage(content="Vector databases use approximate nearest neighbor search for speed [1]."),  # [1] cited, unrelated to its source
+                AIMessage(content="a second model call would have produced this"),
+            ]
         )
-        graph_obj = build_graph(GraphDeps(llm=llm, search_docs=fake_search))
+        graph_obj = build_graph(GraphDeps(llm=GenericFakeChatModel(messages=answers), search_docs=fake_search))
 
         events = await _events_for(graph_obj, "what is a checkpointer?", monkeypatch=monkeypatch)
 
         assert sum(1 for e in events if e["type"] == "retry") == 1
+        retry_idx = next(i for i, e in enumerate(events) if e["type"] == "retry")
+        after = "".join(e["content"] for e in events[retry_idx:] if e["type"] == "token")
+        assert after == "Vector databases use approximate nearest neighbor search for speed."
+        assert "second model call" not in "".join(e.get("content", "") for e in events if e["type"] == "token")
 
     async def test_normal_streaming_with_no_retry_never_emits_a_retry_event(self, monkeypatch):
         llm = GenericFakeChatModel(

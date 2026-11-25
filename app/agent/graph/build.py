@@ -186,7 +186,7 @@ class GraphProfile:
 
     `enforce_citations=False` drops the two places a graph pushes `[n]` markers on the model: the
     tail "every sentence must end with its marker" reminder in `agent`, and `check_output`'s
-    uncited/misattributed findings and marker insertion. A nested run's sources are not the
+    uncited finding, marker insertion and the dropping of an unsupported marker. A nested run's sources are not the
     parent's, so its prompt says to use none.
     """
 

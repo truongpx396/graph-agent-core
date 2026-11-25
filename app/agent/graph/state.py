@@ -156,13 +156,13 @@ class State(TypedDict):
     output_findings: dict[str, Any]  # Set by check_output — every output check that fired on
     # this round's answer, `{code: detail}` in priority order (an empty dict when it passed).
     # The detail is what that check's feedback needs: the offending citation markers for
-    # "uncited"/"misattributed", the skipped tool's NAME for "skipped_tool", `True` otherwise.
+    # "uncited", the skipped tool's NAME for "skipped_tool", `True` otherwise.
     # Replaces what used to be one State flag per check. The checks, their priority, feedback
     # and fallback text are the registry in graph/output_checks.py. Reset every turn.
     last_retry_reason: str | None  # Set by check_output — short code
     # naming this round's rejection reason (the first key of `output_findings`:
     # "leaked_prompt"/"too_short"/"fabricated"/"skipped_tool"/"deferred"/
-    # "uncited"/"misattributed", in graph/output_checks.py's priority order), or None. Compared against the
+    # "uncited", in graph/output_checks.py's priority order), or None. Compared against the
     # PRIOR round's value by check_output to compute
     # retry_reason_repeat_count below — never reset mid-turn elsewhere.
     retry_reason_repeat_count: int  # Set by check_output — consecutive

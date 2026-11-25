@@ -15,6 +15,8 @@ from langgraph.prebuilt import tools_condition
 
 from app.agent.graph.citations import (
     count_ungrounded_claims,
+    drop_citation_markers,
+    find_likely_misattributed,
     find_likely_uncited,
     find_used_citations,
     insert_missing_citation_markers,
@@ -143,7 +145,7 @@ def graph_node_check_output(
     skip_on_routed_tiers: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Judge the final answer: strip a fabricated reference footer, cut a closing offer off a complete answer,
-    repair a missing citation marker, then run every check in `graph/output_checks.py`'s registry. Returns
+    repair a missing citation marker and drop an unsupported one, then run every check in `graph/output_checks.py`'s registry. Returns
     `used_citations`/`ungrounded_claims_count` for the answer as shown, `output_findings` (`{code: detail}` of
     every check that fired), `last_retry_reason` (the first by priority, or None),
     `retry_reason_repeat_count`, and a corrected `messages` entry when a footer or offer was stripped or a
@@ -192,15 +194,28 @@ def graph_node_check_output(
         # deliberately doesn't retry on this.
         metrics.agent_zero_citations_total.inc()
 
-    # Auto-correct rather than retry: insert_missing_citation_markers's
-    # docstring has the evidence (7 different prompt-level attempts, all
-    # failed) for fixing the marker directly instead of routing to
-    # retry_output. `shown`/`shown_used` are what the user will actually see, so every returned
-    # field reflects that. Reuses `message_update` so both corrections (footer strip + marker
-    # insert) compose onto the same final message.
+    # Auto-correct rather than retry, in two steps whose ORDER matters. `shown`/`shown_used` are what the user will actually see, so every returned field
+    # reflects that; both steps reuse `message_update`, so they compose with the footer strip and the offer cut onto the same final message.
+    #
+    # 1. Drop a marker that sits only on sentences sharing nothing with its source (pattern 104). It used to send the answer back ("that source does not
+    #    support what you wrote"): a small model returned the same sentence with the same marker, `retry_exhausted` then replaced a correct "I could not find
+    #    that" with a failure message, and the one retry that converged did so by deleting content. The check knows exactly which markers are wrong, so
+    #    there is nothing for the model to decide.
     shown, shown_used = body, used
-    if enforce_citations and find_likely_uncited(body, citations, used):
-        corrected_content, fixed = insert_missing_citation_markers(body, citations, used)
+    if enforce_citations:
+        misattributed = find_likely_misattributed(shown, citations, shown_used)
+        if misattributed:
+            metrics.agent_misattributed_citations_total.inc()
+            metrics.agent_output_check_fired_total.labels(check="misattributed", tier=tier).inc()
+            shown = drop_citation_markers(shown, [c["marker"] for c in misattributed])
+            shown_used = find_used_citations(shown, citations)
+            message_update["messages"] = [last.model_copy(update={"content": shown})]
+
+    # 2. Insert a missing marker (insert_missing_citation_markers's docstring has the evidence: 7 different prompt-level attempts, all failed). After step 1,
+    #    so a marker that sat on the wrong sentence of an answer whose RIGHT sentence had none moves, instead of leaving that sentence "uncited" and sending
+    #    the answer back for it (a misplaced marker is the common shape of a misattribution).
+    if enforce_citations and find_likely_uncited(shown, citations, shown_used):
+        corrected_content, fixed = insert_missing_citation_markers(shown, citations, shown_used)
         if fixed:
             metrics.agent_citation_auto_inserted_total.inc()
             shown = corrected_content
