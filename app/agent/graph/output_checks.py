@@ -12,7 +12,7 @@ An `OutputCheck` holds everything one reason needs:
 - `trust_on_exhaust`: whether an answer rejected for this reason over and over is still safe to show verbatim.
   `too_short` and `uncited` say yes (short-but-real beats no answer; a correct answer missing only its `[1]`
   is an attribution nitpick). The rest mean the CONTENT is untrustworthy (invented numbers, an unverified
-  hand-computed figure, pure narration, a misattached citation, a leak) and are always replaced;
+  hand-computed figure, pure narration, a leak) and are always replaced;
 - `fallback`: what the user is told when the answer is replaced; `None` means the generic message. Only
   reasons where naming the CATEGORY of problem is actionable have their own; never `leaked_prompt` (confirming
   a leak attempt registered would help someone iterate a jailbreak) and never text quoting the rejected
@@ -31,7 +31,7 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage, ToolMessage
 
-from app.agent.graph.citations import find_likely_misattributed, find_likely_uncited
+from app.agent.graph.citations import find_likely_uncited
 from app.agent.graph.messages import current_turn_messages
 from app.agent.graph.output_guardrails import (
     defers_instead_of_acting,
@@ -143,15 +143,6 @@ def _uncited(ctx: CheckContext) -> Any:
     return find_likely_uncited(ctx.shown, ctx.citations, ctx.shown_used) or None
 
 
-def _misattributed(ctx: CheckContext) -> Any:
-    # The mirror image of uncited: a real, in-range marker IS used, but its citing sentences share
-    # no vocabulary with that marker's source. Real bug found live: [3] cited on every sentence of an
-    # answer unrelated to what [3] said.
-    if not ctx.enforce_citations:
-        return None
-    return find_likely_misattributed(ctx.body, ctx.citations, ctx.used) or None
-
-
 # --- feedback --------------------------------------------------------------------------------
 
 
@@ -222,18 +213,6 @@ def _uncited_feedback(markers: list[dict[str, Any]]) -> str:
     )
 
 
-def _misattributed_feedback(markers: list[dict[str, Any]]) -> str:
-    names = ", ".join(c["marker"] for c in markers)
-    return (
-        f"That answer cites {names}, but its content does not actually "
-        f"support what you wrote — {names} does not back up those "
-        "sentences. Do not call any tools — you already have what you "
-        "need. Rewrite your previous answer: only attach a bracket "
-        "marker to a sentence that source's own text genuinely supports, "
-        "and drop the marker from any sentence it doesn't."
-    )
-
-
 # --- the registry ----------------------------------------------------------------------------
 
 GENERIC_NO_ANSWER_MESSAGE = (
@@ -243,7 +222,7 @@ GENERIC_NO_ANSWER_MESSAGE = (
 
 # Priority order: leaked prompt (the only reason with a real security dimension, severe enough that
 # it can't also be merely too short) > too short > fabricated > skipped required tool > deferred >
-# uncited (a citation missing entirely is more actionable to lead with) > misattributed.
+# uncited. A marker on a sentence its source does not support is not a reason: `graph_node_check_output` removes it (pattern 104).
 CHECKS: tuple[OutputCheck, ...] = (
     OutputCheck(
         "leaked_prompt", _leaks_prompt, _leaked_feedback, counter=metrics.agent_system_prompt_leak_total
@@ -281,12 +260,6 @@ CHECKS: tuple[OutputCheck, ...] = (
         ),
     ),
     OutputCheck("uncited", _uncited, _uncited_feedback, trust_on_exhaust=True),
-    OutputCheck(
-        "misattributed",
-        _misattributed,
-        _misattributed_feedback,
-        counter=metrics.agent_misattributed_citations_total,
-    ),
 )
 
 _BY_CODE = {check.code: check for check in CHECKS}
@@ -302,6 +275,9 @@ def check_for(code: str) -> OutputCheck:
 # one, so a deployment may not switch them off for any tier (PRODUCTION_REVIEW.md R32).
 NEVER_SKIPPED = frozenset({"leaked_prompt", "fabricated"})
 ROUTED_TIERS = frozenset({"medium", "strong"})
+# Codes that were checks and are not any more. Still ACCEPTED in OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS, with no effect: an environment file written while `misattributed`
+# was a retry reason would otherwise stop every process at start-up. (Its repair, dropping the marker, costs no model round, so there is nothing to switch off.)
+RETIRED_CODES = frozenset({"misattributed"})
 
 
 def parse_checks_off_on_routed_tiers(spec: str) -> frozenset[str]:
@@ -309,7 +285,7 @@ def parse_checks_off_on_routed_tiers(spec: str) -> frozenset[str]:
     otherwise leave a check running while the operator believes it is off) and for one in `NEVER_SKIPPED`. The message names the variable and the fixed
     vocabulary, never what was typed (pattern 59)."""
     codes = frozenset(part.strip() for part in spec.split(",") if part.strip())
-    unknown = codes - _BY_CODE.keys()
+    unknown = codes - _BY_CODE.keys() - RETIRED_CODES
     if unknown:
         raise ValueError(
             "OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS names a code that is not an output check; the codes are: " + ", ".join(check.code for check in CHECKS)

@@ -673,11 +673,12 @@ class TestCheckOutput:
         result = ecorp.graph_node_check_output(state)
         assert "messages" not in result
 
-    def test_likely_misattributed_flags_a_real_marker_on_unrelated_content(self):
+    def test_a_marker_on_unrelated_content_is_dropped_and_the_sentences_kept(self):
         """Regression case: a real Langfuse trace (ed435567) where the model
         cited [3] on every sentence of an answer about database scalability,
         when [3]'s actual retrieved content was about something else
-        entirely — a real, in-range marker attached to unsupported content."""
+        entirely — a real, in-range marker attached to unsupported content.
+        It used to be sent back to the model; now the marker is removed (pattern 104)."""
         citations = [
             {
                 "marker": "[3]",
@@ -693,7 +694,13 @@ class TestCheckOutput:
         )
         state = {"messages": [AIMessage(content=content)], "citations": citations}
         result = ecorp.graph_node_check_output(state)
-        assert {c["marker"] for c in result["output_findings"]["misattributed"]} == {"[3]"}
+        assert result["messages"][0].content == (
+            "Databases address scalability concerns through horizontal partitioning and read replicas. "
+            "Flexibility often comes from schema-less designs that let applications evolve independently."
+        )
+        assert result["last_retry_reason"] is None
+        assert "misattributed" not in result["output_findings"]
+        assert result["used_citations"] == []
 
     def test_likely_misattributed_ignores_a_genuinely_supported_citation(self):
         citations = [
@@ -712,7 +719,7 @@ class TestCheckOutput:
         result = ecorp.graph_node_check_output(state)
         assert "misattributed" not in result["output_findings"]
 
-    def test_likely_misattributed_flags_even_a_single_word_source(self):
+    def test_a_single_word_source_cited_on_unrelated_content_is_dropped(self):
         """Regression case, found live via Langfuse: a one-word memory ("magiclab396", saved verbatim by the
         `remember` tool) got recalled as [1] and cited three times on an answer about bundled skills for
         report-writing — content with zero relation to that memory.
@@ -726,7 +733,8 @@ class TestCheckOutput:
         )
         state = {"messages": [AIMessage(content=content)], "citations": citations}
         result = ecorp.graph_node_check_output(state)
-        assert {c["marker"] for c in result["output_findings"]["misattributed"]} == {"[1]"}
+        assert "[1]" not in result["messages"][0].content
+        assert result["last_retry_reason"] is None
 
     def test_likely_misattributed_ignores_a_citation_with_no_content_words(self):
         """The only legitimate skip left: a source with NOTHING to compare
@@ -1339,13 +1347,12 @@ def test_retry_output_tells_the_model_never_to_reveal_instructions_on_a_leak():
     assert ecorp.ECORP_SYSTEM_PROMPT[:60] not in msg.content
 
 
-def test_retry_output_names_the_misattributed_citation_marker():
-    result = _retry("misattributed", [{"marker": "[3]", "text": "..."}])
-    msg = result["messages"][0]
-    assert isinstance(msg, HumanMessage)
-    assert "[3]" in msg.content
-    assert "does not actually support" in msg.content.lower()
-    assert "do not call any tools" in msg.content.lower()
+def test_a_retired_check_code_is_still_accepted_in_the_routed_tier_skip_list():
+    """`misattributed` was a retry reason; a deployed environment file may still list it, and rejecting it
+    would stop every process at start-up over a setting that now has nothing to switch off."""
+    assert output_checks.parse_checks_off_on_routed_tiers("too_short, misattributed") == {"too_short", "misattributed"}
+    with pytest.raises(ValueError):
+        output_checks.parse_checks_off_on_routed_tiers("misattributd")  # a typo is still refused
 
 
 class TestAToolThatFailedIsNotADeferral:
@@ -1438,7 +1445,7 @@ class TestOutputCheckRegistry:
 
     def test_the_priority_order(self):
         """Leaked prompt (the only reason with a security dimension) > too short > fabricated > skipped required
-        tool > deferred > uncited > misattributed.
+        tool > deferred > uncited. (A marker its source does not support is not a reason: it is dropped, pattern 104.)
         """
         assert [c.code for c in output_checks.CHECKS] == [
             "leaked_prompt",
@@ -1447,7 +1454,6 @@ class TestOutputCheckRegistry:
             "skipped_tool",
             "deferred",
             "uncited",
-            "misattributed",
         ]
 
     def test_every_check_has_feedback_and_a_known_trust_and_fallback(self):
@@ -1782,10 +1788,12 @@ class TestCheckOutputWithoutCitationEnforcement:
         assert relaxed["last_retry_reason"] is None
         assert relaxed["output_findings"] == {}
 
-    def test_a_misattributed_marker_is_not_flagged_either(self):
+    def test_an_unsupported_marker_is_only_dropped_when_citations_are_enforced(self):
         content = "The office dog is called Biscuit and loves Fridays [1]."
-        assert ecorp.graph_node_check_output(self._state(content))["last_retry_reason"] == "misattributed"
+        enforced = ecorp.graph_node_check_output(self._state(content))
+        assert enforced["messages"][0].content == "The office dog is called Biscuit and loves Fridays."
         relaxed = ecorp.graph_node_check_output(self._state(content), enforce_citations=False)
+        assert "messages" not in relaxed  # a subagent's text is handed back as it was written
         assert relaxed["last_retry_reason"] is None
 
     def test_every_other_check_still_applies(self):

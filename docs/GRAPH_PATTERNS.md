@@ -159,7 +159,7 @@ A third outcome for a paused interrupt, not a repurposed rejection: `graph_edge_
 
 ### 70. A check judges what was said, not where a marker or a pleasantry landed
 A correct, cited answer was rejected three times by two stacked heuristics, each retry worse.
-- **Bug:** a marker after the full stop (`... are free. [1]`) was judged against the NEXT sentence and called `misattributed`; `split_sentences` now keeps it with its sentence.
+- **Bug:** a marker after the full stop (`... are free. [1]`) was judged against the NEXT sentence and called `misattributed`; `split_sentences` now keeps it with its sentence. (A real `misattributed` is no longer a rejection at all: 104.)
 - **Bug:** a closing question rejected a complete answer. `output_guardrails.strip_closing_offer` cuts the offer from the END only when what is left is itself an answer; leak and fabrication still see everything. `agent_closing_offer_stripped_total` counts it.
 - **Gap:** the cut is English and a closed list of cues.
 
@@ -188,6 +188,14 @@ After `POST /chat/cancel` and a new question, the model saw both and ran the scr
 - **Bug:** a `psycopg.Error` went to the person verbatim; the model now gets the class name only and is told not to retry.
 - **Bug:** a database that predates a schema script said "ready". `GET /health/ready` lists missing tables and the scripts to apply (`health.APPDATA_TABLES`); it changes no status and applies nothing.
 - **Gaps:** any failed tool excuses the whole turn's narration; only database errors are redacted; the check covers tables, not columns.
+
+### 104. A citation that is wrong is dropped, not sent back to a small model
+`graph_node_check_output` no longer rejects an answer for a marker its source does not support. `citations.find_likely_misattributed` still names the marker (none of the sentences that carry it share words with its source) and `drop_citation_markers` removes it from them; the sentences stay. It runs before the missing-marker insertion, so a marker that sat on the wrong sentence moves to the sentence that matches instead of leaving that one "uncited". The streamed answer is replaced the way an inserted marker is: one `retry` event, then the corrected text. The rule: a check that knows exactly what is wrong repairs it, and asks the model only when it cannot (a leak, an invented tool result, a narrated action).
+- **Bug:** a correct answer, "I can't find information on how to reset your password in our support documents [2].", was rejected as `misattributed`. qwen2.5:7b returned the same sentence with the same marker, the second identical rejection reached `retry_exhausted` (which never trusts a misattributed answer), and the person read "I wasn't able to put together a full answer". Seen twice on the dev stack, in the saved conversation threads; each retry also streamed a second answer over the first.
+- **Bug:** the one retry that converged did it by deleting content. "How does Qdrant's hybrid search work?" lost its caveat and its general-knowledge sentences and ended as one sentence about payload filters, which does not answer the question.
+- **Bug:** the feedback said "Do not call any tools — you already have what you need". For an answer that says the retrieved document lacks the information, that forbids the right move. The feedback is gone with the reason.
+- **Kept:** `agent_misattributed_citations_total` and `agent_output_check_fired_total{check="misattributed"}` still count every repair, so the rate stays visible. `OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS` still ACCEPTS `misattributed` (`output_checks.RETIRED_CODES`) and it does nothing: rejecting it would stop every process at start-up for an environment file written before this change.
+- **Gaps:** a marker whose citing sentences are all under four content words is not judged, so "15% of 2,450 is 367.5 [1]." keeps its marker. The check is shared vocabulary, not entailment. Separately, the pre-fetch passes every document above a rerank floor of -8.0, and "Who works on Ecorp's engineering team?" clears it with "founded in 2021" (+0.6); with earlier turns in the thread, that block made qwen2.5:7b answer from prose where `query_employees` was right (same question alone: tool called). The fix is a stricter floor for the pre-fetch than for the `search_docs` tool, and it needs a calibration run, so it is its own change.
 
 ### Where the other numbers live
 These are not patterns of the graph. Their numbers are kept so references ("pattern 58") resolve.

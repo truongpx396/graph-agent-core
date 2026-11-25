@@ -1235,7 +1235,7 @@ its other per-domain arguments) and skips a listed check when the turn's tier is
 changes for the local tier.
 
 **Decide:** which codes to list, from PR 1's numbers. Candidates to look at first: `too_short`, `deferred`,
-`uncited`, `misattributed`, `skipped_tool`.
+`uncited`, `skipped_tool`. (`misattributed` is repaired in place now, pattern 104, and listing it does nothing.)
 
 **Tests.** `tests/agent/graph/test_routing.py`: a listed check does not fire on a strong-tier turn and still fires on a
 local one; a start-up with `leaked_prompt` listed raises.

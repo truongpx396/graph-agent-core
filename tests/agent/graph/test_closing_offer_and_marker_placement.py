@@ -120,10 +120,12 @@ class TestAMarkerAfterTheFullStop:
         assert "misattributed" not in result["output_findings"]
         assert result["last_retry_reason"] is None
 
-    def test_a_marker_after_the_full_stop_of_an_unrelated_sentence_is_still_flagged(self):
+    def test_a_marker_after_the_full_stop_of_an_unrelated_sentence_is_still_caught_and_dropped(self):
         content = "The moon orbits the earth roughly every twenty seven days. [1]"
         result = _check(content)
-        assert {c["marker"] for c in result["output_findings"]["misattributed"]} == {"[1]"}
+        assert result["last_retry_reason"] is None  # repaired in place, not sent back (pattern 104)
+        assert result["messages"][-1].content == "The moon orbits the earth roughly every twenty seven days."
+        assert result["used_citations"] == []
 
 
 class TestStripClosingOffer:
@@ -193,12 +195,18 @@ class TestCheckOutputRepairsAClosingOffer:
         assert [c["marker"] for c in result["used_citations"]] == ["[1]"]
         assert metric_value(metrics.agent_closing_offer_stripped_total) == before + 1
 
-    def test_a_marker_that_really_is_on_the_wrong_sentence_is_still_caught_after_the_strip(self):
+    def test_a_marker_that_really_is_on_the_wrong_sentence_is_dropped_after_the_strip(self):
         """Answer 2 puts `[1]` (support hours) in front of a sentence about the founding year:
-        a true misattribution. It must not be reported as the offer's `deferred` any more."""
+        a true misattribution. The offer is cut first, so it is not reported as `deferred`, and the
+        wrong marker leaves that sentence and lands on the one that really is about support hours (the sentence it belonged to), so the answer is not
+        sent back as "uncited" either."""
         result = _check(TRACE_ANSWER_2)
-        assert result["last_retry_reason"] == "misattributed"
-        assert "deferred" not in result["output_findings"]
+        assert result["last_retry_reason"] is None
+        assert result["output_findings"] == {}
+        shown = result["messages"][-1].content
+        assert shown.startswith("Ecorp’s support hours are 9am to 5pm on weekdays, with their services for open-source users being free [1].")
+        assert "Ecorp was founded in 2021 and builds offline developer tools [2]." in shown
+        assert [c["marker"] for c in result["used_citations"]] == ["[1]", "[2]"]
 
     def test_a_bare_offer_is_still_deferred_and_left_untouched(self):
         before = metric_value(metrics.agent_closing_offer_stripped_total)

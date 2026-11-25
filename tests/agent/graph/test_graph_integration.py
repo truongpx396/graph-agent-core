@@ -491,7 +491,7 @@ class TestRetryExhaustedPath:
         assert result["iterations"] == 1
 
     async def test_different_reasons_in_a_row_keep_retrying_not_giving_up(self):
-        """Genuinely different problems across rounds (too-short, THEN misattributed, then a correctly-cited
+        """Genuinely different problems across rounds (too-short, THEN deferred, then a correctly-cited
         success) is slow convergence, not a stuck loop — must NOT trip the same-reason-repeat guard, which
         only fires on the IDENTICAL reason twice in a row.
         """
@@ -510,11 +510,7 @@ class TestRetryExhaustedPath:
         async def fake_search_docs(query, ctx):
             return "[1] Qdrant stores vectors with JSON payloads.", citations
 
-        misattributed_answer = (
-            "Databases address scalability concerns through horizontal "
-            "partitioning and read replicas [1]. Flexibility often comes from "
-            "schema-less designs that let applications evolve independently [1]."
-        )
+        deferred_answer = "I will now search the knowledge base to look that up for you."
         correctly_cited = (
             "Qdrant's hybrid search works by storing vectors with JSON payloads, "
             "and you can filter searches by payload fields to restrict results "
@@ -522,7 +518,7 @@ class TestRetryExhaustedPath:
         )
         llm = _fake_llm(
             AIMessage(content="Yes."),  # too_short
-            AIMessage(content=misattributed_answer),  # misattributed (different reason)
+            AIMessage(content=deferred_answer),  # deferred (different reason)
             AIMessage(content=correctly_cited),  # cited correctly -> success
         )
         g = build_graph(GraphDeps(llm=llm, search_docs=fake_search_docs))
@@ -532,6 +528,63 @@ class TestRetryExhaustedPath:
         )
         assert result["messages"][-1].content == correctly_cited
         assert result["iterations"] == 3
+
+
+class TestAnUnsupportedMarkerIsDroppedNotRetried:
+    """Pattern 104. A marker on sentences that share nothing with its source used to send the answer back, and a small model returned the same sentence
+    with the same marker: a correct "I could not find that" ended as the failure message, and the retry that did converge deleted content to pass.
+    Each case below is one a checkpoint of the dev stack showed."""
+
+    SUPPORT = {
+        "marker": "[1]",
+        "doc_id": "d1",
+        "title": "Ecorp: Support Hours",
+        "text": "Ecorp's support hours are 9am to 5pm on weekdays, and support is free for all open-source users.",
+        "score": 0.24,
+    }
+    ABOUT = {
+        "marker": "[2]",
+        "doc_id": "d2",
+        "title": "Ecorp: About",
+        "text": "Ecorp was founded in 2021 and builds offline developer tools. Its flagship product is a local AI stack starter kit.",
+        "score": -3.79,
+    }
+
+    async def _turn(self, question, *answers):
+        """Runs one turn whose retrieval returns the two sources; returns the result and how many retry rounds it took."""
+        from app.core import metrics
+        from tests.conftest import metric_value
+
+        async def search(query, ctx):
+            return "[1] " + self.SUPPORT["text"] + "\n[2] " + self.ABOUT["text"], [self.SUPPORT, self.ABOUT]
+
+        g = build_graph(GraphDeps(llm=GenericFakeChatModel(messages=iter(answers)), search_docs=search))
+        retries = metric_value(metrics.agent_retry_total)
+        result = await g.ainvoke({"messages": [HumanMessage(content=question)]}, config=_config())
+        return result, metric_value(metrics.agent_retry_total) - retries
+
+    async def test_an_honest_not_found_answer_keeps_its_text_and_loses_only_the_stray_marker(self):
+        not_found = (
+            "I can't find information on how to reset your password in our support documents [2]. "
+            "Could you please provide more details about the account you're trying to access?"
+        )
+        result, retries = await self._turn("How do I reset my password?", AIMessage(content=not_found))
+        assert result["messages"][-1].content == not_found.replace(" [2]", "")
+        assert result["used_citations"] == []
+        assert result["iterations"] == 1  # one agent round, not retry, retry, then a failure message
+        assert retries == 0
+
+    async def test_the_supported_sentences_stay_when_one_unsupported_marker_goes(self):
+        """The retry that converged used to do it by deleting the caveat and the general-knowledge sentence."""
+        answer = (
+            "Ecorp's support hours are 9am to 5pm on weekdays [1]. "
+            "Teams in other regions often keep different opening times for their help desks [2]."
+        )
+        result, retries = await self._turn("When can I reach support?", AIMessage(content=answer))
+        shown = result["messages"][-1].content
+        assert shown == answer.replace(" [2]", "")
+        assert [c["marker"] for c in result["used_citations"]] == ["[1]"]
+        assert (result["iterations"], retries) == (1, 0)
 
 
 class TestToolErrorRecovery:
