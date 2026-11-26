@@ -22,6 +22,7 @@ Lessons about how this repository is built and checked, not about the agent. Num
 | 100 | A cache and a queue cannot share an eviction policy |
 | 101 | A backup is proved by a restore |
 | 102 | A pool's "check on checkout" can turn a restart into a stall |
+| 106 | A trigger filtered by branch name lets a fork deploy |
 
 ### 40. Eval statistical rigor
 `scripts/checks/eval.py` has two gates: each case runs `EVAL_REPETITIONS` (5) times and passes only if `REPETITION_PASS_THRESHOLD` (80%) pass (a stochastic system graded once is a coin flip), and a grounded-claims gate over the whole set (at least 95% of markers real), computed from the runtime's own counts, never a model's opinion of itself. The thresholds are demo defaults.
@@ -72,12 +73,12 @@ Label sets (`services/ml-service/labelsets/`, `POST /v1/decide`) match a text to
 
 ### 76. The images are built in stages with uv and a cache mount, carry no installer, and run hardened
 An app image rebuild spent 347.7 s in `pip install`; the image carried pip, the base floated, and nothing restricted how containers run.
-- **Four stages, the shipped one last:** `base`, `uv`, `builder` (dependencies into `/opt/venv`), `runtime`. Compose and `deploy.yml` name `target: runtime`.
+- **Four stages, the shipped one last:** `base`, `uv`, `builder` (dependencies into `/opt/venv`), `runtime`. Compose and CI's `image` job name `target: runtime`.
 - **Pinned by digest, bumped by Dependabot;** the two Dockerfiles' digests move together (`test_dockerfile_pins.py`). Its 14-day cooldown does **not** apply to Docker tags, so a release's age is checked by hand; compose digests (LiteLLM) are bumped by hand (`make gateway-check`).
 - **uv wheel cache mount, bind-mounted dependency file** (no layer holds it), `UV_COMPILE_BYTECODE=1`. Install step: 29.8 s cold, 11.4 s with one pin changed.
 - **No installer ships:** the runtime stage uninstalls pip, setuptools and wheel and never copies uv (debug with `--target builder`).
 - **Hardened at runtime:** `init: true`, `no-new-privileges`, `cap_drop: ALL`, `read_only: true`, size-capped tmpfs. Running it found `crawl4ai` creating `~/.crawl4ai` on **import** (so `$HOME` is a tmpfs) and a tmpfs `/tmp` being wrong for uploads (the api gets a disk-backed volume).
-- **SBOM and provenance** are attached by `deploy.yml` (not yet run).
+- **SBOM and provenance** are attached when CI's `image` job publishes on `main`.
 - **CI found what no local run could:** `tests/containers.py` built the ML image with the SDK's legacy builder, which rejects `RUN --mount`. It uses the CLI (BuildKit) now. A build feature is only as portable as the least capable builder anyone uses.
 - **No pytest file pins these flags as text** (it would fail on an edit, not a regression); Trivy and CI's `docker-build` read the files.
 - **Gaps:** CI has no cache-mount speed-up; images are unsigned; tmpfs sizes are chosen, not measured; the hardening ran on the dev stack, not the droplet.
@@ -148,3 +149,11 @@ After a PgBouncer or Postgres restart every pooled connection is dead and `psyco
 - **What works:** the pool's own `check()`, run once in the background when a used connection turns out `broken`, replaces every dead idle one: 2 failures at any size, none slow. `SelfHealingPool` does that for both pools, never for a deadlock or cancelled statement, one check at a time.
 - **The test carries its own control** (88): the same scenario on a stock pool must fail.
 - **Gaps:** the restart is simulated; a real PgBouncer restart was not exercised; `agent_db_pool_connection_lost_total{pool}` has no alert.
+
+### 106. A trigger filtered by branch name lets a fork deploy
+`deploy.yml` ran on `workflow_run` of CI with `branches: [main]` and checked only `conclusion == 'success'`.
+- **The hole:** that filter matches the NAME of the branch the triggering run was on, and a pull request from a fork's own `main` reports `main`. The workflow then ran with this repository's token and secrets, checked out the fork's commit, built it and pushed it as `:latest`. Found by reading and by public runs of another repository; not exploited here. Never use `workflow_run` or `pull_request_target` to ship.
+- **What replaced it:** ci.yml calls `deploy.yml` as its last job on a push to main (a manual run redeploys or rolls back, after checking the commit is on main). One run builds each image, proves it, scans it and publishes that build as `:<sha>`; `:latest` moves only after every job passed, and only for main's newest commit.
+- **The gate that listed too little:** `needs` with `failure()` lets a timed-out or skipped job through, so `promote` names every job and requires each to be `success`; a test holds the list complete.
+- **Gaps:** if a newer commit fails CI, the older good one is not released until the next merge (run Deploy by hand with its SHA). No automatic rollback: the release fails and prints the previous SHA. The production images are pinned by hand: Dependabot does not read these compose files. Nothing has deployed yet, so the droplet path is proven only against fakes.
+

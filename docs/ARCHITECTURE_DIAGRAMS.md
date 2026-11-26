@@ -293,12 +293,13 @@ The others, briefly: **III** tools are fixed and typed, with closed vocabularies
 
 ### 7. Deployment and delivery
 
-How a change reaches a running system. Creating or destroying droplets is always a human-run `terraform apply`; everything after a merge is automatic.
+How a change reaches a running system. Creating or destroying droplets is always a human-run `terraform apply`; after a merge, publishing is automatic and deploying is once it is enabled.
 
 ```mermaid
 flowchart LR
     dev["Developer"] -->|"PR"| ci["GitHub Actions CI<br/>lint, typecheck, tests, integration,<br/>live, security scans"]
-    ci -->|"merge to main"| deploy["deploy.yml<br/>build images, push to GHCR"]
+    ci -->|"merge to main"| images["same CI run<br/>build, check, scan and publish the images"]
+    images -->|"every job passed"| deploy["deploy.yml<br/>off until DEPLOY_ENABLED"]
     tf["Terraform<br/>human-run"] -.->|"provisions"| appdrop_sg
     tf -.->|"provisions"| obsdrop_sg
     deploy -->|"SSH, pull, redeploy"| appdrop_sg

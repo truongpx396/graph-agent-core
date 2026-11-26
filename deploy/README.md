@@ -33,8 +33,9 @@ Two separate, deliberately non-automatic-together pieces:
   backend in `versions.tf` (recommended for a team), a real `terraform
   plan` step becomes meaningful in CI too and can be added the same way.
 - **App deploys (`.github/workflows/deploy.yml`)** — pushing new code to an
-  *already-provisioned* droplet. Fully automated: runs after `CI` succeeds
-  on `main`, builds+pushes images to GHCR, and SSHes in to pull and restart.
+  *already-provisioned* droplet. CI builds, scans and publishes the images and
+  calls it as its last job on `main`; it SSHes in and runs
+  `prod/release.sh`. Off until the `DEPLOY_ENABLED` variable is `true`.
 
 ## Layout
 
@@ -104,19 +105,28 @@ This provisions both droplets in one apply. Note three outputs:
 (observability droplet's stable address), and `observability_private_ipv4`
 (its private VPC IP — needed in step 4 below).
 
-### 3. Configure GitHub Actions secrets
+### 3. Configure GitHub Actions
 
-Repo Settings -> Secrets and variables -> Actions:
+Settings -> Environments -> New environment `production`; under "Deployment branches and tags" allow only `main`. Add these as
+**environment** secrets:
 
 | Secret | Value |
 |---|---|
 | `DROPLET_HOST` | `terraform output reserved_ip` |
 | `OBS_DROPLET_HOST` | `terraform output observability_reserved_ip` |
 | `DEPLOY_SSH_KEY` | contents of `deploy_key` (the **private** half from step 1) — authorized on both droplets |
+| `DEPLOY_KNOWN_HOSTS` | both droplets' host keys, one line each (below) |
 
-`.github/workflows/deploy.yml` needs nothing else for GHCR — it
-authenticates with its own `GITHUB_TOKEN` for the app image, and the
-observability stack pulls only public off-the-shelf images.
+The deploy never scans for host keys itself: whatever answers on that address would be trusted. Take them once, and check each against
+the key the droplet reports from its own console (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`):
+
+```
+ssh-keyscan -t ed25519 <reserved_ip> <observability_reserved_ip>   # the value of DEPLOY_KNOWN_HOSTS
+ssh-keyscan -t ed25519 <reserved_ip> <observability_reserved_ip> | ssh-keygen -lf -   # the fingerprints to compare
+```
+
+Then, when the droplets are ready for it, set the repository **variable** `DEPLOY_ENABLED` to `true` (Settings -> Secrets and variables ->
+Actions -> Variables). Until then CI publishes images and deploys nothing. GHCR needs no secret: the workflows use their own `GITHUB_TOKEN`.
 
 ### 4. Create each droplet's `.env` (once, by hand)
 
@@ -157,33 +167,18 @@ use, and a name that does not resolve yet is retried with backoff and counts aga
 [steps 8 and 9](#8-create-authlimits-signing-keys-once)**: until the signing keys exist `authlimit` restarts in a loop and every route that needs
 the front door answers 502 (it fails closed); `/health` and the web page stay up, so the deploy's own readiness check passes.
 
-Merge to `main`. Once `CI` passes, `deploy.yml` fires automatically and
-runs two independent jobs:
-- `deploy`: builds the app + ml-service + authlimit images, pushes them to GHCR,
-  rsyncs `deploy/prod/docker-compose.yml` and the four parts it includes
-  (`infra.yml`, `app.yml`, `gateway.yml`, `collectors.yml`), `deploy/prod/caddy/Caddyfile`
-  and `deploy/shared/caddy/gateway.caddyfile` (the Caddyfile imports it),
-  `deploy/prod/litellm-config.yaml`, `postgres-init/` and
-  `observability/` to the app droplet (keeping their repo paths, so the
-  droplet mirrors the repo layout), then `docker compose pull && up -d`.
-- `deploy-observability`: rsyncs
-  `deploy/prod/observability.yml`,
-  `deploy/prod/caddy/Caddyfile.observability` and `observability/` to the
-  observability droplet, then `docker compose pull && up -d`.
+Merge to `main`. In that commit's `CI` run:
 
-Watch both in the Actions tab, or SSH in and use the `dc` alias from
-[Everyday operations](#everyday-operations) below.
+1. `image` builds each of the three images, checks it, scans it and pushes it to GHCR as `:<sha>`.
+2. `promote`, once every job has passed and the commit is still main's newest, tags those three `:latest`.
+3. `deploy` calls [`deploy.yml`](../.github/workflows/deploy.yml), only when `DEPLOY_ENABLED` is `true`. Its `app` job syncs the
+   compose and config files of that commit and runs [`prod/release.sh <sha>`](prod/release.sh) on the app droplet: pull, check the
+   billing schema (only when `CREDITS_PER_USD` is set in `.env`), `up -d`, record the tag in `.image-tag`, wait for `/health/ready`
+   through the front door, then remove images unused for a week. Its `observability` job does the same sync and `up -d` for the
+   monitoring droplet.
 
-**First deploy from the `deploy/` layout**: both jobs also `rm -f` the
-pre-`deploy/` flat copies (`docker-compose.prod.yml`, `Caddyfile`,
-`litellm-config.prod.yaml`, and the observability pair) once the new `up -d`
-has succeeded — a stale flat compose file left in `/opt/...` would still run
-and recreate containers from frozen config. Expect exactly
-those services whose mount source moved to be recreated once — `caddy` and
-`litellm` on the app droplet, `caddy` on the observability droplet (checked
-by comparing `docker compose config --hash` before/after the move) — a few
-seconds of TLS/gateway blip. Nothing else changes, and the project names,
-so the volumes, are unchanged.
+Watch it in the Actions tab, or SSH in and use the `dc` alias from [Everyday operations](#everyday-operations) below: `compose.sh` reads
+`.image-tag`, so a manual `dc up -d` keeps the release that is running.
 
 **Moving an existing droplet to `deploy/prod/compose.sh`.** The deploy workflow now runs compose through `deploy/prod/compose.sh`, and ships it with `tools.yml` and `crawler-firewall.sh`. With
 `CRAWLER_ENABLED` unset it runs exactly the command the workflow ran before, so nothing changes until you opt in. Two things on the droplet are yours to change by hand: your shell's `dc` alias, and any
@@ -196,7 +191,9 @@ The project names, so the volumes, do not change. Three things are yours to do, 
 1. **The backup cron line.** `backup.sh` is not shipped by the workflow; it is on the droplet from your clone. Bring `deploy/prod/backup.sh` over (`git pull`, or copy it) and change the crontab to
    `/opt/graph-agent-core/deploy/prod/backup.sh`. Until you do, the old line keeps running the old script, which still works because the workflow leaves the old compose file where it is.
 2. **Then remove the old files** from the app droplet: `rm -rf deploy/compose deploy/litellm deploy/env deploy/backup deploy/caddy/Caddyfile deploy/caddy/Caddyfile.gateway deploy/caddy/gateway.caddy`.
-   Not before step 1: the old `backup.sh` calls `deploy/compose/docker-compose.prod.yml`, and deleting it would stop the backups without a sound. The observability workflow removes its own old files.
+   Not before step 1: the old `backup.sh` calls `deploy/compose/docker-compose.prod.yml`, and deleting it would stop the backups without a sound. The deploy no longer removes old files itself:
+   a droplet from before `deploy/` also has the flat copies `docker-compose.prod.yml`, `Caddyfile` and `litellm-config.prod.yaml` (the observability droplet: `docker-compose.observability.prod.yml`
+   and `Caddyfile.observability`). Remove those too: a stale compose file left there still runs.
    A droplet that already ran the layout above also has `deploy/shared/caddy/gateway.caddy`, from before the routing file became `gateway.caddyfile` (so an editor highlights it). The deploy ships the new name and Caddy imports it,
    so the old file is dead weight: `rm deploy/shared/caddy/gateway.caddy` once a deploy has finished.
 3. **Spend limits that now take effect.** `MAX_COST_USD_PER_TENANT_PER_MONTH`, the two `MAX_COST_USD_PER_PRINCIPAL_*` ceilings and `UNPRICED_MODEL_POLICY` were in `prod.env.example` but never
@@ -408,11 +405,11 @@ asked or what was answered. To see request and response bodies for a period (deb
 is the one in litellm 1.94.1's `proxy/_types.py`; check it against the image you have pinned before relying on it. Rows written while it was
 on are not removed by turning it off.
 
-**Rollback**: re-run `deploy.yml` against an earlier commit
-(`workflow_dispatch` isn't wired up for this file today — re-push/revert the
-commit on `main`, or SSH in and `IMAGE_TAG=<older-sha> dc up -d` directly using an older GHCR tag). The
-observability stack has no image tags of its own to roll back — its images
-are always `:latest` off-the-shelf.
+**Rollback**: Actions -> Deploy -> Run workflow on `main`, with `image_tag` = the full SHA of an earlier commit on main. It syncs that
+commit's compose files and releases that commit's images, so both go back together. Without GitHub, on the droplet:
+`deploy/prod/release.sh <sha>` (images only; it needs `docker login ghcr.io` with a token that can read packages). A failed release prints
+the previous SHA. Database schema changes are not undone by either. The observability images are pinned in
+`deploy/prod/observability.yml` and `collectors.yml`: bump them there.
 
 **Destroying a droplet**: `cd deploy/terraform/prod && terraform destroy` removes
 **both** droplets and both reserved IPs in one go. To remove just the
@@ -645,7 +642,7 @@ approval is deleted with the rest, and the approval can no longer be given, whic
 
 Everything about credit billing (turning it on, changing a wallet, reconciling the wallet, selling a credit pack with Stripe or Polar, its dashboard and alerts) is the billing package's:
 [`packages/billing/docs/RUNBOOK.md`](../packages/billing/docs/RUNBOOK.md). Deployment specifics that are this repository's: apply the package's schema to an existing volume with `make billing-migrate`
-(`make billing-migrate-status ARGS=--check` is the deploy gate), before the code that uses it, and start its workers from the app image as shown above.
+(`make billing-migrate-status ARGS=--check` is the deploy gate: `prod/release.sh` runs it when `.env` sets `CREDITS_PER_USD`), before the code that uses it, and start its workers from the app image as shown above. `deploy/prod/app.yml` does not yet pass `CREDITS_PER_USD` or the other billing variables to any container, so turning billing on in production needs that wiring first.
 
 ## The crawler's network
 

@@ -23,7 +23,7 @@ Each pattern states the mechanism, the real bug behind it and the gap still open
 | [TOOL_PATTERNS.md](TOOL_PATTERNS.md) | 21, 28, 32, 50, 78, 87 | Data tools, MCP in and out, scrubbing, crawl and sandbox, web search |
 | [RETRIEVAL_AND_MODEL_PATTERNS.md](RETRIEVAL_AND_MODEL_PATTERNS.md) | 18, 20, 24, 33, 38, 67, 68, 73, 74 | Memory, retrieval, ingestion, embeddings, model choice and routing |
 | [COST_GOVERNANCE.md](COST_GOVERNANCE.md) | 26, 51, 57, 58, 62-64, 74 | How spend is priced, metered and capped; the gateway backstop |
-| [ENGINEERING_PATTERNS.md](ENGINEERING_PATTERNS.md) | 40, 48, 59, 60, 69, 72, 75-77, 83, 86-88, 90, 95, 100-102 | Settings, tests, builds and measurements |
+| [ENGINEERING_PATTERNS.md](ENGINEERING_PATTERNS.md) | 40, 48, 59, 60, 69, 72, 75-77, 83, 86-88, 90, 95, 100-102, 106 | Settings, tests, builds and measurements |
 | [`packages/billing/docs/PATTERNS.md`](../packages/billing/docs/PATTERNS.md) | 52-56, 61, 65, 66 | The credit wallet, webhooks, export, reconciliation |
 
 ## Reference and records
@@ -42,7 +42,7 @@ Code and tests cite a pattern by number ("pattern 43"), so a number is **never r
 
 - A bare number means the document you are reading. Cite another document's pattern with its file: `COST_GOVERNANCE.md 74`, `ENGINEERING_PATTERNS.md 86`.
 - Three numbers were each used twice before this rule existed and cannot be changed now: **74** (strict tool schemas, and the gateway's view of spend), **86** (the API's identity, and smoke checks) and **87** (web search, and live tests).
-- The next free number is **106**.
+- The next free number is **107**.
 
 ## Elsewhere
 

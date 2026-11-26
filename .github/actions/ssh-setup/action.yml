@@ -1,0 +1,31 @@
+name: Set up SSH to the droplets
+description: >
+  Installs the deploy key and the droplets' pinned host keys, so `ssh <host>` and `rsync` need no flags. Fails when either is missing.
+  The host keys come from a secret, never from `ssh-keyscan` at deploy time, which trusts whatever answers on that address.
+
+inputs:
+  key:
+    description: Private half of the deploy key.
+    required: true
+  known-hosts:
+    description: known_hosts lines for both droplets.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        DEPLOY_SSH_KEY: ${{ inputs.key }}
+        DEPLOY_KNOWN_HOSTS: ${{ inputs.known-hosts }}
+      run: |
+        for name in DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS; do
+          [ -n "${!name}" ] || { echo "::error::the $name secret is empty (deploy/README.md says how to set it)"; exit 1; }
+        done
+        install -m 700 -d ~/.ssh
+        install -m 600 /dev/null ~/.ssh/deploy_key
+        printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+        printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+        printf '%s\n' 'Host *' '  User deploy' '  IdentityFile ~/.ssh/deploy_key' '  UserKnownHostsFile ~/.ssh/known_hosts' \
+          '  StrictHostKeyChecking yes' '  BatchMode yes' > ~/.ssh/config
+        chmod 600 ~/.ssh/config

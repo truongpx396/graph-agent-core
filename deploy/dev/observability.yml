@@ -12,7 +12,7 @@ name: agent-core-observability
 # NAME belongs in collectors.yml, not here (tests/core/test_compose_layout.py).
 services:
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -27,7 +27,7 @@ services:
       - "9090:9090"
 
   alertmanager:
-    image: prom/alertmanager:latest
+    image: prom/alertmanager:v0.35.1@sha256:4e3d029e69c7f61dd53a2b31a3dc427a2b81736cffca185c0854075e07969e36
     volumes:
       - ./observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager:/alertmanager
@@ -37,7 +37,7 @@ services:
       - "9093:9093"
 
   loki:
-    image: grafana/loki:latest
+    image: grafana/loki:3.7.10@sha256:b43c257ccfc925d4a50b8717cac61a3b51df8c48d01847936057e5c4075a24a7
     command: ["-config.file=/etc/loki/loki-config.yaml"]
     volumes:
       - ./observability/loki/loki-config.yaml:/etc/loki/loki-config.yaml:ro
@@ -67,7 +67,7 @@ services:
       - "4040:4040"   # the app containers push here (via host.docker.internal); a browser can open it too
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.3.2@sha256:81556409ba48b2b922e0adb69a2511337d8ba7578f11962eefa6149a2d815101
     ports:
       - "3300:3000"   # 3000 is Langfuse's
     environment:
@@ -89,7 +89,7 @@ services:
 
   # What the app pushes its OTel metrics to (OTEL_EXPORTER_OTLP_ENDPOINT in app.yml's `x-app-env`).
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
+    image: otel/opentelemetry-collector-contrib:0.166.0@sha256:3e18fe04181de50bdd72e23ad4a4d6214b54351e63d496f1c58127cc4541ad7f
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     volumes:
       - ./observability/otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
@@ -102,7 +102,7 @@ services:
   # observability/grafana/dashboards/docker-system-monitoring.json). On Docker Desktop for Mac both report its hidden Linux VM, not the Mac. ---
 
   node-exporter:
-    image: prom/node-exporter:latest
+    image: prom/node-exporter:v1.13.1@sha256:7296504d4ada44b7d7ab4431e27e9f9900d8488f8d55842f4b12ae2704e16dfe
     pid: host
     volumes:
       - /proc:/host/proc:ro
@@ -119,7 +119,7 @@ services:
       - "9100:9100"
 
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:latest
+    image: gcr.io/cadvisor/cadvisor:v0.55.1@sha256:3de2bd5203120b866d74a9b283b2ffb8ec382fbf9dc321814700c6ea6f44ec57
     # No /dev/kmsg mount (the usual recipe): the path is absent in Docker Desktop's VM and crash-loops cAdvisor on Mac. The cost is no OOM-event metrics.
     volumes:
       - /:/rootfs:ro
@@ -146,7 +146,7 @@ services:
   # Ships the app's container logs to Loki through its published port. The config keeps to this app's services: docker_sd sees every container
   # on the host, and old logs from an unrelated project made Loki reject whole batches.
   promtail:
-    image: grafana/promtail:latest
+    image: grafana/promtail:3.6.11@sha256:a761cb834cfaeee29745440d4884d6748f0a08d8f68928db1d707018c1dcfbe9
     command: ["-config.file=/etc/promtail/promtail-config.yaml"]
     volumes:
       - ./observability/promtail/promtail-config.yaml:/etc/promtail/promtail-config.yaml:ro

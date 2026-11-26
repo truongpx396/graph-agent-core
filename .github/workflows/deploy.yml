@@ -1,44 +1,63 @@
 name: Deploy
 
-# Automated CD to the Digital Ocean droplet deploy/terraform provisions —
-# triggered by the CI workflow's own completion on main (`workflow_run`),
-# not directly by `push`, so a deploy can never start on a commit CI hasn't
-# actually passed for. Terraform itself (creating/destroying the droplet)
-# is NOT run here — that stays a deliberate, human-run `terraform apply`
-# (deploy/README.md), same "maintainer runs this deliberately" framing this
-# repo already uses for garak/strix/eval; this workflow only ever updates
-# what's running on a droplet that already exists.
+# Runs images CI already built, scanned and published for a commit on main. It never starts by itself: ci.yml calls it as the last job of that
+# same run (so a deploy can only follow that run's checks), and a maintainer can start it by hand to redeploy or roll back. It used to run on
+# `workflow_run`, whose `branches:` filter matches the NAME of the triggering run's branch: a pull request from a fork's `main` passed it and got
+# this repository's token and secrets (ENGINEERING_PATTERNS.md pattern 106). tests/core/test_workflows_deploy_safely.py keeps that trigger out.
 #
-# Needs these repo secrets (deploy/README.md has the full setup):
-#   DROPLET_HOST     — deploy/terraform's reserved_ip output
-#   OBS_DROPLET_HOST — deploy/terraform's observability_reserved_ip output
-#   DEPLOY_SSH_KEY   — private half of terraform.tfvars' deploy_ssh_public_key,
-#                      authorized on BOTH droplets (same CI deploy identity)
-# GHCR auth uses the workflow's own GITHUB_TOKEN (packages: write below) —
-# no separate registry secret needed. deploy-observability below needs no
-# GHCR login at all — it only ever pulls off-the-shelf public images.
+# The automatic deploy is off until the repository variable DEPLOY_ENABLED is `true`. Terraform is not run here: creating droplets stays a
+# human-run `terraform apply`, and this only updates what runs on droplets that already exist.
+#
+# Secrets, in the `production` environment (deploy/README.md has the setup):
+#   DROPLET_HOST, OBS_DROPLET_HOST  the two reserved IPs (`terraform output`)
+#   DEPLOY_SSH_KEY                  the private half of terraform's deploy_ssh_public_key, authorized on both droplets
+#   DEPLOY_KNOWN_HOSTS              both droplets' host keys. Pinned: scanning at deploy time would trust whatever answers on that address
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: [main]
+  workflow_call:
+    inputs:
+      image_tag:
+        description: "Commit SHA whose images to run"
+        required: true
+        type: string
+    # Named so the caller can pass repository secrets; an environment secret of the same name wins.
+    secrets:
+      DROPLET_HOST: { required: false }
+      OBS_DROPLET_HOST: { required: false }
+      DEPLOY_SSH_KEY: { required: false }
+      DEPLOY_KNOWN_HOSTS: { required: false }
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Full commit SHA on main whose images CI published (redeploy, or roll back)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
-  build-and-push:
-    if: github.event.workflow_run.conclusion == 'success'
+  guard:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
-      packages: write
-    outputs:
-      image_tag: ${{ steps.tag.outputs.value }}
+      packages: read
+    env:
+      IMAGE_TAG: ${{ inputs.image_tag }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-
-      - id: tag
-        run: echo "value=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+      # The jobs below check this commit out and run its files with the deploy key, so it must be one that was reviewed into main.
+      - name: The tag is a full SHA of a commit on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::image_tag must be a full commit SHA"; exit 1; }
+          status=$(gh api "repos/$REPO/compare/$IMAGE_TAG...main" --jq .status)
+          case "$status" in
+            ahead | identical) ;;
+            *) echo "::error::$IMAGE_TAG is not a commit on main (compare says: $status)"; exit 1 ;;
+          esac
 
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
@@ -46,201 +65,109 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # Before anything on a droplet changes: a missing image would otherwise be found after the new config was already synced.
+      - name: All three images were published for this commit
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          for image in graph-agent-core graph-agent-core-ml-service graph-agent-core-authlimit; do
+            docker buildx imagetools inspect "ghcr.io/$OWNER/$image:$IMAGE_TAG" > /dev/null
+          done
 
-      # App image — same one Dockerfile/image api, agent-worker, and
-      # ingest-worker all share in deploy/prod/app.yml (just a
-      # different `command:` each), see that Dockerfile's own header.
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: Dockerfile
-          # The stage that ships, named: a reordered Dockerfile must not publish the builder (pattern 76).
-          target: runtime
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/graph-agent-core:${{ steps.tag.outputs.value }}
-            ghcr.io/${{ github.repository_owner }}/graph-agent-core:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          # What a pulled image can be audited against: a software bill of materials and SLSA build provenance, attached to the
-          # image as attestations (BuildKit's own scanner, a floating image: pinning it is listed as a gap in pattern 76).
-          provenance: mode=max
-          sbom: true
-
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: services/ml-service
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/graph-agent-core-ml-service:${{ steps.tag.outputs.value }}
-            ghcr.io/${{ github.repository_owner }}/graph-agent-core-ml-service:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          # What a pulled image can be audited against: a software bill of materials and SLSA build provenance, attached to the
-          # image as attestations (BuildKit's own scanner, a floating image: pinning it is listed as a gap in pattern 76).
-          provenance: mode=max
-          sbom: true
-
-      # The front door's edge service (specs/018 T069, pattern 98): a Go binary with its own module and Dockerfile, the same image the development stack builds.
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: services/authlimit
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/graph-agent-core-authlimit:${{ steps.tag.outputs.value }}
-            ghcr.io/${{ github.repository_owner }}/graph-agent-core-authlimit:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: mode=max
-          sbom: true
-
-  deploy:
-    needs: build-and-push
+  app:
+    needs: guard
     runs-on: ubuntu-latest
-    # contents: read is required here too (not just packages: read) —
-    # specifying ANY permissions: block sets every UNLISTED scope to
-    # `none`, which would otherwise silently break actions/checkout below.
+    timeout-minutes: 20
+    environment: production
+    # One release at a time; a newer one waits for this one instead of overlapping it.
+    concurrency:
+      group: deploy-app
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: read
+    env:
+      IMAGE_TAG: ${{ inputs.image_tag }}
+      DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
     steps:
+      # The compose files, configs and release script of the SAME commit as the images, so a rollback rolls all of them back.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ inputs.image_tag }}
+          persist-credentials: false
 
-      - name: Install SSH key
-        run: |
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ secrets.DROPLET_HOST }}" >> ~/.ssh/known_hosts
+      - uses: ./.github/actions/ssh-setup
+        with:
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          known-hosts: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
 
-      # GHCR packages pushed with the workflow's own GITHUB_TOKEN default to
-      # private, linked to this repo — the droplet needs its own login to
-      # `docker compose pull` them. Uses this JOB's own short-lived
-      # GITHUB_TOKEN (expires when the job ends), not a long-lived PAT
-      # secret: `packages: read` above is enough to pull, nothing is
-      # persisted on the droplet beyond Docker's own credential store.
+      # GHCR packages pushed with GITHUB_TOKEN are private, so the droplet logs in with this job's own token (it expires with the job). Over
+      # stdin: on the command line it would show in the droplet's process list.
       - name: Log the droplet in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts \
-            deploy@${{ secrets.DROPLET_HOST }} \
-            "echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin"
+          # shellcheck disable=SC2029  # $ACTOR is meant to expand here, on the runner
+          printf '%s' "$GHCR_TOKEN" | ssh "$DROPLET_HOST" "docker login ghcr.io -u '$ACTOR' --password-stdin"
 
-      # Config/compose files only — never .env (see deploy/prod/docker-compose.yml's
-      # own header: secrets live only on the droplet, created once by hand).
-      # --delete is scoped to postgres-init/ and observability/ specifically,
-      # not the whole target dir, so it can't ever touch the
-      # operator-managed .env sitting alongside these files in
-      # /opt/graph-agent-core.
-      - name: Sync compose/config files to the droplet
+      # Config and compose files only, never .env: secrets live only on the droplet, created once by hand. `-R` keeps each file's repo path, so
+      # the droplet mirrors the repo and the compose files' root-relative paths resolve there as they do here. A file the entry includes and
+      # this list misses fails `docker compose` at parse time (tests/core/test_workflows_deploy_safely.py compares the two).
+      # `--delete` is scoped to the two directories, never the target root, so it cannot touch the operator's .env.
+      - name: Sync compose and config files to the droplet
         run: |
-          # -R keeps each file's repo path (deploy/prod/..., deploy/shared/...),
-          # so the droplet mirrors the repo layout and the compose files'
-          # repo-root-relative paths (the `include`s, ./deploy/prod/caddy,
-          # ./postgres-init, ...) resolve identically there and in dev. The
-          # entry file includes the other four, so ship all five: a missing one
-          # fails `docker compose` at parse time, before it touches a container.
-          # The Caddyfile imports ../../shared/caddy/gateway.caddyfile: ship both.
-          rsync -azR -e "ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts" \
+          rsync -azR \
             deploy/prod/docker-compose.yml deploy/prod/infra.yml deploy/prod/app.yml \
-            deploy/prod/gateway.yml deploy/prod/collectors.yml \
-            deploy/prod/tools.yml deploy/prod/compose.sh deploy/prod/crawler-firewall.sh \
+            deploy/prod/gateway.yml deploy/prod/collectors.yml deploy/prod/tools.yml \
+            deploy/prod/compose.sh deploy/prod/release.sh deploy/prod/crawler-firewall.sh \
             deploy/prod/caddy/Caddyfile deploy/shared/caddy/gateway.caddyfile \
             deploy/prod/litellm-config.yaml \
-            deploy@${{ secrets.DROPLET_HOST }}:/opt/graph-agent-core/
-          rsync -az --delete -e "ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts" \
-            postgres-init/ \
-            deploy@${{ secrets.DROPLET_HOST }}:/opt/graph-agent-core/postgres-init/
-          # otel-collector-agent + promtail configs (deploy/prod/collectors.yml's
-          # observability sidecars) — this app droplet only ever needs its
-          # OWN agent-side configs, not the gateway-side ones the
-          # deploy-observability job below ships to the other droplet.
-          rsync -az --delete -e "ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts" \
-            observability/ \
-            deploy@${{ secrets.DROPLET_HOST }}:/opt/graph-agent-core/observability/
+            "$DROPLET_HOST":/opt/graph-agent-core/
+          rsync -az --delete postgres-init/ "$DROPLET_HOST":/opt/graph-agent-core/postgres-init/
+          rsync -az --delete observability/ "$DROPLET_HOST":/opt/graph-agent-core/observability/
 
-      - name: Pull new images and restart
-        env:
-          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+      # Pull, billing schema check, up, wait for /health/ready through the front door, prune (deploy/prod/release.sh).
+      - name: Release
         run: |
-          ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts \
-            deploy@${{ secrets.DROPLET_HOST }} \
-            "cd /opt/graph-agent-core && \
-             IMAGE_TAG=$IMAGE_TAG deploy/prod/compose.sh pull && \
-             IMAGE_TAG=$IMAGE_TAG deploy/prod/compose.sh up -d --remove-orphans && \
-             rm -f docker-compose.prod.yml Caddyfile litellm-config.prod.yaml && \
-             docker image prune -f"
-          # compose.sh is `docker compose --project-directory . -f deploy/prod/docker-compose.yml` exactly, plus deploy/prod/tools.yml when the droplet's .env says
-          # CRAWLER_ENABLED=true (and a refusal to start while the crawler's firewall is missing): without the overlay, `--remove-orphans` would remove the crawler.
-          # The rm above is a one-time migration, safe to drop once both
-          # droplets have deployed from this layout: before deploy/ existed
-          # these three files were rsynced flat into /opt/graph-agent-core/.
-          # Left behind, a stale docker-compose.prod.yml there would still
-          # run (its ./Caddyfile mount resolves to the stale flat copy) and
-          # silently recreate containers from frozen config. It runs only
-          # after the new `up -d` succeeded, so a failed deploy never
-          # strips the previous files.
-          #
-          # The files of the layout before deploy/prod/ (deploy/compose/, deploy/caddy/Caddyfile, deploy/litellm/, deploy/backup/) are NOT removed here, on
-          # purpose: the cron line in deploy/README.md still runs the old deploy/backup/backup.sh, which calls the old compose file, and deleting that
-          # would stop the backups without a sound. deploy/README.md ("Moving an existing droplet to deploy/prod/") says when to remove them.
+          # shellcheck disable=SC2029  # the tag is meant to expand here; the guard job checked it is 40 hex characters
+          ssh "$DROPLET_HOST" "cd /opt/graph-agent-core && deploy/prod/release.sh '$IMAGE_TAG'"
 
-      # Through the front door, as a client reaches it: the API publishes no host port (deploy/prod/app.yml), so a curl to localhost:8000 could
-      # never succeed. This proves Caddy's certificate, the route and the API at once. API_DOMAIN is read from the droplet's own .env, which CI never
-      # sees. 120 s: the first deploy also waits for Let's Encrypt to issue the three certificates.
-      - name: Wait for /health/ready through the front door
-        run: |
-          ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts \
-            deploy@${{ secrets.DROPLET_HOST }} \
-            "cd /opt/graph-agent-core && api=\$(grep '^API_DOMAIN=' .env | cut -d= -f2-) && \
-             timeout 120 bash -c \"until curl -sf https://\$api/health/ready; do sleep 3; done\""
+      - name: Log the droplet out of GHCR
+        if: always()
+        run: ssh "$DROPLET_HOST" "docker logout ghcr.io" || true
 
-  # Independent of build-and-push/deploy above — this stack (Prometheus/
-  # Loki/Grafana/Alertmanager/otel-collector) only ever uses off-the-shelf
-  # images, nothing built from this repo, and runs on the SEPARATE
-  # observability droplet (deploy/terraform's digitalocean_droplet.observability).
-  # Reuses the same DEPLOY_SSH_KEY as the app droplet's deploy job — see
-  # this workflow's own header on why that's not a separate secret.
-  deploy-observability:
-    if: github.event.workflow_run.conclusion == 'success'
+  # The monitoring stack on its own droplet: off-the-shelf images pinned in deploy/prod/observability.yml, nothing built here.
+  observability:
+    needs: guard
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    timeout-minutes: 15
+    environment: production
+    concurrency:
+      group: deploy-observability
+      cancel-in-progress: false
+    env:
+      OBS_DROPLET_HOST: ${{ secrets.OBS_DROPLET_HOST }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ inputs.image_tag }}
+          persist-credentials: false
 
-      - name: Install SSH key
-        run: |
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ secrets.OBS_DROPLET_HOST }}" >> ~/.ssh/known_hosts
+      - uses: ./.github/actions/ssh-setup
+        with:
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          known-hosts: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
 
-      # Never .env here either — GRAFANA_ADMIN_PASSWORD/OBS_DOMAIN_NAME are
-      # created once by hand on this droplet too (deploy/README.md), same
-      # posture as the app droplet's own .env.
-      - name: Sync compose/config files to the droplet
+      # Never .env here either (GRAFANA_ADMIN_PASSWORD, OBS_DOMAIN_NAME are created by hand on this droplet).
+      - name: Sync compose and config files to the droplet
         run: |
-          rsync -azR -e "ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts" \
-            deploy/prod/observability.yml \
-            deploy/prod/caddy/Caddyfile.observability \
-            deploy@${{ secrets.OBS_DROPLET_HOST }}:/opt/agent-core-observability/
-          rsync -az --delete -e "ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts" \
-            observability/ \
-            deploy@${{ secrets.OBS_DROPLET_HOST }}:/opt/agent-core-observability/observability/
+          rsync -azR deploy/prod/observability.yml deploy/prod/caddy/Caddyfile.observability "$OBS_DROPLET_HOST":/opt/agent-core-observability/
+          rsync -az --delete observability/ "$OBS_DROPLET_HOST":/opt/agent-core-observability/observability/
 
       - name: Pull new images and restart
         run: |
-          ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts \
-            deploy@${{ secrets.OBS_DROPLET_HOST }} \
-            "cd /opt/agent-core-observability && \
-             docker compose --project-directory . -f deploy/prod/observability.yml pull && \
-             docker compose --project-directory . -f deploy/prod/observability.yml up -d --remove-orphans && \
-             rm -f docker-compose.observability.prod.yml Caddyfile.observability \
-                   deploy/compose/docker-compose.observability.prod.yml deploy/caddy/Caddyfile.observability && \
-             docker image prune -f"
-          # One-time migration rm, same reasoning as the app droplet's above.
+          ssh "$OBS_DROPLET_HOST" "cd /opt/agent-core-observability && \
+            docker compose --project-directory . -f deploy/prod/observability.yml pull && \
+            docker compose --project-directory . -f deploy/prod/observability.yml up -d --remove-orphans && \
+            docker image prune -af --filter until=168h"

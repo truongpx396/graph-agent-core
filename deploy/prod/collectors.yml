@@ -7,7 +7,7 @@ services:
   # before forwarding everything to the observability droplet's collector (observability/otel-collector/config.agent.yaml). With this agent + gateway
   # split only port 4318 crosses the droplets' firewall.
   otel-collector-agent:
-    image: otel/opentelemetry-collector-contrib:latest
+    image: otel/opentelemetry-collector-contrib:0.166.0@sha256:3e18fe04181de50bdd72e23ad4a4d6214b54351e63d496f1c58127cc4541ad7f
     restart: unless-stopped
     cpus: "0.2"
     mem_limit: 256m
@@ -55,7 +55,7 @@ services:
         condition: service_healthy
 
   node-exporter:
-    image: prom/node-exporter:latest
+    image: prom/node-exporter:v1.13.1@sha256:7296504d4ada44b7d7ab4431e27e9f9900d8488f8d55842f4b12ae2704e16dfe
     restart: unless-stopped
     cpus: "0.05"
     mem_limit: 64m
@@ -73,7 +73,7 @@ services:
   # Native Linux Docker, so the standard recipe (privileged + /dev/kmsg) works and container names resolve: no container-name-mapper, unlike the dev
   # stack's collectors.yml.
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:latest
+    image: gcr.io/cadvisor/cadvisor:v0.55.1@sha256:3de2bd5203120b866d74a9b283b2ffb8ec382fbf9dc321814700c6ea6f44ec57
     restart: unless-stopped
     cpus: "0.2"
     mem_limit: 256m
@@ -90,7 +90,7 @@ services:
   # Reads THIS droplet's Docker socket and log files, so it must run beside the containers it tails, and pushes to the observability droplet's Loki
   # (observability/promtail/promtail-config.prod.yaml says why it cannot live in observability.yml).
   promtail:
-    image: grafana/promtail:latest
+    image: grafana/promtail:3.6.11@sha256:a761cb834cfaeee29745440d4884d6748f0a08d8f68928db1d707018c1dcfbe9
     restart: unless-stopped
     cpus: "0.1"
     mem_limit: 128m
