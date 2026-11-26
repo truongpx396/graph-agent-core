@@ -7,7 +7,8 @@ An `OutputCheck` holds everything one reason needs:
 - `detect(ctx)`: falsy when the answer passes, else the DETAIL the feedback needs (offending markers, the
   skipped tool's name, or just `True`);
 - `feedback(detail)`: the corrective message `retry_output` sends back, naming the actual problem rather than
-  "try again";
+  "try again". `None` when there is nothing to tell the model: `retry_output` then removes the answer AND the
+  pre-fetched block and asks again (`context_gap`);
 - `counter`: the metric incremented whenever it fires (`app/core/metrics.py`);
 - `trust_on_exhaust`: whether an answer rejected for this reason over and over is still safe to show verbatim.
   `too_short` and `uncited` say yes (short-but-real beats no answer; a correct answer missing only its `[1]`
@@ -25,6 +26,7 @@ actionable problem. Every check still runs and is counted, and all that fired ar
 The heuristics live in `graph/output_guardrails.py` (deferral, fabrication, leak, skipped tool) and
 `graph/citations.py` (grounding).
 """
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -32,14 +34,15 @@ from typing import Any
 from langchain_core.messages import BaseMessage, ToolMessage
 
 from app.agent.graph.citations import find_likely_uncited
-from app.agent.graph.messages import current_turn_messages
+from app.agent.graph.messages import current_turn_messages, split_sentences
 from app.agent.graph.output_guardrails import (
+    admits_context_gap,
     defers_instead_of_acting,
     fabricates_tool_output,
     reveals_system_prompt,
     skipped_required_sandbox_after_skill,
 )
-from app.agent.graph.state import MIN_ANSWER_LENGTH
+from app.agent.graph.state import CONTEXT_GAP_REASON, MIN_ANSWER_LENGTH
 from app.core import metrics
 
 
@@ -75,7 +78,7 @@ class CheckContext:
 class OutputCheck:
     code: str
     detect: Callable[[CheckContext], Any]
-    feedback: Callable[[Any], str]
+    feedback: Callable[[Any], str] | None
     counter: Any = None
     trust_on_exhaust: bool = False
     fallback: str | None = None
@@ -115,6 +118,25 @@ def _skipped_tool(ctx: CheckContext) -> Any:
 
 def _tool_failed_this_turn(messages: list[BaseMessage]) -> bool:
     return any(isinstance(m, ToolMessage) and m.status == "error" for m in current_turn_messages(messages))
+
+
+_MARKER_RE = re.compile(r"\[\d+\]")
+
+
+def _context_gap(ctx: CheckContext) -> Any:
+    # The pre-fetched block was in front of this answer, nothing was looked up, and the answer opens by saying the block does not have it. Real bug,
+    # found live: "Who works on Ecorp's engineering team?" got "The retrieved document does not provide specific information..." with `query_employees`
+    # bound; the block (a name match, "Ecorp was founded in 2021") is what steered a small model to prose, and without it the same history calls the
+    # tool (pattern 105). Once the block is gone `citations` is empty, so this cannot fire twice in a turn.
+    if not ctx.citations or any(isinstance(m, ToolMessage) for m in current_turn_messages(ctx.messages)):
+        return None
+    sentences = split_sentences(ctx.shown)
+    if not sentences or not admits_context_gap(sentences[0]):
+        return None
+    # An answer that goes on to use a source is a partial answer, not an empty one: keep it.
+    if any(_MARKER_RE.search(s) and not admits_context_gap(s) for s in sentences):
+        return None
+    return True
 
 
 def _deferred(ctx: CheckContext) -> Any:
@@ -221,7 +243,7 @@ GENERIC_NO_ANSWER_MESSAGE = (
 )
 
 # Priority order: leaked prompt (the only reason with a real security dimension, severe enough that
-# it can't also be merely too short) > too short > fabricated > skipped required tool > deferred >
+# it can't also be merely too short) > too short > fabricated > skipped required tool > context gap > deferred >
 # uncited. A marker on a sentence its source does not support is not a reason: `graph_node_check_output` removes it (pattern 104).
 CHECKS: tuple[OutputCheck, ...] = (
     OutputCheck(
@@ -249,6 +271,9 @@ CHECKS: tuple[OutputCheck, ...] = (
             "or add a bit more detail?"
         ),
     ),
+    # Above `deferred`: when an answer both says the block lacks it and narrates a look-up, asking again without the block worked where feedback did not.
+    # Trusted: the answer is honest, so a turn cut off by a budget on this round still shows it.
+    OutputCheck(CONTEXT_GAP_REASON, _context_gap, None, trust_on_exhaust=True),
     OutputCheck(
         "deferred",
         _deferred,

@@ -30,7 +30,7 @@ from app.agent.graph.messages import (
 )
 from app.agent.graph.model_route import routed_unreachable, tier_alias
 from app.agent.graph.skill_guards import pending_skill_required_tool
-from app.agent.graph.state import State
+from app.agent.graph.state import CONTEXT_GAP_REASON, State
 from app.core import gateway, metrics
 from app.core.config import CHAT_MODEL, STALE_TOOL_RESULT_MAX_CHARS
 from app.core.untrusted import frame_untrusted
@@ -53,6 +53,14 @@ CITATION_REMINDER = (
     "Reminder: every sentence in your answer that uses a fact from the retrieved content above must end "
     "with that fact's [n] bracket marker. If none of that content helps answer the question, ignore it "
     "and cite nothing."
+)
+
+
+# Goes where the pre-fetched block's reminder was, on the one call made after that block was taken away (`context_gap`, pattern 105). Measured wording: the
+# bare question invented a CEO ("John Doe", with sources) where this line made the model search, and the roster question still calls the directory tool.
+NO_BLOCK_REMINDER = (
+    "Reminder: if none of your tools can look this up, say you do not have that information. "
+    "Do not answer it from general knowledge."
 )
 
 
@@ -220,6 +228,10 @@ def make_graph_node_agent(
             before.append(frame_untrusted(context))
             if citation_reminder:
                 after.append(CITATION_REMINDER)
+
+        if state.get("last_retry_reason") == CONTEXT_GAP_REASON:
+            # Holds for the whole re-ask, tool rounds included: check_output overwrites the reason when it next runs, and each turn starts with none.
+            after.append(NO_BLOCK_REMINDER)
 
         pending_tool = pending_skill_required_tool(
             current_turn_messages(state["messages"]), skill_required_tools

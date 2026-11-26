@@ -7,7 +7,7 @@ their fallback text are the registry in `graph/output_checks.py`.
 from collections.abc import Callable
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage
 
 from app.agent.graph.messages import RETRY_ARTIFACT_KEY, reject_tool_calls
 from app.agent.graph.output_checks import check_for, fallback_message, trusts_content
@@ -50,7 +50,14 @@ def graph_node_retry_output(state: State) -> dict[str, Any]:
     reason = state.get("last_retry_reason")
     if reason is None:
         raise ValueError("retry_output is only reached when check_output recorded a reason")
-    feedback = check_for(reason).feedback((state.get("output_findings") or {}).get(reason))
+    check = check_for(reason)
+    if check.feedback is None:
+        # Nothing to tell the model: the pre-fetched block is what steered it (`context_gap`, pattern 105). The answer is removed, not tagged (a tagged one
+        # is shown to the model again for the rest of this turn), and the block with it, so the next call is the question asked as it was typed. Feedback
+        # was measured and was worse: it produced a document search, or a tool call written out as text.
+        removable = isinstance(last, AIMessage) and not last.tool_calls and last.id is not None
+        return {"messages": [RemoveMessage(id=str(last.id))] if last is not None and removable else [], "context": "", "citations": []}
+    feedback = check.feedback((state.get("output_findings") or {}).get(reason))
     # Both messages are tagged so that nothing downstream mistakes them for conversation: the
     # feedback is not something the person said, and the rejected answer is not one they were
     # shown (pattern 5). The agent node still sees them for the rest of THIS turn, which is
