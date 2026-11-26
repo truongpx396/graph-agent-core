@@ -4,7 +4,7 @@
 
 # --reload-dir app: uvicorn otherwise watches the whole tree incl. .venv (17k+ files), a steady CPU load
 # that slowed chat turns next to Ollama.
-serve:  ## Start the FastAPI service (http://localhost:8000/docs)
+serve:  ## Start the FastAPI service (http://localhost:8000/docs; the page at / needs `make web-build` once, and again after changing web/)
 	uvicorn app.adapters.inbound.api.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
 
 mcp-serve:  ## MCP server (query_employees) over stdio; needs `make up`, MCP_TENANT and MCP_PRINCIPAL

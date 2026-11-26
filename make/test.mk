@@ -14,7 +14,7 @@ test-integration:  ## Real Postgres/Redis/Qdrant/ml-service/crawl4ai via testcon
 	pytest -n auto -m integration -q --dist=loadgroup
 	cd packages/billing && pytest -m integration -q
 
-test-live:  ## Real Ollama + ml-service + the full app stack via testcontainers, incl. Playwright E2E (needs Docker)
+test-live: web-build  ## Real Ollama + ml-service + the full app stack via testcontainers, incl. Playwright E2E (needs Docker and Node)
 	playwright install --with-deps chromium
 	pytest -n auto -m "llm or e2e or crawl" -q
 

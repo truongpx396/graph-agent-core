@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-26
 
-**Status**: Phase 1 implemented: the application exists in `web/`, tested, and is not served yet. Phase 2 serves it and deletes the old page.
+**Status**: Implemented in two PRs: the application (phase 1), then serving it and deleting the old page (phase 2). Sign-in against a real Casdoor is not yet run (plan.md).
 
 **Input**: "a new PR to use a react app project with oxlint, tanstack query, zustand, tailwind, vite...etc. modular architecture...as a replace to this index.html file". The maintainer then chose two PRs over one or four.
 

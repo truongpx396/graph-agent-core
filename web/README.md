@@ -3,8 +3,9 @@
 The browser UI of Graph Agent Core: React, TypeScript, Vite, Tailwind, TanStack Query (server state), Zustand (client state), oxlint and
 Vitest. It talks only to the HTTP API in [`openapi.json`](../openapi.json), and renders only the documented stream events.
 
-**Not served yet.** `GET /` still serves `app/adapters/inbound/api/static/index.html`. This app has the same screens and takes over in a
-follow-up change ([specs/023](../specs/023-web-client/plan.md)).
+It is the page the API serves ([specs/023](../specs/023-web-client/plan.md)): `GET /` is `dist/index.html`, with the sign-in mode written
+into its `<meta name="agent-auth">` tag by `app/adapters/inbound/api/web_auth.py`, and the bundle is under `/static/assets/` (public at
+the front door). The Docker image builds it; on the host, `make web-build` before `make serve`.
 
 ## Run it
 

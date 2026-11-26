@@ -625,8 +625,8 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
     if followups:
         # suggest_followups (pattern 27) computes these into
         # state["followups"], but this streaming path never surfaced them
-        # until now — the web UI already has CSS for follow-up chips
-        # (index.html's .followups) with no event feeding it.
+        # until now — the web UI already had follow-up chips with no
+        # event feeding them.
         yield {"type": "followups", "items": followups}
     yield terminal_event
 

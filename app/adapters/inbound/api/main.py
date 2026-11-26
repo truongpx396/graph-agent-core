@@ -2,7 +2,7 @@
 reuses the CLI's agent runtime, so memory (by thread_id) and Langfuse tracing behave the same.
 
 Endpoints:
-- GET  /                     built-in web UI (app/adapters/inbound/api/static/index.html)
+- GET  /                     built-in web UI: the client in web/, built (its bundle is under /static/assets/)
 - GET  /health               liveness
 - GET  /health/ready         readiness: Qdrant, Postgres, Redis and ml-service reachable (app/adapters/inbound/api/health.py)
 - POST /chat/stream/queued   the ONLY way to run a turn over HTTP: the turn runs on a separate agent_worker.py
@@ -41,7 +41,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.adapters.inbound.api import identity, openapi
+from app.adapters.inbound.api import identity, openapi, web_auth
 from app.adapters.inbound.api.openapi import (
     API_DESCRIPTION,
     API_TITLE,
@@ -144,3 +144,5 @@ app.include_router(chat.router)
 app.include_router(usage.router)
 app.include_router(billing_http.router)
 app.include_router(ingest.router)
+# The page's bundle (app/adapters/inbound/api/web_auth.py). A mount, so it is in no OpenAPI document: it is part of the page, not of the API.
+app.mount("/static/assets", web_auth.BuiltAssets(web_auth.WEB_DIST / "assets"), name="web-assets")

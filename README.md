@@ -237,7 +237,7 @@ Prod ships no Langfuse, open-webui, MinIO or OpenSandbox, and the crawler only w
 
 **Prerequisites:** 🐳 Docker + Compose · 🐍 Python 3.13 (what the `Dockerfile` and CI run) · 🦙 [Ollama](https://ollama.com) running
 **natively** (`ollama serve`; Docker Desktop on Mac can't pass Metal through, so LiteLLM reaches it at
-`host.docker.internal:11434`) · 🐹 Go, only for `make authlimit-test`. First runs download about 7 GB of Ollama models, plus
+`host.docker.internal:11434`) · 🟢 Node 22, only for the web page on the host (the Docker image builds it itself) · 🐹 Go, only for `make authlimit-test`. First runs download about 7 GB of Ollama models, plus
 `ml-service`'s small ONNX models and the BM25 sparse model.
 
 ```bash
@@ -254,6 +254,7 @@ make ingest          # sample docs -> Qdrant
 make index-skills    # skill catalog -> its own Qdrant collection
 make agent-worker    # keeps running, so use a second terminal: every client (CLI, web UI, Telegram) reaches it through the API
 make chat            # CLI agent; `make chat-hitl` adds approval prompts
+make web-build       # the web page (needs Node 22); skip it if you only use the CLI or the API
 ```
 
 Then: 🔭 traces at http://localhost:3000 · 🖥️ `make serve` for the API and web UI at http://localhost:8000 (keep the worker
@@ -324,7 +325,7 @@ suspecting the app.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /` | Built-in web UI (no build step, no CDN) |
+| `GET /` | Built-in web UI: the client in [web/](web/README.md), built (no third-party script); 503 until `make web-build` |
 | `GET /health` · `GET /health/ready` | Liveness · readiness (503 names whichever of Qdrant, Postgres ×2, Redis, ml-service is down) |
 | `POST /chat/stream/queued` | Start a turn; SSE stream. Needs a running `agent-worker`. Each frame has an `id:`, the response an `X-Request-Id`, and a silent stream gets `: keepalive` comments |
 | `GET /chat/stream/{request_id}` | Read a turn again after a dropped connection: send the last frame's `id:` as `Last-Event-ID` and only later events come. The caller's own conversations only; the events are kept five minutes after the last one |
@@ -365,7 +366,7 @@ curl -s -N -X POST http://localhost:8000/chat/stream/queued \
 - 🔁 **Resubmits:** an identical `(thread_id, message, images)` within `CHAT_SUBMIT_DEDUP_TTL_SECONDS` (10) streams the first attempt's turn.
 - 🚦 **Limits:** the API doesn't limit turns or uploads; the [front door](#front-door-authlimit) does, as a token bucket per tenant and per person on `POST /chat/stream/queued`, `/chat/resume`, `/ingest/upload` and `DELETE /ingest/documents` (defaults in `services/authlimit/routes.json`: 30 a minute per tenant, 10 per person). Production is behind the same door (`deploy/prod/`, pattern 98), so the limits apply there too. The CLI and the Telegram channel are counted like the web UI: each person has their own bucket, and a refusal reaches them as a message with the wait time. The API's own limit is per source address on the payment webhook (`BILLING_WEBHOOK_RATE_LIMIT_PER_MINUTE`). CORS: `CORS_ALLOWED_ORIGINS`.
 - 📈 **Metrics** are pushed over OTLP; the API has no `/metrics` route.
-- 🖥️ **Web UI:** `make serve`, then http://localhost:8000/. It drives the full approve/reject flow and has a real-browser test (`tests/live/test_chat_ui.py`, pattern 48). Behind the front door (`make authlimit-up-app`) it signs in through Casdoor; `make authlimit-web-check` drives that in a browser.
+- 🖥️ **Web UI:** `make web-build` once, `make serve`, then http://localhost:8000/ (`make web-dev` for hot reload while changing it). It drives the full approve/reject flow and has a real-browser test (`tests/live/test_chat_ui.py`, pattern 48). Behind the front door (`make authlimit-up-app`) it signs in through Casdoor; `make authlimit-web-check` drives that in a browser.
 
 * * *
 
@@ -819,8 +820,8 @@ until configured**.
 | `make up` · `make down` | Start / stop the dev stack (keeps data) |
 | `make up-app` | `make up` plus the containerized `api`, `agent-worker` (every domain) and `ingest-worker` |
 | `make up-all` · `make down-all` | Everything in containers behind the front door (infra, app, MCP gateway, observability; not the sandbox or SonarQube), web UI https://api.localhost:8443/; first time also `make front-door-ca` (then trust the CA); `make front-door-bootstrap` prints the demo users' initial passwords. `down-all` stops every container, any profile (keeps data) |
-| `make serve` | API + web UI on :8000 |
-| `make web-install` · `make web-dev` · `make web-check` | The web client in [web/](web/README.md) (needs Node 22): install · dev server on :5173 against `make serve` · lint, types, tests and build |
+| `make serve` | API + web UI on :8000 (the page needs `make web-build` once) |
+| `make web-build` · `make web-dev` · `make web-check` | The web client in [web/](web/README.md) (needs Node 22): build the page · dev server on :5173 against `make serve` · lint, types, tests and build |
 | `make chat` · `make chat-hitl` | CLI agent · with approval prompts. Both sign you in at the front door (`python -m app.adapters.inbound.channels.cli.chat --sign-out` forgets it) and need that domain's worker: `AGENT_DOMAIN` picks it |
 | `make agent-worker` · `make agent-worker-all` · `make ingest-worker` | Queue consumers: one domain (`AGENT_WORKER_DOMAINS=support,ops` picks others) · every domain · ingestion |
 | `make telegram[-support\|-sales]` · `make telegram-person ACTION=add\|disable\|enable TELEGRAM_ID=<id>` | Telegram gateway for a domain (needs `TELEGRAM_BOT_TOKEN`, `TELEGRAM_PERSON_SECRET` or the `TELEGRAM_LINKING` settings, and that domain's worker) · add, disable or re-enable a Telegram person |
@@ -875,7 +876,7 @@ services/      what runs as its own process, each with its own Dockerfile: authl
 Dockerfile     the app image (at the root: the build context)
 evals/ scripts/model_eval/   the model-evaluation harness and its frozen datasets, candidates, baselines
 specs/ .specify/          Spec Kit specs 001–023 and the constitution
-web/                      the web client (React, TypeScript, Vite) that will replace the built-in page; not served yet (web/README.md)
+web/                      the built-in web page: a React + TypeScript client built with Vite; the API serves web/dist (web/README.md)
 deploy/                   dev/ and prod/ (compose parts, Caddyfile, LiteLLM config, env example), shared/caddy/ (the front door's routing), images/ (sandbox builds), terraform/{prod,dev}/ (DigitalOcean droplets); deploy/README.md is the runbook
 observability/            Prometheus (+ alerts.yml), Alertmanager, Loki, Promtail, otel-collector, Grafana
 postgres-init/            numbered SQL schema (fresh volumes only)

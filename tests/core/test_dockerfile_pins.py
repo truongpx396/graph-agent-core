@@ -33,6 +33,16 @@ def test_each_pin_names_a_digest_not_a_moving_tag():
             assert DIGEST.search(image), f"{path.relative_to(ROOT)}: the `{stage}` stage is `{image}`, not pinned by digest"
 
 
+def test_every_image_a_stage_starts_from_is_pinned_by_digest():
+    # The two named pins above are not the only ones: a stage added later (the web client's Node stage) must not float either.
+    for path in DOCKERFILES:
+        text = path.read_text(encoding="utf-8")
+        stages = set(re.findall(r"^FROM .* AS (\S+)\s*$", text, re.MULTILINE))
+        images = re.findall(r"^FROM (?:--platform=\S+ )?(\S+)", text, re.MULTILINE)
+        floating = [image for image in images if image not in stages and not DIGEST.search(image)]
+        assert not floating, f"{path.relative_to(ROOT)} starts from images with no digest: {floating}"
+
+
 def test_dependabot_reads_the_directory_of_every_pinned_dockerfile():
     updates = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))["updates"]
     docker = next(entry for entry in updates if entry["package-ecosystem"] == "docker")

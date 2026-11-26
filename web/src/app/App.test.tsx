@@ -2,7 +2,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAuth } from "@/features/auth";
 import { useChat } from "@/features/chat";
 import { deferred, fakeApi, json, sse } from "@/test/fakeApi";
@@ -115,6 +115,20 @@ describe("the page", () => {
     expect(element("#send").disabled).toBe(false);
     await waitFor(() => expect(api.sent("GET /chat/sessions").at(-1)?.headers["X-Domain"]).toBe("support"));
     expect(screen.getByText("Tier-1 Support Copilot:")).toBeTruthy();
+  });
+
+  it.each(["tenant", "principal"])("starts a new conversation when the %s changes, since the old one is someone else's", async (field) => {
+    // The server answers another caller's send on a thread with a 404.
+    vi.spyOn(window, "prompt").mockReturnValue("someone-else");
+    const { api, user, element, container } = start({ "POST /chat/stream/queued": () => sse({ type: "done" }) });
+    await user.type(element("#input"), "hi{Enter}");
+    await waitFor(() => expect(useChat.getState().turn).toBeNull());
+    const thread = useChat.getState().threadId;
+    await user.selectOptions(element(`#${field}`), "__add_new__");
+    expect(useChat.getState().threadId).not.toBe(thread);
+    expect(container.querySelectorAll("#messages .msg")).toHaveLength(0);
+    const header = field === "tenant" ? "X-Tenant-Id" : "X-Principal-Id";
+    await waitFor(() => expect(api.sent("GET /chat/sessions").at(-1)?.headers[header]).toBe("someone-else"));
   });
 
   it("follows each upload, and shows a refused file's own reason", async () => {

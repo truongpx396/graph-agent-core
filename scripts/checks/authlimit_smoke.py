@@ -603,8 +603,11 @@ async def stage_api(d: Door, keys_dir: Path) -> None:
     page = await d.call("GET", "/", None)
     check("the page is public and tells the browser the API is in identity mode",
           page.status_code == 200 and 'name="agent-auth"' in page.text and "&quot;mode&quot;:&quot;identity&quot;" in page.text, f"{page.status_code} {page.text[:100]}")
-    script = await d.call("GET", "/static/auth.js", None)
-    check("its sign-in script is public too (it must load before anyone can sign in)", script.status_code == 200 and "code_challenge_method" in script.text, str(script.status_code))
+    bundle = re.search(r'src="(/static/assets/[^"]+\.js)"', page.text)
+    script = await d.call("GET", bundle.group(1), None) if bundle else None
+    check("its script is public too, sign-in included (it must load before anyone can sign in)",
+          script is not None and script.status_code == 200 and "code_challenge_method" in script.text,
+          str(script.status_code) if script is not None else "the page names no script")
     check("the second tenant has employees of its own to be told apart by", seed_second_tenant(d))
 
     a, b = await d.user("ecorp"), await d.user("other-co")

@@ -68,6 +68,9 @@ updates:
     ignore:
       - dependency-name: python
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # The web client's build stage: Node's major is a decision, moved with web/.nvmrc and CI's setup-node.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
     groups:
       docker-images:
         patterns: ["*"]

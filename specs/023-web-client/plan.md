@@ -15,7 +15,7 @@
 
 **Phase 1 (this change).** The application, its tests, `make web-*`, CI's `web` job, constitution 1.5.0. Not served; the image does not contain it.
 
-**Phase 2.** A Node build stage in the `Dockerfile`; `GET /` renders the built `index.html` and `/static/assets/` serves the bundle; delete `static/index.html` and `static/auth.js`; move the server-side sign-in tests, the live browser tests, `authlimit_smoke.py` and `authlimit_web_check.py` to the new page; update pattern 29 and the docs that name the old files.
+**Phase 2.** A Node build stage in the `Dockerfile` (on the builder's platform, digest-pinned); `GET /` renders the built `index.html` (503 with the command to run when unbuilt) and a mount serves `/static/assets/` (404, not a 500, when unbuilt); `static/index.html` and `static/auth.js` deleted; the server-side tests, the live browser tests, `authlimit_smoke.py` and `authlimit_web_check.py` moved to the new page; CI's `test-live` builds it and `docker-build` checks the image has it; pattern 29 and the docs that named the old files updated.
 
 ## Where it behaves differently from the old page (on purpose)
 
@@ -40,7 +40,7 @@ Markdown now follows CommonMark with GFM tables; single newlines still break the
 | **IV. Exactly-once** (NN) | No | No write path changes; the client never retries a request. |
 | V. Bounded, observable failure | Yes | A stream that ends without a terminal event releases the page; a partial answer is marked as interrupted. |
 | VI. Untrusted content is data | Yes | `features/chat/ui/Markdown.test.tsx`: no live HTML, no image fetched, no `javascript:` or `data:` link. |
-| VII. Test discipline | Yes | Vitest runs with a fake API and no network. The real-stack browser run is manual in phase 1 and moves into `tests/live` in phase 2. |
+| VII. Test discipline | Yes | Vitest runs with a fake API and no network; the Python serving tests need no Node (a stand-in build). `tests/live/test_chat_ui.py` drives the served page against a real model in CI. |
 | VIII. Why-first docs, honest gaps | Yes | `web/README.md`; the gaps below. |
 | Web client (1.5.0) | New | Own lock file and CI job; types from `openapi.json`; the architecture test. |
 
@@ -53,6 +53,7 @@ Markdown now follows CommonMark with GFM tables; single newlines still break the
 
 ## Not verified, and not done
 
-- Sign-in against a real Casdoor with the new application: it needs the app at the front door's address, so it is phase 2 (`make authlimit-web-check`). Unit tests cover the flow.
+- Sign-in against a real Casdoor with the new application (`make authlimit-web-check`): it replaces the containers of a running stack, so it was not run. Unit tests cover the flow, and a browser run with a stand-in authorization server exercised it on the production bundle.
+- A rolling replacement of several API replicas can ask an old replica for a new bundle file (pattern 29). Not observed; nothing is deployed.
 - No resume of a dropped stream with `Last-Event-ID`: the old page had none either.
 - Only Chromium was run. No Firefox or Safari run.

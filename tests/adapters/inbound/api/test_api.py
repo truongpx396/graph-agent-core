@@ -20,7 +20,6 @@ from app.adapters.inbound.api.routers import chat as chat_router
 from app.adapters.inbound.api.routers import ingest as ingest_router
 from app.adapters.inbound.api.routers import system as system_router
 from app.adapters.inbound.api.routers import usage as usage_router
-from app.adapters.inbound.api.routers.system import ui
 from app.adapters.inbound.api.schemas import CancelRequest, ChatRequest, ResumeRequest
 from app.adapters.inbound.workers import ingest_streams, streams
 from app.adapters.outbound.minio import object_store as minio_object_store
@@ -245,45 +244,6 @@ class TestUsageCredits:
         result = await usage_router.usage(ctx=TEST_CTX)
 
         assert result.credits is None and reads == []
-
-
-class TestUi:
-    def test_returns_html_referencing_the_documented_sse_vocabulary(self):
-        """The page must talk to the one published endpoint/event
-        vocabulary (POST /chat/stream/queued) — never a special-cased
-        endpoint of its own (see ui()'s own docstring)."""
-        html = ui()
-        assert "<title>" in html
-        assert "/chat/stream/queued" in html
-        for event_type in ("token", "tool_start", "tool_end", "citations", "approval_required", "error"):
-            assert event_type in html
-
-    def test_sends_the_trusted_identity_headers(self):
-        """The UI must send X-Tenant-Id/X-Principal-Id itself — POST
-        /chat/stream/queued fails closed (422) without both (see
-        app/adapters/inbound/api/deps.py's get_ctx)."""
-        html = ui()
-        assert "X-Tenant-Id" in html
-        assert "X-Principal-Id" in html
-
-    def test_sends_a_domain_selector_for_the_queued_endpoints(self):
-        """The page must send X-Domain on the queued path — see
-        app/adapters/inbound/api/deps.py's get_domain, which the three queued endpoints
-        (chat_stream_queued/chat_resume/chat_cancel) depend on."""
-        html = ui()
-        assert "X-Domain" in html
-        assert 'id="domainSelect"' in html
-
-    def test_changing_the_caller_identity_starts_a_fresh_conversation(self):
-        """A conversation belongs to the tenant+principal that started it and
-        the server 404s any other caller's send on it, so switching identity
-        mid-conversation must not keep sending on the old thread id."""
-        html = ui()
-        assert "function startFreshConversation()" in html
-        for select in ("tenantEl", "principalEl"):
-            line = next(ln for ln in html.splitlines() if f"setupIdentitySelect({select}," in ln)
-            assert "onIdentityChange" in line
-        assert "startFreshConversation();" in html.split("function onIdentityChange()")[1].split("}")[0]
 
 
 class TestGetDomain:
