@@ -53,6 +53,8 @@ MAX_REPEATED_ACTIONS = 3  # consecutive IDENTICAL tool-call batches before
 # ending as no_progress — bounds convergence, not just repetition, and
 # fires independently of (usually before) MAX_ITERATIONS — see graph_edge_route_after_agent.
 MAX_CONSECUTIVE_SAME_RETRY_REASON = 2  # check_output's own convergence
+# The one retry reason a node other than check_output's family reads: `agent` adds a line to the question while it is the reason (pattern 105).
+CONTEXT_GAP_REASON = "context_gap"
 # check, mirroring MAX_REPEATED_ACTIONS but for the retry_output loop.
 # Live bug: a turn stuck on the SAME rejection reason burned 6 retry
 # rounds (~18k tokens) before MAX_TOKENS_PER_TURN cut it off, landing on
@@ -161,7 +163,7 @@ class State(TypedDict):
     # and fallback text are the registry in graph/output_checks.py. Reset every turn.
     last_retry_reason: str | None  # Set by check_output — short code
     # naming this round's rejection reason (the first key of `output_findings`:
-    # "leaked_prompt"/"too_short"/"fabricated"/"skipped_tool"/"deferred"/
+    # "leaked_prompt"/"too_short"/"fabricated"/"skipped_tool"/"context_gap"/"deferred"/
     # "uncited", in graph/output_checks.py's priority order), or None. Compared against the
     # PRIOR round's value by check_output to compute
     # retry_reason_repeat_count below — never reset mid-turn elsewhere.

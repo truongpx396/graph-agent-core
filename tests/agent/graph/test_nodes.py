@@ -1445,20 +1445,21 @@ class TestOutputCheckRegistry:
 
     def test_the_priority_order(self):
         """Leaked prompt (the only reason with a security dimension) > too short > fabricated > skipped required
-        tool > deferred > uncited. (A marker its source does not support is not a reason: it is dropped, pattern 104.)
+        tool > context gap > deferred > uncited. (A marker its source does not support is not a reason: it is dropped, pattern 104.)
         """
         assert [c.code for c in output_checks.CHECKS] == [
             "leaked_prompt",
             "too_short",
             "fabricated",
             "skipped_tool",
+            "context_gap",
             "deferred",
             "uncited",
         ]
 
     def test_every_check_has_feedback_and_a_known_trust_and_fallback(self):
         for check in output_checks.CHECKS:
-            assert callable(check.feedback)
+            assert check.feedback is None or callable(check.feedback)  # None: ask again without the pre-fetched block (pattern 105)
             assert isinstance(check.trust_on_exhaust, bool)
             assert check.fallback is None or isinstance(check.fallback, str)
 
@@ -1466,7 +1467,7 @@ class TestOutputCheckRegistry:
         """Short-but-real beats no answer, and a correct answer missing only its marker is an
         attribution nitpick. Every other reason means the CONTENT is untrustworthy."""
         trusted = {c.code for c in output_checks.CHECKS if c.trust_on_exhaust}
-        assert trusted == {"too_short", "uncited"}
+        assert trusted == {"too_short", "uncited", "context_gap"}
         assert output_checks.trusts_content(None)
 
     def test_a_leak_is_never_described_to_the_user(self):

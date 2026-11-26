@@ -563,16 +563,23 @@ class TestAnUnsupportedMarkerIsDroppedNotRetried:
         result = await g.ainvoke({"messages": [HumanMessage(content=question)]}, config=_config())
         return result, metric_value(metrics.agent_retry_total) - retries
 
-    async def test_an_honest_not_found_answer_keeps_its_text_and_loses_only_the_stray_marker(self):
+    async def test_an_answer_with_only_a_stray_marker_keeps_its_text_in_one_round(self):
+        answer = "You can reset it from the Forgot password link on the sign-in page [2]. Ask your administrator if that link is missing."
+        result, retries = await self._turn("How do I reset my password?", AIMessage(content=answer))
+        assert result["messages"][-1].content == answer.replace(" [2]", "")
+        assert result["used_citations"] == []
+        assert (result["iterations"], retries) == (1, 0)
+
+    async def test_an_honest_not_found_answer_is_never_replaced_by_the_failure_message(self):
+        """It is asked once more without the block (pattern 105), and whatever honest answer comes back is what the person reads."""
         not_found = (
             "I can't find information on how to reset your password in our support documents [2]. "
             "Could you please provide more details about the account you're trying to access?"
         )
-        result, retries = await self._turn("How do I reset my password?", AIMessage(content=not_found))
-        assert result["messages"][-1].content == not_found.replace(" [2]", "")
-        assert result["used_citations"] == []
-        assert result["iterations"] == 1  # one agent round, not retry, retry, then a failure message
-        assert retries == 0
+        again = "I don't have instructions for resetting your password. Could you open a ticket so someone can help?"
+        result, retries = await self._turn("How do I reset my password?", AIMessage(content=not_found), AIMessage(content=again))
+        assert result["messages"][-1].content == again
+        assert (result["iterations"], retries) == (2, 1)
 
     async def test_the_supported_sentences_stay_when_one_unsupported_marker_goes(self):
         """The retry that converged used to do it by deleting the caveat and the general-knowledge sentence."""

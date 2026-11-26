@@ -254,7 +254,7 @@ flowchart TD
 
 - **Order is cost order.** Moderation runs before anything that spends, the cache before compaction (an LLM call), compaction before the router, so a refused or cached turn pays for none of them (patterns 25, 22, 41, 68).
 - **`graph_edge_route_after_agent` checks the budgets first**, whatever the model said: iterations, tokens, dollars and repeated identical calls all end in `no_answer` (patterns 10, 34, 35). Anything not `read_only` goes to `human_approval` and no flag skips it (patterns 8, 15).
-- **`check_output` is a registry of checks** (leaked prompt, too short, fabricated, uncited, a skipped required tool, ...), and `retry_output` loops back to `agent` with a corrective message tagged as a retry artifact so it is never mistaken for the person's words (pattern 5).
+- **`check_output` is a registry of checks** (leaked prompt, too short, fabricated, uncited, a skipped required tool, ...), and `retry_output` loops back to `agent` with a corrective message tagged as a retry artifact so it is never mistaken for the person's words (pattern 5). One check, `context_gap`, sends no message: it removes the answer and the pre-fetched block and asks again (pattern 105).
 - **The two finish steps run in parallel**, and the cache write is skipped when the turn called a non-read-only tool (pattern 22).
 - **`retrieve_context` is optional per domain:** a manifest with `prefetch="never"` leaves it out of that domain's graph (none does today), and the model then sees no pre-fetched documents or memories (pattern 20).
 - A nested `run_subagent` run builds the same graph with `SUBAGENT_PROFILE`: no cache pair, follow-ups, compaction or router. `GraphProfile` is in `app/agent/graph/build.py`.

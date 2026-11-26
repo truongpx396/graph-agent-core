@@ -82,6 +82,24 @@ def defers_instead_of_acting(content: str) -> bool:
     return bool(_TOOL_INTENT_RE.search(content) or _PERMISSION_SEEKING_RE.search(content))
 
 
+# A sentence that says the material the model was handed does not have what was asked. A closed list of three shapes, taken from the answers qwen2.5:7b
+# actually wrote (docs/GRAPH_PATTERNS.md pattern 105): "<the documents> do not provide ...", "I can't find ... in <the documents>" and "no information ...
+# in <the documents>". English only, like the other cue lists here; a miss just leaves today's answer in place.
+_SOURCE_NOUN = r"(?:(?:retrieved|provided|given|supplied)\s+(?:documents?|content|information|context|text)|retrieval|documents?|documentation|knowledge\s?base)"
+_SOURCE_PHRASE = rf"(?:the|these|this|our|my)\s+(?:\w+\s+){{0,2}}?{_SOURCE_NOUN}"
+_CONTEXT_GAP_RE = re.compile(
+    rf"\b{_SOURCE_NOUN}\s+(?:does(?:n't| not)|do(?:n't| not)|did(?:n't| not))\s+(?:\w+\s+){{0,2}}?(?:provide|contain|include|mention|specify|have|list|cover|address|say)\b"
+    rf"|\bi\s+(?:can(?:'t|not| not)|could(?:n't| not)|do(?:n't| not)|am unable to|was(?:n't| not) able to)\s+(?:find|see|have|locate)\b[^.!?\n]{{0,100}}?\b(?:in|from|within)\s+{_SOURCE_PHRASE}\b"
+    rf"|\bno\s+(?:\w+\s+){{0,2}}?(?:information|details?|mention)\b[^.!?\n]{{0,100}}?\b(?:in|from|within)\s+{_SOURCE_PHRASE}\b",
+    re.IGNORECASE,
+)
+
+
+def admits_context_gap(sentence: str) -> bool:
+    """True when `sentence` says the documents it was given do not have what was asked for."""
+    return bool(_CONTEXT_GAP_RE.search(sentence.replace("\u2019", "'")))
+
+
 # A sentence that continues an offer ("If so, we can use a tool designed for that."), so it goes with
 # the offer when that is cut. Short on purpose: a long one ("If you want the list, it is: ...") can
 # carry the real answer.
