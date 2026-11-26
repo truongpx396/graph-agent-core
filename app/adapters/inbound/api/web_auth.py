@@ -1,18 +1,20 @@
-"""The built-in web page's sign-in, server side (specs/018): what the page is told about the mode it runs in, and
-the script that signs in. The page (`app/adapters/inbound/api/static/index.html`) is one file; its sign-in is
-`/static/auth.js`, which needs to know whether the API is in `identity` mode (a token is needed, the Tenant
-and Principal pickers are meaningless) or `headers` mode (unchanged), and in identity mode where the
-authorization server is. The smallest way to tell it is a <meta> tag the server writes into the page it
-already renders: no extra request before the first, no route to classify, no cache.
+"""The built-in web page, server side (pattern 29; specs/023): where the built web client is, and what it is told about sign-in (specs/018).
 
-The tag carries no secret: the authorization server's address, the audience, the scope and the prefix of a
-tenant's client id. The value is HTML-escaped, so a setting containing a quote can't break out of the
-attribute.
+The page is the React application in `web/`, built to static files (`make web-build`; the Dockerfile builds it into the image). `/` is its
+`index.html` and `/static/assets/` its bundle, both public at the front door. The page needs to know whether the API is in `identity` mode
+(a token is needed, the Tenant and Principal pickers are meaningless) or `headers` mode, and in identity mode where the authorization server
+is. The smallest way to tell it is a <meta> tag the server writes into the page it serves: no extra request before the first, no route to
+classify, no cache.
+
+The tag carries no secret: the authorization server's address, the audience, the scope and the prefix of a tenant's client id. The value is
+HTML-escaped, so a setting containing a quote can't break out of the attribute.
 """
 import html
 import json
 from pathlib import Path
 from typing import Any
+
+from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 
@@ -20,7 +22,18 @@ from app.core.config import settings
 # so), which is how the page finds the client of the organization a person types without being told every tenant's id in advance.
 CLIENT_ID_PREFIX = "api-"
 PLACEHOLDER = "__AGENT_AUTH__"
-SCRIPT_PATH = Path(__file__).parent / "static" / "auth.js"
+# The same relative place in a checkout and in the image (/app/web/dist).
+WEB_DIST = Path(__file__).resolve().parents[4] / "web" / "dist"
+
+
+class BuiltAssets(StaticFiles):
+    """The bundle the page loads. An unbuilt checkout answers 404 per file; StaticFiles itself raises (a 500) when its directory is missing."""
+
+    def __init__(self, directory: Path) -> None:
+        super().__init__(directory=directory, check_dir=False)
+
+    async def check_config(self) -> None:
+        return None
 
 
 def page_config() -> dict[str, Any]:
@@ -39,7 +52,3 @@ def page_config() -> dict[str, Any]:
 def render(page: str) -> str:
     """The page with its placeholder replaced by the (escaped) configuration."""
     return page.replace(PLACEHOLDER, html.escape(json.dumps(page_config(), separators=(",", ":")), quote=True))
-
-
-def script() -> str:
-    return SCRIPT_PATH.read_text(encoding="utf-8")

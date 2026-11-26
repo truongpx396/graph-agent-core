@@ -1,7 +1,5 @@
 """Liveness, readiness and the built-in web UI — the endpoints that need no caller identity."""
-from pathlib import Path
-
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import HTMLResponse
 
 from app.adapters.inbound.api import (
@@ -12,25 +10,24 @@ from app.adapters.inbound.api.schemas import HealthResponse, ReadinessResponse
 
 router = APIRouter()
 
-_UI_HTML_PATH = Path(__file__).parent.parent / "static" / "index.html"
-
 
 @router.get("/", response_class=HTMLResponse, tags=["web"])
 def ui() -> str:
-    """The built-in web UI (pattern 29) — a single self-contained page, no
-    build step, no CDN dependency. Talks only to `POST /chat/stream/queued`'s
-    SSE vocabulary, never a special-cased endpoint of its own. Read from
-    disk per request (not cached) so editing the file and refreshing is
-    enough during development — this isn't a hot path.
+    """The built-in web UI (pattern 29): the web client in `web/`, built to
+    static files, with no third-party script. It talks only to the published
+    chat, session and ingest endpoints. 503 when the client has not been
+    built (`make web-build`; the Docker image builds it). Read from disk per
+    request (not cached), so a rebuild and a refresh is enough during
+    development — this isn't a hot path.
     """
-    return web_auth.render(_UI_HTML_PATH.read_text(encoding="utf-8"))
-
-
-@router.get("/static/auth.js", include_in_schema=False)
-def ui_sign_in_script() -> Response:
-    """The page's sign-in (authorization code with PKCE; see app/adapters/inbound/api/web_auth.py). Public by design: it is code, not data, and it must load
-    BEFORE anyone can sign in. Hidden from the OpenAPI document because it is part of the page, not of the API. Read per request, like the page."""
-    return Response(web_auth.script(), media_type="text/javascript", headers={"Cache-Control": "no-cache"})
+    try:
+        page = (web_auth.WEB_DIST / "index.html").read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="The web client is not built. Run `make web-build` (needs Node 22); the Docker image builds it.",
+        ) from exc
+    return web_auth.render(page)
 
 
 @router.get("/health", response_model=HealthResponse, tags=["health"])

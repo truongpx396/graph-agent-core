@@ -10,8 +10,8 @@ Best effort by design: whatever calls this must never let it replace the failure
 """
 from typing import Any
 
-# `.tool-activity-line` text is "🔧 tool({args})" while running and "✓ tool({args})" once done (index.html:
-# addToolActivityLine / markToolActivityDone); `.approval-question` is the Approve/Reject box's own label.
+# `.tool-activity-line` text is "🔧 tool({args})" while running and "✓ tool({args})" once done, and `.approval-question` is the
+# Approve/Reject box's own label (web/src/features/chat/ui/AssistantMessage.tsx).
 _TRANSCRIPT_JS = """() => [...document.querySelectorAll('#messages .msg')].map((message) => {
   const text = (node) => (node ? node.textContent.trim() : '');
   if (!message.classList.contains('assistant')) {

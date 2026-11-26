@@ -13,11 +13,12 @@ export interface paths {
         };
         /**
          * Ui
-         * @description The built-in web UI (pattern 29) — a single self-contained page, no
-         *     build step, no CDN dependency. Talks only to `POST /chat/stream/queued`'s
-         *     SSE vocabulary, never a special-cased endpoint of its own. Read from
-         *     disk per request (not cached) so editing the file and refreshing is
-         *     enough during development — this isn't a hot path.
+         * @description The built-in web UI (pattern 29): the web client in `web/`, built to
+         *     static files, with no third-party script. It talks only to the published
+         *     chat, session and ingest endpoints. 503 when the client has not been
+         *     built (`make web-build`; the Docker image builds it). Read from disk per
+         *     request (not cached), so a rebuild and a refresh is enough during
+         *     development — this isn't a hot path.
          */
         get: operations["ui__get"];
         put?: never;
@@ -321,8 +322,8 @@ export interface paths {
          * Chat Session Pending Approval
          * @description Lets the session switcher re-show the approve/reject UI for a thread
          *     that's still paused at human_approval, instead of it looking idle —
-         *     `switchToSession` (index.html) calls this alongside .../messages on
-         *     every switch. Same `session_belongs_to` authorization boundary as
+         *     the web client calls this alongside .../messages on every switch
+         *     (web/src/features/sessions/openSession.ts). Same `session_belongs_to` authorization boundary as
          *     that endpoint, and for the same reason (get_pending_approval itself
          *     has no tenant/principal/domain of its own to check).
          */

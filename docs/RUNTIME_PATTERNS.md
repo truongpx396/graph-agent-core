@@ -21,10 +21,12 @@ OpenTelemetry counters and histograms (`app/core/metrics.py`) give the "how ofte
 - **Gap:** a SIGKILL loses unflushed metrics.
 
 ### 29. Built-in web UI
-One self-contained HTML file (`app/adapters/inbound/api/static/index.html`, no build step, no CDN) at `GET /`, talking only to `POST /chat/stream/queued`. It uses `fetch()`, not `EventSource`, because the endpoint is POST and needs identity headers.
+The client in `web/` (React, TypeScript, Vite; [specs/023](../specs/023-web-client/plan.md)), built to static files: the API serves `index.html` at `GET /` and the bundle under `/static/assets/` (both public at the front door), with no third-party script. It talks only to the published endpoints and renders only the documented stream events, with types generated from `openapi.json`. It uses `fetch()`, not `EventSource`, because the endpoint is POST and needs identity headers.
 - **Bug:** sync checkpointer calls raised `asyncio.InvalidStateError` on a live server; they are `aupdate_state`/`aget_state` now. A `MemorySaver` suite could not have caught it.
 - **Bug:** a transcript was read whole. `GET .../messages` takes `limit` (1-500) and `before`, and the page loads the last 50 (R27).
-- **Replacement:** `web/` (React, TypeScript, Vite; [specs/023](../specs/023-web-client/plan.md)) has the same screens and is not served yet. It exists because the single file could not be type-checked or unit-tested; reading it for the rewrite found seven bugs, listed in the plan.
+- **Bug:** one hand-written 2,000-line HTML file could not be type-checked or unit-tested, and seven bugs sat in state shared between its handlers (an approval pause left the rest of the answer styled as a draft; events from a left conversation ended the next one's turn; the full list is in [specs/023/plan.md](../specs/023-web-client/plan.md)). The turn is now a pure event reducer inside feature modules whose imports a test checks.
+- **Gap:** a dropped stream is not read on with `Last-Event-ID`.
+- **Gap:** bundle file names carry a content hash, so while several API replicas are being replaced a page from a new one can ask an old one for a file it does not have (not observed; no deploy has run).
 
 ### 30. Canonical error envelope
 One shape, `{code, message, details}`, from one `ErrorCode` enum (`app/core/errors.py`) for every SSE `error` event and CLI error. `internal_error_envelope(exc)` returns a fixed message plus `error_class`, never `str(exc)`.

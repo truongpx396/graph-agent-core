@@ -1,4 +1,4 @@
-"""Browser E2E against the built-in web UI (app/adapters/inbound/api/static/index.html), the one client this app ships that a
+"""Browser E2E against the built-in web UI (the client in web/, served from web/dist), the one client this app ships that a
 Python-level test can't drive, since its job is a real browser's `fetch()`-based SSE parsing. Needs
 `real_stack` (tests/live/conftest.py): the page calls `POST /chat/stream/queued` and `POST /chat/resume`,
 which work only through the real Redis queue and a real agent-worker.
@@ -20,6 +20,7 @@ can infer intent.
 """
 import re
 import time
+from pathlib import Path
 
 import pytest
 
@@ -41,6 +42,16 @@ Page = playwright_sync_api.Page
 expect = playwright_sync_api.expect
 
 pytestmark = pytest.mark.e2e
+_BUILT_PAGE = Path(__file__).resolve().parents[2] / "web" / "dist" / "index.html"
+
+
+@pytest.fixture(autouse=True)
+def _the_web_client_is_built(request: pytest.FixtureRequest) -> None:
+    """A test that loads the real page needs it built, or every selector just times out. A failure, not a skip: CI builds it."""
+    uses_the_page = {"real_stack", "real_stack_with_retrieval"} & set(request.fixturenames)
+    # The real directory the API subprocess serves, not `web_auth.WEB_DIST`: in this process every test sees a stand-in (tests/conftest.py).
+    if uses_the_page and not _BUILT_PAGE.is_file():
+        pytest.fail("the web client is not built: run `make web-build` first (`make test-live` and CI's test-live job do)")
 
 RESPONSE_TIMEOUT_MS = 210_000
 # Comfortably above tests/live/conftest.py's own REQUEST_TIMEOUT_SECONDS
@@ -56,9 +67,9 @@ MULTI_STEP_RESPONSE_TIMEOUT_MS = 600_000
 # length is what RESPONSE_TIMEOUT_MS / MULTI_STEP_RESPONSE_TIMEOUT_MS budget; this is only the render lag.
 SETTLE_MS = 10_000
 
-# The page's own two ways of saying "this turn is over": `finishTurn()` re-enables Send (done or error), and a
-# pause for approval renders the Approve/Reject box (app/adapters/inbound/api/static/index.html: `send()` disables Send
-# synchronously, so right after a click "enabled" really means "finished", not "not started yet").
+# The page's own two ways of saying "this turn is over": Send is enabled again (done or error), and a pause for
+# approval renders the Approve/Reject box (web/src/features/chat/model/store.ts: `send()` marks the turn in flight
+# before its first await, so right after a click "enabled" really means "finished", not "not started yet").
 _TURN_IS_OVER = "() => !document.getElementById('send').disabled || document.querySelector('.approval') !== null"
 
 
@@ -106,16 +117,8 @@ def test_a_mutating_tool_call_pauses_for_approval_and_resumes_on_approve(
 
     answer = page.locator(".msg.assistant .answer-text").last
     expect(answer).to_be_visible(timeout=RESPONSE_TIMEOUT_MS)
-    # No explicit timeout here used to mean Playwright's 5s default — real
-    # bug, caught live: `.answer-text` becomes visible as soon as the FIRST
-    # streamed chunk arrives, not when the turn actually finishes; the
-    # Approve button is only removed on the turn's terminal `done`/`error`
-    # event (see index.html's own handleEvent), which can trail well behind
-    # that first chunk once post-approval synthesis itself takes a while
-    # (qwen2.5:3b under this fixture's CPU-only Ollama container — see
-    # tests/live/conftest.py's own REQUEST_TIMEOUT_SECONDS comment). Always
-    # racy in theory; only ever masked by how fast the old 1.5b model's
-    # synthesis finished after that first chunk.
+    # The box goes as soon as a decision is clicked (so a second click cannot send a second one); the long timeout is
+    # for a slow CPU-only model, where the first streamed chunk can be a long way off.
     expect(approve_button).not_to_be_visible(timeout=RESPONSE_TIMEOUT_MS)
 
 
@@ -144,8 +147,8 @@ def test_a_read_only_tool_call_returns_real_data(page: Page, real_stack: str):
 
 def test_a_grounded_answer_shows_a_real_citation(page: Page, real_stack_with_retrieval: str):
     """search_docs against a REAL embedding + a REAL seeded Qdrant (real_stack_with_retrieval, backed by
-    scripts/tools/seed.py's sample docs) — proves retrieval and the citations UI (`renderCitations`,
-    app/adapters/inbound/api/static/index.html) work end to end, not just that search_docs returns SOMETHING.
+    scripts/tools/seed.py's sample docs) — proves retrieval and the citations UI
+    (web/src/features/chat/ui/AssistantMessage.tsx) work end to end, not just that search_docs returns SOMETHING.
     """
     page.goto(real_stack_with_retrieval)
 

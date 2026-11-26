@@ -170,8 +170,8 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
-      - name: The generated API types are openapi.json's (regenerating changes nothing)
-        run: npm run gen:api && git diff --exit-code -- src/shared/api/schema.gen.ts
+      - name: The generated API types are openapi.json's (`make web-api` after `make openapi`)
+        run: npm run check:api
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
@@ -340,6 +340,14 @@ jobs:
           pytest-playwright==0.7.1
       # The billing package, as in test-integration (see the comment there): a process this job starts does not see pytest's `pythonpath`.
       - run: pip install --no-deps ./packages/billing
+      # The page the `e2e` tests drive: the API serves it from web/dist, as the image does.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci && npm run build
+        working-directory: web
       # For this job's OWN `e2e` browser tests (pytest-playwright driving
       # the built-in web UI) — unrelated to crawl4ai (self-provisioned via
       # testcontainers, see above), but this job still needs a real browser
@@ -834,8 +842,14 @@ jobs:
           from app.agent.tools import skill_catalog as skills
           from app.agent.tools import subagent_catalog as subagents
           from app.adapters.outbound.mcp import sandbox_tools
+          from app.adapters.inbound.api import web_auth
 
           problems = []
+          page = web_auth.WEB_DIST / "index.html"
+          if not page.is_file() or web_auth.PLACEHOLDER not in page.read_text(encoding="utf-8"):
+              problems.append(f"the built web page is missing or has no sign-in placeholder ({page}): GET / would be a 503")
+          if not list((web_auth.WEB_DIST / "assets").glob("*.js")):
+              problems.append("the web client's bundle is missing from the image")
           if not skills.load_skills():
               problems.append("the skill catalog is empty (the skills/ folders under app/domains are missing from the image)")
           if not subagents.load_subagents():

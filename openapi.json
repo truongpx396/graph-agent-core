@@ -22,7 +22,7 @@
           "web"
         ],
         "summary": "Ui",
-        "description": "The built-in web UI (pattern 29) — a single self-contained page, no\nbuild step, no CDN dependency. Talks only to `POST /chat/stream/queued`'s\nSSE vocabulary, never a special-cased endpoint of its own. Read from\ndisk per request (not cached) so editing the file and refreshing is\nenough during development — this isn't a hot path.",
+        "description": "The built-in web UI (pattern 29): the web client in `web/`, built to\nstatic files, with no third-party script. It talks only to the published\nchat, session and ingest endpoints. 503 when the client has not been\nbuilt (`make web-build`; the Docker image builds it). Read from disk per\nrequest (not cached), so a rebuild and a refresh is enough during\ndevelopment — this isn't a hot path.",
         "operationId": "ui__get",
         "responses": {
           "200": {
@@ -1261,7 +1261,7 @@
           "sessions"
         ],
         "summary": "Chat Session Pending Approval",
-        "description": "Lets the session switcher re-show the approve/reject UI for a thread\nthat's still paused at human_approval, instead of it looking idle —\n`switchToSession` (index.html) calls this alongside .../messages on\nevery switch. Same `session_belongs_to` authorization boundary as\nthat endpoint, and for the same reason (get_pending_approval itself\nhas no tenant/principal/domain of its own to check).",
+        "description": "Lets the session switcher re-show the approve/reject UI for a thread\nthat's still paused at human_approval, instead of it looking idle —\nthe web client calls this alongside .../messages on every switch\n(web/src/features/sessions/openSession.ts). Same `session_belongs_to` authorization boundary as\nthat endpoint, and for the same reason (get_pending_approval itself\nhas no tenant/principal/domain of its own to check).",
         "operationId": "chat_session_pending_approval_chat_sessions__thread_id__pending_approval_get",
         "parameters": [
           {

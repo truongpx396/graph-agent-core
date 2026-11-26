@@ -3,8 +3,9 @@
 The browser UI of Graph Agent Core: React, TypeScript, Vite, Tailwind, TanStack Query (server state), Zustand (client state), oxlint and
 Vitest. It talks only to the HTTP API in [`openapi.json`](../openapi.json), and renders only the documented stream events.
 
-**Not served yet.** `GET /` still serves `app/adapters/inbound/api/static/index.html`. This app has the same screens and takes over in a
-follow-up change ([specs/023](../specs/023-web-client/plan.md)).
+It is the page the API serves ([specs/023](../specs/023-web-client/plan.md)): `GET /` is `dist/index.html`, with the sign-in mode written
+into its `<meta name="agent-auth">` tag by `app/adapters/inbound/api/web_auth.py`, and the bundle is under `/static/assets/` (public at
+the front door). The Docker image builds it; on the host, `make web-build` before `make serve`.
 
 ## Run it
 
@@ -17,7 +18,7 @@ make web-dev            # http://localhost:5173, hot reload; proxies /chat, /ing
 `WEB_API_TARGET=http://host:port make web-dev` points at another API. An API in `identity` mode answers the dev server with 401: sign-in
 redirects to the front door's own address, so it can only be tried there.
 
-`make web-check` runs what CI runs: lint, types, tests, build.
+`make web-check` runs what CI runs: the generated API types are fresh, lint, type check, tests, build.
 
 ## Layout
 
@@ -51,7 +52,8 @@ src/
 
 ### The API's types
 
-`src/shared/api/schema.gen.ts` is generated from `../openapi.json`: after `make openapi`, run `make web-api` (CI fails while it is stale).
+`src/shared/api/schema.gen.ts` is generated from `../openapi.json`: after `make openapi`, run `make web-api` (CI fails while it is stale, a
+changed route description included, since the file carries them).
 `contract.test.ts` fails when a stream gains an event type the client does not handle.
 
 ### Names the browser tests use

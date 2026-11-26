@@ -324,7 +324,7 @@ def qdrant_url(scaled_stack) -> str:
 def _parse_final_answer(sse_text: str) -> str:
     """Concatenates every `"token"` event's content from a raw
     POST /chat/stream/queued SSE response body — the same shape
-    app/adapters/inbound/api/static/index.html's own `pumpSSE`/`handleEvent` parse, just
+    the web client's own parser (web/src/shared/api/sse.ts) reads, just
     without needing a real browser here."""
     answer = ""
     for line in sse_text.splitlines():

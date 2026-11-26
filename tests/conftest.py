@@ -6,6 +6,9 @@ be up.
   `GraphDeps`. A test that cares about a retrieved or cached value injects its own fake
   (`GraphDeps(search_docs=fake)`, `GraphDeps(cache_get=fake, ...)`, or `make_graph_node_retrieve_context(fake)` /
   `make_graph_node_check_semantic_cache(fake)` at node level).
+- `stand_in_web_build`: `GET /` reads `web/dist`, a Node build a checkout may or may not have. Two tests of that
+  route passed on a machine that had built it and failed in CI, which had not. Every test is served the source
+  `web/index.html` instead; `test_web_page.py` overrides it to test the unbuilt case.
 - `mock_classification`: the model router's one live call (`app/adapters/outbound/mlservice/classification.py`, a POST to the ML
   service's /v1/decide) always sees "no answer". The usage event's model-alias lookup is guarded inside
   `usage_event_sink`, the only caller of `model_resolver.resolve_model`.
@@ -38,13 +41,16 @@ app/core/metrics.py Counter imports it rather than reaching into OTel/prometheus
 `pytest_sessionfinish` (bottom) is the cross-worker teardown for `tests/containers.py`'s Docker-backed
 services.
 """
+import shutil
+from pathlib import Path
+
 import pytest
 from opentelemetry import metrics as metrics_api
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from app import bootstrap
-from app.adapters.inbound.api import identity
+from app.adapters.inbound.api import identity, web_auth
 from app.adapters.outbound.embeddings.embedding_identity import EmbeddingIdentity
 from app.adapters.outbound.mlservice import classification as ml_classification
 from app.adapters.outbound.qdrant import qdrant_store as _qdrant_store
@@ -100,6 +106,18 @@ def metric_value(counter, **labels):
 
 async def _no_op_search(query, ctx=None):
     return "", []
+
+
+@pytest.fixture(scope="session")
+def _web_build_stand_in(tmp_path_factory) -> Path:
+    dist = tmp_path_factory.mktemp("web-dist")
+    shutil.copy(Path(__file__).resolve().parents[1] / "web" / "index.html", dist / "index.html")
+    return dist
+
+
+@pytest.fixture(autouse=True)
+def stand_in_web_build(monkeypatch, _web_build_stand_in):
+    monkeypatch.setattr(web_auth, "WEB_DIST", _web_build_stand_in)
 
 
 @pytest.fixture(autouse=True)

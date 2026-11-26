@@ -1,15 +1,15 @@
 """Can a person sign in to the built-in web page and chat, in a real browser, through the front door? `make
 authlimit-web-check` (specs/018, T062/T068).
 
-`tests/adapters/inbound/api/test_web_ui_auth.py` runs the sign-in script against a DOM stub; this runs the real page in
+`web/src/features/auth/auth.test.ts` runs the sign-in code against a fake browser; this runs the real page in
 Chromium (Playwright) against the real stack: the real Casdoor login form, the code exchange across origins
 (CORS), the front door, the API in identity mode and a worker. For each of two tenants it creates a throwaway
 user and then:
-- loads the page signed out: the sign-in box shows, the Tenant and Principal pickers are hidden;
+- loads the page signed out: the sign-in box shows, and there are no Tenant and Principal pickers;
 - signs in through Casdoor's form and lands back signed in as that person, with no code or token in the
   address bar or history, the token in sessionStorage only and nothing but the organization in localStorage;
-- asks "list the employees" and gets ONLY that tenant's rows, although the page also tries to send the OTHER
-  tenant in X-Tenant-Id (the pickers' values are dropped in identity mode and the door removes them anyway);
+- asks "list the employees" and gets ONLY that tenant's rows, with the Bearer token and neither identity header on
+  the request the browser sent (that the door removes a forged one is `make authlimit-smoke`'s to prove);
 - reloads and is still signed in; signs out and is back at the box with the conversation gone; a 401 (revoked
   token) puts it back at the box with "no longer valid".
 
@@ -59,8 +59,8 @@ async def one_tenant(browser: Any, door: Door, tenant: str, api: str) -> None:
     await page.wait_for_selector("#authBox:not([hidden])", timeout=TIMEOUT_MS)
 
     check("signed out: the sign-in box shows and says so", "Sign in" in (await page.inner_text("#authNote")), await page.inner_text("#authNote"))
-    pickers_hidden = await page.evaluate("['tenant','principal'].every(id => document.getElementById(id).closest('.identity-field').hidden)")
-    check("the Tenant and Principal pickers are hidden: who you are comes from the token", pickers_hidden)
+    no_pickers = await page.evaluate("['tenant','principal'].every(id => document.getElementById(id) === null)")
+    check("there are no Tenant and Principal pickers: who you are comes from the token", no_pickers)
 
     await sign_in(page, organization, username, password)
     who = await page.inner_text("#authWho")
@@ -77,13 +77,7 @@ async def one_tenant(browser: Any, door: Door, tenant: str, api: str) -> None:
     history_length_ok = await page.evaluate("history.length") <= 4
     check("the code was replaced in the history, not left as an entry the Back button would replay", history_length_ok)
 
-    # Make the page TRY to be the other tenant: the pickers' values are what a header-mode page would send. In identity mode they must go nowhere.
     other = next(t for t in TENANTS if t != tenant)
-    await page.evaluate(
-        "(other) => { for (const id of ['tenant','principal']) { const el = document.getElementById(id);"
-        " el.innerHTML = ''; const o = document.createElement('option'); o.value = other; o.textContent = other; el.appendChild(o); el.value = other; } }",
-        other,
-    )
     sent: list[dict[str, Any]] = []
     page.on("request", lambda req: sent.append(req.headers) if req.url.startswith(api + "/chat/stream/queued") else None)
     await page.fill("#input", "list the employees")

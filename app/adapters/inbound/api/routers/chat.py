@@ -407,8 +407,8 @@ async def chat_session_pending_approval(
 ) -> PendingApproval | None:
     """Lets the session switcher re-show the approve/reject UI for a thread
     that's still paused at human_approval, instead of it looking idle —
-    `switchToSession` (index.html) calls this alongside .../messages on
-    every switch. Same `session_belongs_to` authorization boundary as
+    the web client calls this alongside .../messages on every switch
+    (web/src/features/sessions/openSession.ts). Same `session_belongs_to` authorization boundary as
     that endpoint, and for the same reason (get_pending_approval itself
     has no tenant/principal/domain of its own to check)."""
     if not await sessions.session_belongs_to(ctx, thread_id, domain):

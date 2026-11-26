@@ -1,5 +1,5 @@
 """A channel's sign-in at the authorization server (specs/020). The CLI and the Telegram channel are clients of the front door, so each
-presents a person's access token like the web page does (app/adapters/inbound/api/static/auth.js): an OAuth authorization-code flow with PKCE at the tenant's
+presents a person's access token like the web page does (web/src/features/auth/pkce.ts): an OAuth authorization-code flow with PKCE at the tenant's
 `api-<tenant>` client, for the API's audience (RFC 8707 `resource`) and the `api:chat` scope. Nothing here knows Redis, the queue or the graph.
 
 Every Casdoor behaviour below was measured on 4.24.0 (specs/020/research.md R1), not assumed:
