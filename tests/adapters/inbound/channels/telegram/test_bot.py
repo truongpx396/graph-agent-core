@@ -607,6 +607,19 @@ class TestStreamingTheReply:
         assert api.of("edit")[-1][3] == "Hello there"
 
 
+class TestAReplacedAnswer:
+    async def test_a_retry_drops_what_came_before_so_the_message_holds_only_the_answer(self, monkeypatch):
+        """The bot ignored `retry`: a rejected or corrected answer and its replacement arrived glued together in one message."""
+        monkeypatch.setattr(settings, "telegram_stream_replies", True)
+        monkeypatch.setattr(settings, "telegram_stream_edit_interval_seconds", 30.0)
+        events = [{"type": "token", "content": "Support is free [2]."}, {"type": "retry"}, {"type": "token", "content": "Support is free."}]
+        bot, api, _, _ = make_bot(FakeDoor([events]))
+
+        await bot.handle_update({"update_id": 1, "message": message()})
+
+        assert api.of("edit")[-1][3] == "Support is free."
+
+
 class TestRun:
     async def test_refuses_to_start_without_a_bot_token(self, monkeypatch):
         monkeypatch.setattr(telegram_channel, "TELEGRAM_BOT_TOKEN", "")

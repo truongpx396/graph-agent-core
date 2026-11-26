@@ -224,3 +224,18 @@ class TestTheConversationLoop:
 
         with pytest.raises(SystemExit, match="no-such-domain"):
             await chat_channel.async_main()
+
+
+async def test_a_replaced_answer_is_marked_where_it_starts_over(capsys):
+    """The CLI ignored `retry`: the rejected text and its replacement were printed as one run-on answer."""
+
+    async def events():
+        yield {"type": "token", "content": "Support is free [2]."}
+        yield {"type": "retry"}
+        yield {"type": "token", "content": "Support is free."}
+        yield {"type": "done"}
+
+    await chat_channel._render_stream(events())
+
+    out = capsys.readouterr().out
+    assert out.index("Support is free [2].") < out.index("revising the answer") < out.rindex("Support is free.")

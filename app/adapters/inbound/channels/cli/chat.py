@@ -74,6 +74,8 @@ async def _render_stream(events: AsyncGenerator[dict[str, Any], None]) -> bool:
             t = event["type"]
             if t == "token":
                 print(event["content"], end="", flush=True)
+            elif t == "retry":
+                print(f"\n{_DIM}  [revising the answer]{_RESET}", flush=True)  # a terminal cannot take back what it printed
             elif t == "tool_start":
                 call = _format_call(event["tool"], event.get("args", {}))
                 print(f"\n{_DIM}  [▶ {call}]{_RESET}", flush=True)
