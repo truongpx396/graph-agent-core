@@ -1,6 +1,5 @@
-# Trivy exceptions for the CI `trivy` job's two HARD gates (fs and image). The full-report steps deliberately do
-# not read this file, so an exception here is still visible in the Security tab; `make trivy` does not read it
-# either, so a local scan shows everything.
+# Trivy exceptions for the HARD gates: `make trivy` (filesystem) and ci.yml's `image` job. The SARIF reports deliberately do not read this file, so
+# an exception here is still visible in the Security tab.
 #
 # Every entry needs a `statement` (why it is safe to carry) and an `expired_at` (when it comes back and fails
 # the gate again).

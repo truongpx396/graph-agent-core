@@ -1,0 +1,126 @@
+name: LLM evals
+
+# deepeval and the red team: judged by hosted models, slow, and neither gates on a score, so neither belongs on every push (deepeval was CI's most
+# frequent failure and held every deploy). Nightly, by hand, or on a pull request labelled `llm-evals` (deepeval only). A red run means something
+# broke (a crash, an unreachable model, a missing key), never that a judge disagreed: read the reasons, the summary and the artifact.
+on:
+  schedule:
+    - cron: "0 6 * * *" # 06:00 UTC daily
+  workflow_dispatch: {}
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: llm-evals-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # Faithfulness, relevancy, multi-turn behaviour and tool-call trajectory (tests/deepeval/). Every case is `flaky=True`, so a failed metric warns
+  # instead of failing. The judges, their failover chain and why there are two providers are in tests/deepeval/conftest.py.
+  deepeval:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'llm-evals')
+    runs-on: ubuntu-latest
+    timeout-minutes: 150 # usually 2-21 minutes, with a slow tail of 56-140
+    env:
+      # The model the app deploys is the target: a smaller stand-in's findings would be about the stand-in (GRAPH_PATTERNS.md pattern 48).
+      DEEPEVAL_MODEL: qwen2.5:3b
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-python
+        with:
+          requirements: requirements-lock.txt requirements-test.txt requirements-deepeval.txt
+          billing: "true"
+      # requirements-deepeval-nodeps.txt says which caps are being ignored and why that is safe.
+      - run: pip install --no-deps -r requirements-deepeval-nodeps.txt
+      # The tests start Ollama themselves (testcontainers), with this directory mounted. Same key as test-live: both models are in it.
+      - id: ollama-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/graph-agent-core-ollama-models
+          key: ollama-models-${{ runner.os }}-${{ env.DEEPEVAL_MODEL }}-nomic-embed-text
+      # `shell: bash` is what adds pipefail: with the default shell `tee`'s exit code hid three failed tests.
+      - run: make deepeval 2>&1 | tee deepeval-results.log
+        shell: bash
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # Optional backup providers: an unset secret leaves that one out of the chain.
+          PLUGSKY_API_KEY: ${{ secrets.PLUGSKY_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Optional overrides of each judge's failover models (comma-separated, `none` turns it off).
+          DEEPEVAL_JUDGE_FALLBACK_MODELS: ${{ vars.DEEPEVAL_JUDGE_FALLBACK_MODELS }}
+          DEEPEVAL_CONVERSATION_JUDGE_FALLBACK_MODELS: ${{ vars.DEEPEVAL_CONVERSATION_JUDGE_FALLBACK_MODELS }}
+      - if: ${{ !cancelled() }}
+        uses: ./.github/actions/save-ollama-cache
+        with:
+          key: ${{ steps.ollama-cache.outputs.cache-primary-key }}
+          cache-hit: ${{ steps.ollama-cache.outputs.cache-hit }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: deepeval-results-${{ github.run_id }}
+          path: deepeval-results.log
+          retention-days: 30
+          if-no-files-found: warn
+
+  # Adversarial prompts against the real target model, generated and graded by Gemini (promptfoo/redteam.yaml). `make promptfoo-redteam` carries on
+  # past a failed case (that is a finding) and fails on anything else. A full run is roughly 60-75 Gemini calls.
+  redteam:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PROMPTFOO_MODEL: qwen2.5:3b
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: GOOGLE_API_KEY is configured
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          [ -n "$GOOGLE_API_KEY" ] || { echo "::error::the GOOGLE_API_KEY secret is not set (Settings > Secrets and variables > Actions)"; exit 1; }
+      - uses: ./.github/actions/setup-python
+        with:
+          billing: "true"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - id: ollama
+        uses: ./.github/actions/ollama
+        with:
+          model: ${{ env.PROMPTFOO_MODEL }}
+      - run: make promptfoo-redteam 2>&1 | tee redteam.log
+        shell: bash
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      # A green run used to hide ten failed cases out of thirty: say the numbers where they are seen.
+      - name: Pass rates in the run summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo '### Red team (a failed case is a finding, not a broken run)'
+            echo '```'
+            sed -E 's/\x1b\[[0-9;]*m//g' redteam.log | grep -oE 'config \.[a-z]+-redteam|✓ [0-9]+ passed.*|✗ [0-9]+ failed.*' || echo 'no results in the log'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if grep -qE '✗ [1-9][0-9]* failed' redteam.log; then echo "::warning::red team cases failed: see the run summary and the artifact"; fi
+      - if: ${{ !cancelled() }}
+        uses: ./.github/actions/save-ollama-cache
+        with:
+          key: ${{ steps.ollama.outputs.cache-primary-key }}
+          cache-hit: ${{ steps.ollama.outputs.cache-hit }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: promptfoo-redteam-results-${{ github.run_id }}
+          path: promptfoo/.*-redteam-run-scratch.yaml
+          include-hidden-files: true # every scratch file is a dotfile, which upload-artifact drops by default
+          retention-days: 30
+          if-no-files-found: warn

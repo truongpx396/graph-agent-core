@@ -26,10 +26,9 @@ import pytest
 
 from tests.live.transcript import page_transcript
 
-# `pytest.importorskip`, not a plain top-level import: `playwright` is only
-# installed for `test-live`'s own CI job/`make test-live` (see
-# requirements-dev.txt) — the fast `test` job never installs it, correctly,
-# since it never runs anything e2e-marked. But pytest still IMPORTS every
+# `pytest.importorskip`, not a plain top-level import: `playwright` is a test
+# tool (requirements-test.txt), not in the lock file, so an environment with
+# only the lock has no copy. But pytest still IMPORTS every
 # test module during COLLECTION regardless of which markers end up
 # selected/deselected, so a plain `from playwright.sync_api import ...`
 # would break collection (not just this file's own tests) the moment this

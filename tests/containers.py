@@ -547,12 +547,14 @@ def ensure_ml_service() -> dict[str, str]:
 
 
 _OLLAMA_HOME = Path.home() / ".cache" / "graph-agent-core-ollama-models"
+# The same image CI's .github/actions/ollama starts (bump both): `latest` changed under a run without anyone deciding to.
+OLLAMA_IMAGE = "ollama/ollama:0.40.18@sha256:1cabd20e1762a7a8444bf4a7110b346d923cd77ab6c97c984434140638c913ec"
 
 
 def ensure_ollama(model: str, embed_model: str = "nomic-embed-text") -> dict[str, str]:
     """Real Ollama serving a real, small CHAT model plus a real embedding model in the SAME shared container: the
     expensive fixture, used only by `tests/live/`. It overrides testcontainers-python's default image pin
-    (`ollama/ollama:0.1.44`, from before Qwen2.5) with `latest`: verified (see tests/live/conftest.py) that a
+    (`ollama/ollama:0.1.44`, from before Qwen2.5) with `OLLAMA_IMAGE`: verified (see tests/live/conftest.py) that a
     current Ollama's OpenAI-compatible endpoint emits real native tool calls, the point of these tests, which
     an old pinned Ollama would silently defeat. Returns `openai_api_base` (Ollama's own `/v1`, no LiteLLM
     proxy; see GRAPH_PATTERNS.md 48), `model` (the chat model tag) and `embed_model` (the embedding model
@@ -568,7 +570,7 @@ def ensure_ollama(model: str, embed_model: str = "nomic-embed-text") -> dict[str
     `ollama_home=_OLLAMA_HOME` bind-mounts a stable HOST directory as the container's `/root/.ollama`
     (verified in `OllamaContainer.start()`: `with_volume_mapping(self.ollama_home, "/root/.ollama", "rw")`),
     so a fresh container gets both models instantly if a PRIOR run (this session's, a local one, or a CI run:
-    .github/workflows/ci.yml's `test-live`/`promptfoo`/`deepeval` jobs and redteam.yml restore this path via
+    CI's `test-live`, `promptfoo` and LLM-eval jobs restore this path via
     `actions/cache/restore` keyed on the model tag(s) and save it with .github/actions/save-ollama-cache)
     already pulled them there. Purely a speed optimization: an empty or missing directory means `pull_model`
     downloads fresh.
@@ -579,7 +581,7 @@ def ensure_ollama(model: str, embed_model: str = "nomic-embed-text") -> dict[str
         from testcontainers.ollama import OllamaContainer
 
         _OLLAMA_HOME.mkdir(parents=True, exist_ok=True)
-        container = OllamaContainer(image="ollama/ollama:latest", ollama_home=str(_OLLAMA_HOME))
+        container = OllamaContainer(image=OLLAMA_IMAGE, ollama_home=str(_OLLAMA_HOME))
         container.start()
         container.pull_model(model)  # instant if _OLLAMA_HOME already has this model — see above
         container.pull_model(embed_model)

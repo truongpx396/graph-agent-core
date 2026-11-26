@@ -11,8 +11,8 @@ the model this app deploys.
 local judge was tried first: `FaithfulnessMetric` scored a hand-verified good answer 0.0 with a `reason`
 contradicting its score. It is now `gemini-3.1-flash-lite` via deepeval's `GeminiModel`, the model
 `promptfoo/redteam.yaml` uses, so there is one offline-by-default exception and one shared key
-(`GOOGLE_API_KEY`, already a secret for `.github/workflows/redteam.yml`). It needs `google-genai`
-(requirements-dev.txt; ci.yml's `deepeval` job installs it) and fails fast with a clear message if the key is
+(`GOOGLE_API_KEY`, already a secret for `.github/workflows/llm-evals.yml`'s red team). It needs `google-genai`
+(requirements-dev.txt; llm-evals.yml installs it) and fails fast with a clear message if the key is
 unset. Used by the RAG-quality and tool-correctness files.
 
 `deepeval_conversation_judge`: a THIRD knob, Groq's `openai/gpt-oss-120b`

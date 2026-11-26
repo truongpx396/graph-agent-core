@@ -1,0 +1,7 @@
+# Static-check tools: CI's `lint` and `typecheck` jobs install this file and requirements-dev.txt includes it, so both run the same versions.
+ruff==0.16.4
+mypy==2.3.1
+# Workflow and shell linters (`make lint-workflows`).
+actionlint-py==1.7.12.25
+shellcheck-py==0.11.0.1
+zizmor==1.33.1

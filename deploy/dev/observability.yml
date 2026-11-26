@@ -156,8 +156,9 @@ services:
       - "host.docker.internal:host-gateway"   # so the Loki address resolves on native Linux Docker too
 
   # --- SonarQube Community (profile `quality`; `make sonar-up`) ---
-  # A persistent server with history and trends, which CI's ephemeral per-run `sonarqube` job (.github/workflows/ci.yml) cannot give: a GitHub
-  # runner cannot reach a local server. Opt-in for its memory cost (2 GB+ heap). Own Postgres, since SonarQube migrates its schema on upgrade.
+  # A persistent server with history and trends. Local on purpose: its quality gate judges NEW code against the last analysis, so a server that
+  # starts fresh for each CI run has nothing to compare with and passes everything (ENGINEERING_PATTERNS.md pattern 107).
+  # Opt-in for its memory cost (2 GB+ heap). Own Postgres, since SonarQube migrates its schema on upgrade.
   sonarqube-db:
     image: postgres:16
     profiles: ["quality"]
@@ -175,7 +176,7 @@ services:
       retries: 10
 
   sonarqube:
-    image: sonarqube:community
+    image: sonarqube:26.10.0.133078-community@sha256:f95aaa9016dd4e92c7d70691167a6d96dbb5d8acffd61eba1cb4335d364a7840
     profiles: ["quality"]
     restart: unless-stopped
     ports:

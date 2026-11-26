@@ -29,7 +29,7 @@ func revokeCmd(args []string) int {
 	if err != nil {
 		return fail("%v", err)
 	}
-	defer rdb.Close()
+	defer func() { _ = rdb.Close() }()
 	timeout := cfg.RedisTimeout
 	if timeout < 2*time.Second {
 		timeout = 2 * time.Second // an operator command may wait a little longer than a request may

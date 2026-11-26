@@ -14,7 +14,7 @@
 #
 # `OPENAICOMPATIBLE_API_KEY` (any non-empty value — Ollama doesn't check it)
 # must be set in the environment; see Makefile's `garak`/`garak-full`
-# targets and .github/workflows/ci.yml's `garak` job.
+# targets (manual; not in CI).
 plugins:
   generators:
     openai:

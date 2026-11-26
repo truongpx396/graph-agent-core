@@ -3,7 +3,7 @@ name: Deploy
 # Runs images CI already built, scanned and published for a commit on main. It never starts by itself: ci.yml calls it as the last job of that
 # same run (so a deploy can only follow that run's checks), and a maintainer can start it by hand to redeploy or roll back. It used to run on
 # `workflow_run`, whose `branches:` filter matches the NAME of the triggering run's branch: a pull request from a fork's `main` passed it and got
-# this repository's token and secrets (ENGINEERING_PATTERNS.md pattern 106). tests/core/test_workflows_deploy_safely.py keeps that trigger out.
+# this repository's token and secrets (ENGINEERING_PATTERNS.md pattern 106). zizmor (`make lint-workflows`) refuses that trigger.
 #
 # The automatic deploy is off until the repository variable DEPLOY_ENABLED is `true`. Terraform is not run here: creating droplets stays a
 # human-run `terraform apply`, and this only updates what runs on droplets that already exist.
@@ -113,7 +113,7 @@ jobs:
 
       # Config and compose files only, never .env: secrets live only on the droplet, created once by hand. `-R` keeps each file's repo path, so
       # the droplet mirrors the repo and the compose files' root-relative paths resolve there as they do here. A file the entry includes and
-      # this list misses fails `docker compose` at parse time (tests/core/test_workflows_deploy_safely.py compares the two).
+      # this list misses fails `docker compose` at parse time (tests/core/test_release_pipeline.py compares the two).
       # `--delete` is scoped to the two directories, never the target root, so it cannot touch the operator's .env.
       - name: Sync compose and config files to the droplet
         run: |

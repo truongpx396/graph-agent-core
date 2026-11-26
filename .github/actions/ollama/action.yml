@@ -1,0 +1,37 @@
+name: Start Ollama with a model
+description: >
+  Restores the model cache, starts a pinned Ollama container on :11434 and pulls one model. Pair it with save-ollama-cache as the job's last
+  step. A `docker run` step, not a `services:` block: service containers start before any step, so the cache restore could not reach them.
+
+inputs:
+  model:
+    description: The model to pull.
+    required: true
+
+outputs:
+  cache-primary-key:
+    description: For save-ollama-cache's `key`.
+    value: ${{ steps.cache.outputs.cache-primary-key }}
+  cache-hit:
+    description: For save-ollama-cache's `cache-hit`.
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    # restore only: the save is the job's own last step (see ../save-ollama-cache).
+    - id: cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/graph-agent-core-ollama-models
+        key: ollama-models-${{ runner.os }}-${{ inputs.model }}
+    - shell: bash
+      env:
+        MODEL: ${{ inputs.model }}
+      run: |
+        # Created as the runner before docker touches it: a root-run daemon would otherwise create it, and ~/.cache above it, owned by root.
+        mkdir -p ~/.cache/graph-agent-core-ollama-models
+        docker run -d --name ollama -p 11434:11434 -v "$HOME/.cache/graph-agent-core-ollama-models:/root/.ollama" \
+          ollama/ollama:0.40.18@sha256:1cabd20e1762a7a8444bf4a7110b346d923cd77ab6c97c984434140638c913ec
+        timeout 60 bash -c 'until docker exec ollama ollama list >/dev/null 2>&1; do sleep 1; done'
+        docker exec ollama ollama pull "$MODEL"

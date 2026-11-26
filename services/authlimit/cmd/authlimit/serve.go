@@ -91,7 +91,7 @@ func run(ctx context.Context, cfg config.Config) int {
 	if err != nil {
 		return fail("%v", err)
 	}
-	defer rdb.Close()
+	defer func() { _ = rdb.Close() }()
 
 	keys := extjwt.NewKeyCache(extjwt.KeyCacheConfig{
 		URL: cfg.JWKSURL, TTL: cfg.JWKSCacheTTL, MinRefresh: cfg.JWKSMinRefresh, Grace: cfg.JWKSStaleGrace, Timeout: cfg.JWKSFetchTimeout,
@@ -163,7 +163,7 @@ func healthcheck(args []string) int {
 	if err != nil {
 		return 1
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return 1
 	}

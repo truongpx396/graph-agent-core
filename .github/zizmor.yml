@@ -1,0 +1,6 @@
+# zizmor (`make lint-workflows`). Anything disabled here is disabled for a stated reason.
+rules:
+  # It prefers `$/path` (the workflow's own commit) to `./path` (the checked-out one). `./` is meant here: deploy.yml checks out the commit
+  # being released or rolled back to, and must run that commit's actions beside its compose files.
+  self-repository:
+    disable: true

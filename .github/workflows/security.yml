@@ -1,0 +1,124 @@
+name: Security
+
+# Called by ci.yml on every pull request and push (so `ci-ok` covers it), and on its own weekly: a CVE published today applies to a commit nobody
+# has touched. Each scan runs the same make target a developer runs (make/security.mk says what each covers and why), so the two cannot drift.
+# Images are scanned where they are built (ci.yml's `image` job); the weekly run also scans the ones production runs.
+# Strix and ZAP are not here: they attack a target, so a person starts them (strix.yml, zap.yml, or `make strix`, `make zap-baseline`).
+on:
+  workflow_call: {}
+  schedule:
+    - cron: "0 5 * * 1" # Mondays 05:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  trivy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Gate (fixable CRITICAL vulnerabilities, secrets, misconfiguration)
+        run: make trivy
+      - name: Report (HIGH and CRITICAL, unfixed ones too)
+        if: ${{ !cancelled() }}
+        run: make trivy TRIVY_FLAGS="--severity HIGH,CRITICAL --format sarif --output trivy-fs-results.sarif"
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        if: ${{ !cancelled() }}
+        continue-on-error: true # code scanning may not be enabled, and a fork's token cannot upload
+        with:
+          sarif_file: trivy-fs-results.sarif
+          category: trivy-fs
+
+  semgrep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Gate
+        run: make semgrep
+      - name: Report
+        if: ${{ !cancelled() }}
+        run: make semgrep SEMGREP_FLAGS="--sarif --output semgrep-results.sarif"
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        with:
+          sarif_file: semgrep-results.sarif
+          category: semgrep
+
+  # Terraform only (.checkov.yaml says why, and why its one skipped check is a false positive).
+  checkov:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Gate
+        run: make checkov
+      - name: Report
+        if: ${{ !cancelled() }}
+        run: checkov --config-file .checkov.yaml --output sarif --output-file-path . --soft-fail
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        with:
+          sarif_file: results_sarif.sarif
+          category: checkov
+
+  govulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: make authlimit-vuln
+
+  # What production runs, which no commit rebuilds. Scheduled and manual runs only.
+  published-images:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: published-images (${{ matrix.repository }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        repository: [graph-agent-core, graph-agent-core-ml-service, graph-agent-core-authlimit]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/${{ matrix.repository }}:latest
+          severity: CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+          exit-code: "1"

@@ -23,6 +23,7 @@ Lessons about how this repository is built and checked, not about the agent. Num
 | 101 | A backup is proved by a restore |
 | 102 | A pool's "check on checkout" can turn a restart into a stall |
 | 106 | A trigger filtered by branch name lets a fork deploy |
+| 107 | A gate has to be able to fail, and one required check stands for all of them |
 
 ### 40. Eval statistical rigor
 `scripts/checks/eval.py` has two gates: each case runs `EVAL_REPETITIONS` (5) times and passes only if `REPETITION_PASS_THRESHOLD` (80%) pass (a stochastic system graded once is a coin flip), and a grounded-claims gate over the whole set (at least 95% of markers real), computed from the runtime's own counts, never a model's opinion of itself. The thresholds are demo defaults.
@@ -80,7 +81,7 @@ An app image rebuild spent 347.7 s in `pip install`; the image carried pip, the 
 - **Hardened at runtime:** `init: true`, `no-new-privileges`, `cap_drop: ALL`, `read_only: true`, size-capped tmpfs. Running it found `crawl4ai` creating `~/.crawl4ai` on **import** (so `$HOME` is a tmpfs) and a tmpfs `/tmp` being wrong for uploads (the api gets a disk-backed volume).
 - **SBOM and provenance** are attached when CI's `image` job publishes on `main`.
 - **CI found what no local run could:** `tests/containers.py` built the ML image with the SDK's legacy builder, which rejects `RUN --mount`. It uses the CLI (BuildKit) now. A build feature is only as portable as the least capable builder anyone uses.
-- **No pytest file pins these flags as text** (it would fail on an edit, not a regression); Trivy and CI's `docker-build` read the files.
+- **No pytest file pins these flags as text** (it would fail on an edit, not a regression); Trivy and CI's `image` job read the files.
 - **Gaps:** CI has no cache-mount speed-up; images are unsigned; tmpfs sizes are chosen, not measured; the hardening ran on the dev stack, not the droplet.
 
 ### 77. An interface you may swap for a hosted one: speak its wire shape, declare every deviation, and never fill a field you cannot honestly fill
@@ -154,6 +155,24 @@ After a PgBouncer or Postgres restart every pooled connection is dead and `psyco
 `deploy.yml` ran on `workflow_run` of CI with `branches: [main]` and checked only `conclusion == 'success'`.
 - **The hole:** that filter matches the NAME of the branch the triggering run was on, and a pull request from a fork's own `main` reports `main`. The workflow then ran with this repository's token and secrets, checked out the fork's commit, built it and pushed it as `:latest`. Found by reading and by public runs of another repository; not exploited here. Never use `workflow_run` or `pull_request_target` to ship.
 - **What replaced it:** ci.yml calls `deploy.yml` as its last job on a push to main (a manual run redeploys or rolls back, after checking the commit is on main). One run builds each image, proves it, scans it and publishes that build as `:<sha>`; `:latest` moves only after every job passed, and only for main's newest commit.
-- **The gate that listed too little:** `needs` with `failure()` lets a timed-out or skipped job through, so `promote` names every job and requires each to be `success`; a test holds the list complete.
+- **The gate that listed too little:** `needs` with `failure()` lets a timed-out or skipped job through, so `promote` runs only on `ci-ok`'s `success` (107).
 - **Gaps:** if a newer commit fails CI, the older good one is not released until the next merge (run Deploy by hand with its SHA). No automatic rollback: the release fails and prints the previous SHA. The production images are pinned by hand: Dependabot does not read these compose files. Nothing has deployed yet, so the droplet path is proven only against fakes.
+
+### 107. A gate has to be able to fail, and one required check stands for all of them
+A review of CI on 2026-11-26 found controls that looked enforced and were not.
+- **A quality gate with nothing to compare:** the SonarQube job started a fresh server each run, and a first analysis has no "new code", so its gate evaluated 0 conditions: a BLOCKER bug and two CRITICAL vulnerabilities passed (26.9, probed with git blame off). The job was green 299 of 299 times, and is gone. The local server (`make sonar-up`) stays: it keeps its history, and in the same probe a second analysis on one server did fail.
+- **Required checks named a subset:** the ruleset listed 9 jobs, not authlimit, billing, the OpenAPI check or the live tests. It requires `ci-ok` now, which `needs` every job (a test holds the list complete). `scripts/tools/ci_gate.py` says what may be skipped: `openapi` on a push, the slow jobs on a documentation-only PR (a domain's `SKILL.md` and `AGENT.md` are code).
+- **Every exit code ignored:** the red team's recipes were prefixed `-`, so a crash passed like a finding, and 10-11 of 30 cases failed in green runs. Only promptfoo's 100 passes now, and the pass rates are in the run summary.
+- **A scanner pointed at the wrong thing:** authlimit's image was built with Go 1.26.9, with two reachable standard-library vulnerabilities fixed in 1.26.10 and 1.26.11. Nothing scanned for them and Dependabot did not list its Dockerfile. `make authlimit-vuln` runs govulncheck inside the image the Dockerfile builds with. Also: trivy-action ignores `severity` for SARIF unless `limit-severities-for-sarif` is set.
+- **One required check, one release path:** CI calls the make targets a developer runs, so a fix in one is a fix in both (`make test-live` still ran the one-process command CI had stopped using).
+
+Lessons that were long comments in ci.yml:
+- **Async and Playwright tests never share a pytest process** (`make/test.mk`).
+- **A `run:` step has no `pipefail`** unless it says `shell: bash`: `pytest | tee` reported three failed tests as success.
+- **Service containers start before the steps**, so a cache restore cannot reach their volume: start Ollama in a step, creating the directory as the runner first.
+- **Subprocesses need the billing package installed;** `test` and `typecheck` leave it out to prove `pythonpath` and `mypy_path` are enough.
+- **deepeval:** `--no-deps` for two caps the lock cannot meet; two judge providers because Gemini rejects the `additionalProperties` schema a `Dict` field produces; rerun only transient errors; collect `tests/deepeval` only (importing the API tests configures logging).
+- **Trivy** scans the lock file (ranges resolve to nothing) and skips `deploy/terraform` (it calls the necessary 80/443 ingress CRITICAL; Checkov owns that).
+- **Timeouts:** 28 of 300 runs (2026-10-07 to 11-08) had a job past 45 minutes, `test-integration` 20 times (healthy: 10). Each limit is at least 2.5x the longest healthy run; deepeval's sits above a slow tail of 56-140.
+- **Gaps:** the coverage floor counts lines under the hermetic tier only; only fixable CRITICAL findings gate; the monitoring images and the Ollama pin are bumped by hand; a failed nightly run is reported by GitHub's own email and nothing else.
 

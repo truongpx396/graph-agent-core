@@ -206,7 +206,7 @@ func (c *KeyCache) refreshIfAllowed(ctx context.Context) {
 	if !last.IsZero() && c.now().Sub(last) < c.minRefresh {
 		return
 	}
-	c.fetch(ctx)
+	_ = c.fetch(ctx) // fetch logs and counts its own failure; the caller serves what it has
 }
 
 // Refresh fetches now, ignoring the rate limit. Used by the background loop and at start.
@@ -251,7 +251,7 @@ func (c *KeyCache) download(ctx context.Context) (map[string]*rsa.PublicKey, err
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("key endpoint answered HTTP %d", resp.StatusCode)
 	}

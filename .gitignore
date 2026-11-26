@@ -5,6 +5,9 @@ __pycache__/
 *.pyc
 eval_runs/
 var/
+# `pytest --cov`
+.coverage
+.coverage.*
 *.sqlite3
 *.sqlite3-shm
 *.sqlite3-wal
@@ -56,8 +59,8 @@ strix_runs/
 # so there's nothing under this repo's own tree to ignore for that part.
 zap_reports/
 
-# sonar-scanner (make sonar-scan / CI's `sonarqube` job) — local scan
-# working files, regenerated every run
+# sonar-scanner (make sonar-scan) — local scan working files, regenerated
+# every run
 .scannerwork/
 .sonar/
 

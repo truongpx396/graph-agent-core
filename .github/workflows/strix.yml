@@ -1,49 +1,45 @@
 name: Strix AI Pentest
 
-# Deliberately workflow_dispatch ONLY — never push/pull_request. Strix
-# (https://github.com/usestrix/strix) actively attacks whatever target it's
-# pointed at, using a paid cloud LLM (STRIX_LLM/LLM_API_KEY below — not this
-# app's usual local-only Ollama), so running it on every push would both
-# spend real money on every commit and run an active security tool without a
-# human deliberately choosing to. See ci.yml's own header comment for the
-# fuller "why this lives in its own file" reasoning — same "maintainer runs
-# this deliberately" framing as `make eval`/`make garak-full`/`make deepeval`,
-# just enforced by the trigger type here instead of by convention.
-#
-# Needs two repo secrets before this can do anything: STRIX_LLM (e.g.
-# "anthropic/claude-sonnet-4-6") and LLM_API_KEY. Without them configured,
-# this workflow is inert — visible in the Actions tab, but nothing calls it,
-# and the run below fails fast with a clear auth error rather than silently
-# no-opping.
-#
-# Authorized use only: only ever run this against a target you own or have
-# explicit, written permission to test. Scanning this repo's own source/app
-# (the default `target` below) is exactly that case.
+# Started by hand only: Strix (https://github.com/usestrix/strix) ATTACKS its target, using a paid cloud model rather than this app's local one.
+# Only ever run it against a target you own or have written permission to test; the default, this repository's own source, is one.
+# Needs the STRIX_LLM (e.g. "anthropic/claude-sonnet-5-5") and LLM_API_KEY secrets; without them the run fails with an auth error.
+# `make strix` and `make strix-app` are the same tool on a laptop.
 on:
   workflow_dispatch:
     inputs:
       target:
-        description: "Scan target: '.' for the full source tree, or a live URL (e.g. a deployed app's base URL)"
+        description: "'.' for this source tree, or a live URL you own or have permission to test"
+        required: true
         default: "."
-        required: false
+        type: string
       scan_mode:
-        description: "'quick' (fast, CI-shaped) or 'standard' (deeper, slower)"
-        default: "quick"
-        required: false
+        description: "quick is CI-sized; standard is deeper and slower"
+        required: true
+        default: quick
+        type: choice
+        options: [quick, standard]
+
+permissions:
+  contents: read
 
 jobs:
   strix-pentest:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Install Strix
-        run: curl -sSL https://strix.ai/install | bash
+      # A pinned release from PyPI, not `curl https://strix.ai/install | bash`, which ran whatever that address served in a job holding an
+      # LLM key. Bumped by hand: Dependabot does not read a pipx install.
+      - run: pipx install strix-agent==1.7.0
 
       - name: Run Strix
         env:
           STRIX_LLM: ${{ secrets.STRIX_LLM }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-        run: strix -n -t "${{ inputs.target }}" --scan-mode "${{ inputs.scan_mode }}"
+          TARGET: ${{ inputs.target }}
+          SCAN_MODE: ${{ inputs.scan_mode }}
+        run: strix -n -t "$TARGET" --scan-mode "$SCAN_MODE"

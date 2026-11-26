@@ -1,8 +1,8 @@
-"""The test runner is a dev dependency: the runtime requirements and the lock file (what the app image installs) name no test tool.
+"""The test runner is a dev dependency, pinned in ONE place: `requirements-test.txt`.
 
 `pytest` and `pytest-asyncio` sat in `requirements.txt`, so the lock file carried them and the production image shipped a test runner (and its
-`pluggy`, `iniconfig`) it never runs. CI's pytest jobs install the lock, so each now names both pins itself; they must equal
-`requirements-dev.txt`, or a local run and CI test against different runners.
+`pluggy`, `iniconfig`) it never runs. Then each CI job that runs tests named the pins again on its own install line, five copies kept equal by
+a test. Now the CI jobs and `requirements-dev.txt` read the same file; these checks keep it that way.
 """
 import re
 from pathlib import Path
@@ -10,10 +10,13 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-CI = ROOT / ".github" / "workflows" / "ci.yml"
+WORKFLOWS = ROOT / ".github" / "workflows"
 # Installs only `./packages/billing[test]`, whose own pyproject pins its test tools (the job exists to prove the package needs nothing else).
-OWN_TEST_EXTRA = {"billing-package"}
-RUNS_PYTEST = re.compile(r"(?m)^\s*(?:[A-Z_]+=\S+\s+)*pytest\s")
+OWN_TEST_EXTRA = {"ci.yml:billing-package"}
+# A step that runs the Python tests: `pytest ...`, or a make target that does.
+RUNS_PYTHON_TESTS = re.compile(r"(?m)^\s*(?:pytest\s|make (?:test(?:-[a-z0-9-]+)?|deepeval)\b)")
+# What the hermetic suite imports that the lock file does not carry, and one more: the ML service image installs prometheus-client itself.
+SHARED_PINS = {"services/ml-service/requirements.txt": ("prometheus-client",), "requirements-deepeval.txt": ("ollama", "google-auth")}
 
 
 def _requirement_names(filename: str) -> set[str]:
@@ -25,30 +28,42 @@ def _requirement_names(filename: str) -> set[str]:
     return names
 
 
-def _dev_pins() -> dict[str, str]:
-    text = (ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
-    pins = {name: re.search(rf"(?m)^{name}==(\S+)$", text) for name in ("pytest", "pytest-asyncio")}
-    assert all(pins.values()), f"requirements-dev.txt must pin pytest and pytest-asyncio exactly: {pins}"
-    return {name: match.group(1) for name, match in pins.items()}
+def _pin(filename: str, package: str) -> str:
+    found = re.search(rf"(?m)^{re.escape(package)}==(\S+)$", (ROOT / filename).read_text(encoding="utf-8"))
+    assert found, f"{filename} must pin {package} exactly"
+    return found.group(1)
 
 
 def test_the_runtime_requirements_and_the_lock_file_name_no_pytest_package():
     for filename in ("requirements.txt", "requirements-lock.txt"):
         found = sorted(n for n in _requirement_names(filename) if n == "pytest" or n.startswith("pytest-"))
-        assert not found, f"{filename} is what the app image installs; a test tool belongs in requirements-dev.txt: {found}"
+        assert not found, f"{filename} is what the app image installs; a test tool belongs in requirements-test.txt: {found}"
 
 
-def test_each_ci_job_that_runs_pytest_pins_what_requirements_dev_pins():
-    pins = _dev_pins()
-    jobs = yaml.safe_load(CI.read_text(encoding="utf-8"))["jobs"]
+def test_every_job_that_runs_the_tests_installs_requirements_test():
     checked = []
-    for name, job in jobs.items():
-        runs = "\n".join(step["run"] for step in job.get("steps", []) if "run" in step)
-        if name in OWN_TEST_EXTRA or not RUNS_PYTEST.search(runs):
-            continue
-        checked.append(name)
-        for tool, version in pins.items():
-            assert re.search(rf"(?<![\w-]){re.escape(tool)}=={re.escape(version)}(?![\w.])", runs), (
-                f"ci.yml job `{name}` runs pytest but does not install {tool}=={version} (the lock file no longer carries it)"
-            )
-    assert {"test", "test-integration", "test-live", "deepeval"} <= set(checked), f"pytest jobs found: {checked}"
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        for name, job in yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"].items():
+            steps = job.get("steps", [])
+            job_id = f"{path.name}:{name}"
+            if job_id in OWN_TEST_EXTRA or not any(RUNS_PYTHON_TESTS.search(step.get("run", "")) for step in steps):
+                continue
+            checked.append(job_id)
+            installed = " ".join(step.get("with", {}).get("requirements", "") for step in steps)
+            assert "requirements-test.txt" in installed.split(), f"{job_id} runs the tests but does not install requirements-test.txt"
+    assert {"ci.yml:test", "ci.yml:test-integration", "ci.yml:test-live", "llm-evals.yml:deepeval"} <= set(checked), f"test jobs found: {checked}"
+
+
+def test_the_dev_requirements_include_the_files_ci_installs_and_pin_nothing_of_theirs_again():
+    dev = (ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
+    for filename in ("requirements-test.txt", "requirements-lint.txt", "requirements-deepeval-nodeps.txt"):
+        assert f"\n-r {filename}\n" in dev, f"requirements-dev.txt must include {filename}"
+        again = _requirement_names(filename) & _requirement_names("requirements-dev.txt")
+        assert not again, f"pinned twice, in requirements-dev.txt and {filename}: {sorted(again)}"
+
+
+def test_a_package_pinned_in_two_files_has_one_version():
+    for other, packages in SHARED_PINS.items():
+        base = "requirements-test.txt" if "prometheus-client" in packages else "requirements-dev.txt"
+        for package in packages:
+            assert _pin(other, package) == _pin(base, package), f"{package} differs between {base} and {other}"

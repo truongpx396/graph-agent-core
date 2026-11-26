@@ -742,7 +742,7 @@ The quickstart's `requirements.txt` is the app alone. `make test`, `make lint` a
 
 | Tier | Command | Needs | In CI | Proves |
 |---|---|---|---|---|
-| 🧪 Unit | `make test` | nothing (fake LLM, mocked stores) | gate | Graph, routing, tools, isolation, idempotency logic |
+| 🧪 Unit | `make test` | nothing (fake LLM, mocked stores) | gate, with a coverage floor | Graph, routing, tools, isolation, idempotency logic |
 | 🐳 Integration | `make test-integration` | Docker (testcontainers; **not** `make up`) | gate | Real Postgres, Redis, Qdrant, ml-service, crawl4ai |
 | 🌐 Live | `make test-live` | Docker + a small real Ollama model | gate, except advisory tests | Full app + worker stack and a Playwright browser run |
 | 🩻 Tool-call probe | `make probe-tools` | native Ollama | ~2 min | The chat model emits usable tool calls (none silently dropped) and doesn't loop |
@@ -750,9 +750,9 @@ The quickstart's `requirements.txt` is the app alone. `make test`, `make lint` a
 | 💳 Billing package | `make test-billing-package` | nothing | own job | The package alone, with the app off the path |
 | 📝 Prompt checks | `make promptfoo` | Ollama | fast subset | Domain prompts still refuse to fabricate refunds, changes or sent messages |
 | 🔄 Model swap | `make model-eval KIND=… CANDIDATE=…` | the model or service | manual | A candidate embedding, reranker, screening or routing model against the recorded baseline; read the report's `controls` first ([evals/README.md](evals/README.md)). `make model-eval-verify` needs nothing |
-| 🎯 Quality | `make deepeval` | Docker, `GOOGLE_API_KEY`, `GROQ_API_KEY` | non-blocking | Faithfulness, relevancy, multi-turn consistency, tool trajectory |
+| 🎯 Quality | `make deepeval` | Docker, `GOOGLE_API_KEY`, `GROQ_API_KEY` | nightly, or a PR labelled `llm-evals` | Faithfulness, relevancy, multi-turn consistency, tool trajectory |
 | 🏁 Release gate | `make eval` | `make up`, `pull-models`, `ingest` | manual | Golden set, 5 repetitions per case, grounded-claims threshold |
-| 🔴 Red team | `make promptfoo-redteam`, `make garak` | Ollama; red team also `GOOGLE_API_KEY` | manual | Adversarial prompts; raw-model jailbreak resistance |
+| 🔴 Red team | `make promptfoo-redteam`, `make garak` | Ollama; red team also `GOOGLE_API_KEY` | red team nightly; garak manual | Adversarial prompts; raw-model jailbreak resistance |
 
 Also manual: `make test-sandbox` (a real `opensandbox-mcp` round trip), `make test-provider-sandbox` (a payment provider's real
 sandbox; Polar rate-limits it, so never loop it; see the billing [README](packages/billing/README.md#tests)),
@@ -764,6 +764,20 @@ model-alias or retrieval change; `make probe-tools` for any chat alias's model o
 
 * * *
 
+## ⚙️ CI/CD
+
+| Workflow | When | What |
+|---|---|---|
+| [`ci.yml`](.github/workflows/ci.yml) | every PR and push to `main` | lint (code, workflows, shell), config checks, types, tests, integration, live, prompts, the three images, security → **`ci-ok`**, the one required check. On `main`: publish `:<sha>` → `:latest` → deploy |
+| [`security.yml`](.github/workflows/security.yml) | called by CI; weekly | Trivy, Semgrep, Checkov, govulncheck; weekly also the published images |
+| [`llm-evals.yml`](.github/workflows/llm-evals.yml) | nightly; `llm-evals` label | deepeval and the red team: they report, they never gate on a score |
+| [`deploy.yml`](.github/workflows/deploy.yml) | called by CI; by hand | release or roll back one commit ([deploy/README.md](deploy/README.md)); off until `DEPLOY_ENABLED` |
+| [`zap.yml`](.github/workflows/zap.yml), [`strix.yml`](.github/workflows/strix.yml) | by hand only | test a running target you own: ZAP (passive or active) and Strix |
+
+Documentation-only PRs skip the slow jobs. Why it is shaped this way: [ENGINEERING_PATTERNS.md](docs/ENGINEERING_PATTERNS.md) patterns 106 and 107.
+
+* * *
+
 ## 🔍 Security scanning and load testing
 
 <details>
@@ -771,18 +785,19 @@ model-alias or retrieval change; `make probe-tools` for any chat alias's model o
 
 | Tool | Checks | Run | CI |
 |---|---|---|---|
-| [Semgrep](https://semgrep.dev/) | Source SAST over `app/`, `scripts/`, `services/ml-service/`, `deploy/images/` | `make semgrep` | Gate; SARIF to the Security tab |
-| [Trivy](https://github.com/aquasecurity/trivy) | Dependency CVEs, secrets, Dockerfile/compose misconfig, built image | `make trivy`, `make trivy-image` | Gate on **fixable CRITICAL** only; HIGH+ goes to the Security tab |
+| [Semgrep](https://semgrep.dev/) | Source SAST over `app/`, `scripts/`, `packages/`, `services/`, `deploy/images/` | `make semgrep` | Gate; SARIF to the Security tab |
+| [Trivy](https://github.com/aquasecurity/trivy) | Dependency CVEs, secrets, Dockerfile misconfig, the three built images | `make trivy`, `make trivy-image` | Gate on **fixable CRITICAL** only; HIGH+ goes to the Security tab |
+| [govulncheck](https://go.dev/doc/security/vuln/) | Known vulnerabilities authlimit's code can reach, with the Go its image is built with | `make authlimit-vuln` | Gate |
 | [Checkov](https://www.checkov.io/) | Terraform misconfiguration | `make checkov` | Gate |
-| [SonarQube](https://www.sonarsource.com/products/sonarqube/) | Code quality gate on new code | `make sonar-up` + `make sonar-scan` | Gate, on an ephemeral server |
-| [Strix](https://github.com/usestrix/strix) | Autonomous AI pentest, static and against the live app | `make strix`, `make strix-app` | Manual |
-| [OWASP ZAP](https://github.com/zaproxy/zaproxy) | Passive baseline and OpenAPI-driven active scan | `make zap-baseline`, `make zap-api-scan` | Manual |
+| [SonarQube](https://www.sonarsource.com/products/sonarqube/) | Code quality gate on new code, with history | `make sonar-up` + `make sonar-scan` | Not in CI: a server that starts fresh each run has no history to judge against |
+| [Strix](https://github.com/usestrix/strix) | Autonomous AI pentest, static and against the live app | `make strix`, `make strix-app` | By hand (`strix.yml`) |
+| [OWASP ZAP](https://github.com/zaproxy/zaproxy) | Passive baseline and OpenAPI-driven active scan | `make zap-baseline`, `make zap-api-scan` | By hand (`zap.yml`) |
 | [DefectDojo](https://github.com/DefectDojo/django-DefectDojo) | Deduplicates and tracks findings across runs | `make defectdojo-up`, `make defectdojo-import` | Optional import from `zap.yml` |
 | [Locust](https://locust.io/) | Load on the queued chat path | `make loadtest-up`, `make loadtest-queued` | Manual |
 
 - Trivy scans `requirements-lock.txt`, not `requirements.txt`: version ranges resolve to nothing a CVE database can match.
-- Every GitHub Action is pinned to a commit SHA; Dependabot bumps them and the Docker base images. `.github/CODEOWNERS` names the maintainer for the constitution-sensitive paths.
-- Strix needs `pipx install strix-agent` and a **cloud LLM key** (`STRIX_LLM`/`LLM_API_KEY`, in `.env` or exported; `make` passes it just those five names, never the local proxy's URL). Extra flags go in `ARGS`: `make strix ARGS="--instruction '…' --max-budget 1"`. Its and ZAP's workflows are `workflow_dispatch` only: they cost money or attack their target.
+- CI's scans run weekly as well as on every change, since new CVEs appear without commits. Every GitHub Action is pinned to a commit SHA; Dependabot bumps them, the Docker base images and authlimit's Go modules. `.github/CODEOWNERS` names the maintainer for the constitution-sensitive paths.
+- Strix needs `pipx install strix-agent` and a **cloud LLM key** (`STRIX_LLM`/`LLM_API_KEY`, in `.env` or exported; `make` passes it just those five names, never the local proxy's URL). Extra flags go in `ARGS`: `make strix ARGS="--instruction '…' --max-budget 1"`. Their workflows are `workflow_dispatch` only: they cost money or attack their target.
 - ⚠️ **Only point Strix or ZAP's active mode at a system you own or have written permission to test.**
 
 </details>
@@ -886,7 +901,7 @@ promptfoo/ garak/ loadtest/   prompt checks (Node), jailbreak scan, Locust
 bruno/                    the HTTP API as a Bruno collection (.bru requests, environments, a sample PDF)
 openapi.json              the chat API's OpenAPI document (generated: make openapi); the ML service's and authlimit's sit beside their Dockerfiles
 make/                     stack.mk, data.mk, host.mk, gateway.mk, droplet.mk, test.mk, evals.mk, web.mk, security.mk, admin.mk: targets the Makefile includes
-.github/workflows/        ci, deploy, ai-review, terraform-validate, redteam, strix, zap
+.github/workflows/        ci, security, llm-evals, deploy, ai-review, zap, strix (shared steps are in .github/actions/)
 ```
 
 `requirements-lock.txt` is machine-generated from `requirements.txt`; regenerate it, don't edit it.

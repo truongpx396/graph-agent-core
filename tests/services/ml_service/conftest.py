@@ -15,7 +15,7 @@ from tokenizers import Tokenizer, models, pre_tokenizers
 
 from tests.openapi_conformance import load, validator
 
-pytest.importorskip("prometheus_client", reason="ml_service.metrics needs prometheus-client (requirements-dev.txt / the CI test job)")
+pytest.importorskip("prometheus_client", reason="ml_service.metrics needs prometheus-client (requirements-test.txt)")
 
 # FastAPI serves these itself and never lists them in the document it serves.
 FRAMEWORK_ROUTES = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}

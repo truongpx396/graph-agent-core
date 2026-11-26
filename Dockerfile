@@ -100,7 +100,7 @@ FROM base AS runtime
 #
 # `apt-get upgrade -y` before the install: pulls security patches for
 # packages already baked into the `python:3.13-slim` base layer (perl-base,
-# not anything this Dockerfile itself installs) — CI's `trivy` job scans
+# not anything this Dockerfile itself installs) — CI's `image` job scans
 # the built image's actual OS layer, not just this Dockerfile's own
 # instructions, and caught a real fixed-CRITICAL CVE here
 # (CVE-2026-13221) that a plain `apt-get install` alone never touches,
@@ -137,7 +137,7 @@ COPY --from=web /web/dist ./web/dist
 
 # scripts/ is the one thing the app opens at runtime from outside app/: `python -m scripts.tools.index_skills` / `seed` and the cron jobs
 # an operator runs inside the container. The whole package ships, not a hand-picked list that would drift. A missing piece degrades
-# QUIETLY (an empty skill catalog, no sandbox tools), so CI's `docker-build` job runs the built image to prove the catalogs and scripts landed.
+# QUIETLY (an empty skill catalog, no sandbox tools), so CI's `image` job runs the built image to prove the catalogs and scripts landed.
 COPY scripts/ ./scripts/
 
 # Both caches above were written as root (HOME already pointed at

@@ -106,7 +106,7 @@ func TestARunningListPicksUpARevocationOnItsOwn(t *testing.T) {
 	// The 5-second requirement (FR-019) is the poll interval plus a margin; this runs the real loop with a short interval.
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	defer rdb.Close()
+	defer func() { _ = rdb.Close() }()
 	l := New(rdb, Config{Prefix: "authlimit:v1:", PollEvery: 20 * time.Millisecond, MaxStale: time.Second, Policy: Closed, Timeout: time.Second}, nil, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

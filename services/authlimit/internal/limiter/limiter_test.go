@@ -180,7 +180,7 @@ func TestTwoReplicasCountOnce(t *testing.T) {
 	l := limits(100, 6000, 4, 60)
 	granted := 0
 	for i := range 10 {
-		var lim *Redis = tb.lim
+		lim := tb.lim
 		if i%2 == 1 {
 			lim = other
 		}
@@ -281,7 +281,7 @@ func TestKeysCannotBeSpelledToCollide(t *testing.T) {
 func TestWithoutAClockOverrideTheScriptUsesRedisTime(t *testing.T) {
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	defer rdb.Close()
+	defer func() { _ = rdb.Close() }()
 	lim := NewRedis(rdb, "authlimit:v1:", time.Second, nil)
 	l := limits(10, 600, 1, 60)
 	mr.SetTime(time.Unix(1_790_000_000, 0))

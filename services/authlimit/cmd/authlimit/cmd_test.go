@@ -116,7 +116,7 @@ func freePort(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	return fmt.Sprint(l.Addr().(*net.TCPAddr).Port)
 }
 
@@ -166,7 +166,7 @@ func TestTheRealServiceEndToEnd(t *testing.T) {
 		resp, err := http.Get(base + "/readyz")
 		if err == nil {
 			ok := resp.StatusCode == 200
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if ok {
 				break
 			}
@@ -205,7 +205,7 @@ func TestTheRealServiceEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		b, _ := io.ReadAll(resp.Body)
 		return resp, string(b)
 	}
@@ -244,7 +244,7 @@ func TestTheRealServiceEndToEnd(t *testing.T) {
 	}
 	// 4. Revocation through the real Redis, picked up by the real poller.
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	defer rdb.Close()
+	defer func() { _ = rdb.Close() }()
 	if err := revoke.New(rdb, revoke.Config{Prefix: cfg.KeyPrefix, Timeout: time.Second}, nil, nil, nil).Add(context.Background(), "ecorp", "carol", time.Now(), cfg.MaxTokenLifetime); err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestTheRealServiceEndToEnd(t *testing.T) {
 		if err != nil || resp.StatusCode != 200 {
 			t.Fatalf("%s: %v", path, err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 
 	cancel()

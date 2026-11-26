@@ -41,3 +41,9 @@
 /Dockerfile                         @truongpx396
 /requirements.txt                   @truongpx396
 /requirements-lock.txt              @truongpx396
+/requirements-*.txt                 @truongpx396
+/services/*/Dockerfile              @truongpx396
+# CI runs make targets, and ci_gate.py decides what the one required check accepts.
+/Makefile                           @truongpx396
+/make/                              @truongpx396
+/scripts/tools/ci_gate.py           @truongpx396

@@ -1,28 +1,28 @@
-# Security scanners, and DefectDojo, which collects their findings. Included by the Makefile.
+# Security scanners, SonarQube (local only, not in CI) and DefectDojo. Included by the Makefile. CI's security.yml and zap.yml run these same targets.
 
 ##@ Scanners
 
-semgrep:  ## SAST over app/, scripts/, services/ml-service/, deploy/images/ and the Dockerfile; same rules and gate as CI
-	docker run --rm -v $(PWD):/src -w /src semgrep/semgrep:1.177.0 semgrep scan --error --metrics=off \
-		--config p/security-audit --config p/secrets --config p/python --config p/dockerfile \
-		app/ scripts/ services/ml-service/ deploy/images/ Dockerfile
+SEMGREP_FLAGS ?= --error
+semgrep:  ## SAST over the Python, Go and Dockerfile source (CI's gate; SEMGREP_FLAGS="--sarif --output x.sarif" reports instead)
+	docker run --rm -v $(CURDIR):/src -w /src semgrep/semgrep:1.177.0 semgrep scan --metrics=off \
+		--config p/security-audit --config p/secrets --config p/python --config p/golang --config p/dockerfile \
+		$(SEMGREP_FLAGS) app/ scripts/ packages/ services/ deploy/images/ Dockerfile
 
-# Scans requirements-lock.txt, not requirements.txt: version ranges resolve to no installed version, so that finds nothing
-# (the lock file found 5 fixable HIGH CVEs on first run, incl. an RCE in langgraph-checkpoint, CVE-2025-64439).
-# Check garak/requirements-garak.txt before bumping pins. deploy/terraform is Checkov's: Trivy flags the necessary public
-# 80/443 ingress there as CRITICAL (see CI's `trivy` job).
-trivy:  ## Scan dependencies, Dockerfile and secrets for known vulnerabilities; same policy as CI's `trivy` job
-	docker run --rm -v $(PWD):/repo aquasec/trivy:0.74.0 fs \
-		--scanners vuln,secret,misconfig --severity HIGH,CRITICAL --ignore-unfixed \
-		--file-patterns 'pip:requirements-lock\.txt$$' \
-		--skip-dirs .venv,**/node_modules,.git,.mypy_cache,.ruff_cache,.pytest_cache,deploy/terraform /repo
+# The gate: fixable CRITICAL vulnerabilities, secrets and misconfigurations. Scans requirements-lock.txt, not requirements.txt: version ranges
+# resolve to no installed version, so that finds nothing. deploy/terraform is Checkov's: Trivy flags the necessary public 80/443 ingress there
+# as CRITICAL. .trivyignore.yaml holds dated, reasoned exceptions only. The report does not read it, so an exception stays visible.
+TRIVY_FLAGS ?= --severity CRITICAL --ignore-unfixed --exit-code 1 --ignorefile .trivyignore.yaml
+trivy:  ## Dependencies, secrets and Dockerfile/compose misconfiguration (CI's gate; TRIVY_FLAGS replaces the policy)
+	docker run --rm -v $(CURDIR):/repo -w /repo aquasec/trivy:0.74.0 fs \
+		--scanners vuln,secret,misconfig --file-patterns 'pip:requirements-lock\.txt$$' \
+		--skip-dirs .venv,**/node_modules,.git,.mypy_cache,.ruff_cache,.pytest_cache,deploy/terraform $(TRIVY_FLAGS) .
 
 trivy-image:  ## Build the app image and scan it for OS/library vulnerabilities
 	docker build -t graph-agent-core:trivy .
 	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.74.0 image \
 		--severity HIGH,CRITICAL --ignore-unfixed graph-agent-core:trivy
 
-checkov:  ## IaC scan of deploy/terraform, same config and gate as CI's `checkov` job (pip, not Docker)
+checkov:  ## IaC scan of deploy/terraform, same config and gate as CI (pip, not Docker)
 	pip install -q checkov==3.3.17
 	checkov --config-file .checkov.yaml
 
@@ -36,8 +36,7 @@ sonar-down:  ## Stop the persistent SonarQube (volumes and history kept)
 	$(COMPOSE_OBS) --profile quality stop sonarqube sonarqube-db
 
 # My Account -> Security makes the token. The baseline scan found ~90 older issues (2 BLOCKER, 10 CRITICAL) to triage.
-# Joins the observability project's network and uses the in-network sonarqube:9000, not --network host (CI's choice): host
-# networking is unreliable on macOS.
+# Joins the observability project's network and uses the in-network sonarqube:9000, not --network host: host networking is unreliable on macOS.
 sonar-scan:  ## Scan against the `make sonar-up` server (needs SONAR_TOKEN); the gate blocks only NEW issues
 	@test -n "$$SONAR_TOKEN" || (echo "SONAR_TOKEN is required — generate one in the SonarQube UI (My Account -> Security)" && exit 1)
 	docker run --rm --network $(OBS_NETWORK) \
@@ -47,22 +46,19 @@ sonar-scan:  ## Scan against the `make sonar-up` server (needs SONAR_TOKEN); the
 
 ##@ Dynamic and AI pentest (only systems you own or may test)
 
-# Reports in zap_reports/ (HTML, and the XML `make defectdojo-import` expects).
+# Reports in zap_reports/ (HTML, and the XML `make defectdojo-import` and zap.yml's import read). The same image everywhere, bumped by hand.
+# The image runs as its own `zap` user, so the report directory must be writable by others, or on Linux no report is written.
 # --add-host: a bare `docker run` is not on the compose network, and native Linux Docker does not map
 # host.docker.internal (Docker Desktop does), which the `api` service gets through extra_hosts.
+ZAP_IMAGE := zaproxy/zap-stable:2.17.0@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af
+zap_run    = mkdir -p zap_reports && chmod a+w zap_reports && docker run --rm --add-host=host.docker.internal:host-gateway \
+	-v $(CURDIR)/zap_reports:/zap/wrk:rw -t $(ZAP_IMAGE)
+
 zap-baseline:  ## OWASP ZAP baseline scan (spider + passive rules) of a running target: ZAP_TARGET=<url> (default the local API)
-	mkdir -p zap_reports
-	docker run --rm --add-host=host.docker.internal:host-gateway \
-		-v $(PWD)/zap_reports:/zap/wrk:rw -t zaproxy/zap-stable zap-baseline.py \
-		-t $${ZAP_TARGET:-http://host.docker.internal:8000} \
-		-x baseline-report.xml -r baseline-report.html -I
+	$(zap_run) zap-baseline.py -t "$${ZAP_TARGET:-http://host.docker.internal:8000}" -x baseline-report.xml -r baseline-report.html -I
 
 zap-api-scan:  ## OWASP ZAP ACTIVE scan driven by the OpenAPI spec (needs the API up); only against a target you own or may test
-	mkdir -p zap_reports
-	docker run --rm --add-host=host.docker.internal:host-gateway \
-		-v $(PWD)/zap_reports:/zap/wrk:rw -t zaproxy/zap-stable zap-api-scan.py \
-		-t $${ZAP_TARGET:-http://host.docker.internal:8000}/openapi.json -f openapi \
-		-x api-scan.xml -r api-scan.html -I
+	$(zap_run) zap-api-scan.py -t "$${ZAP_TARGET:-http://host.docker.internal:8000}/openapi.json" -f openapi -x api-scan.xml -r api-scan.html -I
 
 zap-view:  ## Open the newest ZAP HTML report (from `make zap-baseline` / `make zap-api-scan`)
 	open "$$(ls -t zap_reports/*.html | head -1)" 2>/dev/null || xdg-open "$$(ls -t zap_reports/*.html | head -1)"
