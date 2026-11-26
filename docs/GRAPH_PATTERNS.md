@@ -219,7 +219,7 @@ These are not patterns of the graph. Their numbers are kept so references ("patt
 | 42, 89, 91, 92, 93, 94: the CLI and Telegram | [CHANNEL_PATTERNS.md](CHANNEL_PATTERNS.md) |
 | 21, 28, 32, 50, 78, 87: data tools, MCP, scrubbing, crawl and sandbox, web search | [TOOL_PATTERNS.md](TOOL_PATTERNS.md) |
 | 18, 20, 24, 33, 38, 67, 68, 73, 74: memory, retrieval, ingestion, embeddings, model choice and routing | [RETRIEVAL_AND_MODEL_PATTERNS.md](RETRIEVAL_AND_MODEL_PATTERNS.md) |
-| 40, 48, 59, 60, 69, 72, 75, 76, 77, 83, 86\*, 87\*, 88, 90, 95, 100-102: tests, evals, builds, measurements | [ENGINEERING_PATTERNS.md](ENGINEERING_PATTERNS.md) |
+| 40, 48, 59, 60, 69, 72, 75, 76, 77, 83, 86\*, 87\*, 88, 90, 95, 100-102, 106: tests, evals, builds, measurements | [ENGINEERING_PATTERNS.md](ENGINEERING_PATTERNS.md) |
 | 26, 51, 57, 58, 62, 63, 64, 74\*: the usage meter and spend limits | [COST_GOVERNANCE.md](COST_GOVERNANCE.md) |
 | 52-56, 61, 65, 66: the credit wallet, webhooks, export, reconciliation, provider adapters | [`packages/billing/docs/PATTERNS.md`](../packages/billing/docs/PATTERNS.md) |
 

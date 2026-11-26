@@ -1,6 +1,6 @@
 # Prod counterpart of deploy/dev/observability.yml, run on the SEPARATE, smaller droplet deploy/terraform provisions
 # (digitalocean_droplet.observability), so a metrics or logs spike cannot compete with the app for CPU and memory, and losing this box never touches
-# the app's data. Deployed by .github/workflows/deploy.yml's `deploy-observability` job, independently of the app droplet.
+# the app's data. Deployed by .github/workflows/deploy.yml's `observability` job, independently of the app droplet.
 #
 # Unlike the dev file, nothing bridges through `host.docker.internal`: the app droplet reaches IN, over the two ports deploy/terraform/prod/main.tf's
 # digitalocean_firewall.observability scopes to the VPC's CIDR: OTLP (4318, from its otel-collector-agent) and Loki's push (3100, from its promtail).
@@ -12,7 +12,7 @@ name: agent-core-observability
 
 services:
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
+    image: otel/opentelemetry-collector-contrib:0.166.0@sha256:3e18fe04181de50bdd72e23ad4a4d6214b54351e63d496f1c58127cc4541ad7f
     restart: unless-stopped
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     volumes:
@@ -23,7 +23,7 @@ services:
     # exporter) is scraped only by `prometheus` below, over the internal network.
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
     volumes:
       - ./observability/prometheus/prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro
       - ./observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
@@ -37,7 +37,7 @@ services:
       - otel-collector
 
   alertmanager:
-    image: prom/alertmanager:latest
+    image: prom/alertmanager:v0.35.1@sha256:4e3d029e69c7f61dd53a2b31a3dc427a2b81736cffca185c0854075e07969e36
     restart: unless-stopped
     # alertmanager.PROD.yml, not the dev file's receiver-less config: with that one nothing is delivered and nothing says so (spec 008 A7).
     # Alertmanager does no environment expansion, so the webhook secret is written to the file the config reads (`api_url_file`) just before it
@@ -58,7 +58,7 @@ services:
         --storage.path=/alertmanager
 
   loki:
-    image: grafana/loki:latest
+    image: grafana/loki:3.7.10@sha256:b43c257ccfc925d4a50b8717cac61a3b51df8c48d01847936057e5c4075a24a7
     restart: unless-stopped
     command: ["-config.file=/etc/loki/loki-config.yaml"]
     volumes:
@@ -91,7 +91,7 @@ services:
       - "4040:4040"   # the app droplet's push; not routed by caddy
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.3.2@sha256:81556409ba48b2b922e0adb69a2511337d8ba7578f11962eefa6149a2d815101
     restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_USER: admin
@@ -107,7 +107,7 @@ services:
 
   # Reverse proxy and TLS in front of Grafana only, like gateway.yml's `caddy` in front of `api`.
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2.11.7@sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489
     restart: unless-stopped
     ports:
       - "80:80"

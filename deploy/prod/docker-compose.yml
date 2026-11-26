@@ -14,8 +14,8 @@
 #
 # A domain is REQUIRED: identity needs an https issuer (pattern 98; specs/018 T069).
 #
-# .github/workflows/deploy.yml builds the app and ml-service images to GHCR, rsyncs these files with deploy/prod/caddy/, deploy/shared/caddy/, litellm-config.yaml, postgres-init/ and
-# observability/ to /opt/graph-agent-core, and runs `deploy/prod/compose.sh pull && up -d` (compose.sh is `docker compose --project-directory . -f deploy/prod/docker-compose.yml`, plus the crawler overlay if enabled). Services use `image:`, never `build:`, so the
+# CI builds the three images and publishes them to GHCR; .github/workflows/deploy.yml rsyncs these files with deploy/prod/caddy/, deploy/shared/caddy/, litellm-config.yaml, postgres-init/ and
+# observability/ to /opt/graph-agent-core, and runs `deploy/prod/release.sh <sha>`, which pulls and `up -d`s through `deploy/prod/compose.sh` (compose.sh is `docker compose --project-directory . -f deploy/prod/docker-compose.yml`, plus the crawler overlay if enabled). Services use `image:`, never `build:`, so the
 # droplet never compiles onnxruntime's dependency chain. The droplet's .env is made once by hand (deploy/prod/prod.env.example); CI never touches it.
 #
 # Every path in these files, the `include` paths too, is relative to the repo root: run compose with `--project-directory .` (deploy/dev/docker-compose.yml says why).

@@ -76,6 +76,8 @@ deploy/terraform/**/crash.log
 # repo (see deploy/prod/docker-compose.yml's own header comment); deploy/prod/prod.env.example
 # is the committed template and stays unaffected by this glob.
 .env.prod
+# The release a droplet is running (deploy/prod/release.sh).
+.image-tag
 
 
 # Claude Code personal overrides (the shared .claude/settings.json, hooks/, rules/ and

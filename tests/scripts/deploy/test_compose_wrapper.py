@@ -83,3 +83,17 @@ def test_enabled_without_the_firewall_a_command_that_starts_nothing_still_runs(s
     firewall(site, installed=False)
     result, calls = compose(site, verb, env_file="CRAWLER_ENABLED=true\n")
     assert result.returncode == 0 and calls == [" ".join([*OVERLAY, verb])], "an operator must still be able to look, and to stop it"
+
+
+@pytest.mark.parametrize(("exported", "used"), [(None, "released"), ("by-hand", "by-hand")])
+def test_it_runs_the_release_that_was_started_unless_a_tag_is_given(site, exported, used):
+    (site / "bin" / "docker").write_text('#!/bin/sh\nprintf "%s\\n" "$IMAGE_TAG" >> "$FAKE_LOG"\n', encoding="utf-8")
+    (site / ".image-tag").write_text("released\n", encoding="utf-8")
+    env = {key: value for key, value in os.environ.items() if key != "IMAGE_TAG"} | ({"IMAGE_TAG": exported} if exported else {})
+    log = site / "log.txt"
+    subprocess.run(
+        ["bash", str(site / "deploy" / "prod" / "compose.sh"), "up", "-d"],
+        env={**env, "PATH": f"{site / 'bin'}:{os.environ['PATH']}", "FAKE_LOG": str(log)}, check=True, cwd="/",
+    )
+    assert log.read_text(encoding="utf-8").splitlines() == [used]
+

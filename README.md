@@ -634,13 +634,13 @@ policy check, is what "sandboxed" means. Skills (`app/domains/<domain>/skills/*/
 
 `deploy/terraform/prod/` provisions two DigitalOcean droplets (`deploy/terraform/dev/` runs the dev stack on one, [deploy/README.md](deploy/README.md#the-dev-droplet)): an **app droplet** (the lean prod stack behind Caddy) and a smaller
 **observability droplet** (Prometheus, Loki, Grafana, Alertmanager) fed over the private network. Creating or destroying
-droplets is always a human-run `terraform apply`; `.github/workflows/deploy.yml` then builds images to GHCR and redeploys
-automatically once CI passes on `main`.
+droplets is always a human-run `terraform apply`. CI builds, checks and scans the three images and publishes them to GHCR on `main`;
+once `DEPLOY_ENABLED` is set, its last job runs `.github/workflows/deploy.yml`, which redeploys that commit.
 
 1. `terraform apply` (needs a DO token, your SSH key fingerprint and admin IP, and a dedicated CI deploy key).
-2. Add the repo secrets `DROPLET_HOST`, `OBS_DROPLET_HOST`, `DEPLOY_SSH_KEY`.
+2. Create the GitHub environment `production` with `DROPLET_HOST`, `OBS_DROPLET_HOST`, `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS` ([deploy/README.md](deploy/README.md#3-configure-github-actions)).
 3. SSH in once and create each droplet's `.env` from `deploy/prod/prod.env.example` (the observability droplet's from `deploy/prod/observability.env.example`) (`POSTGRES_PASSWORD`, `LITELLM_MASTER_KEY`, `LLM_*`, `MINIO_*`, `CORS_ALLOWED_ORIGINS`, ...).
-4. Merge to `main`.
+4. Set the repository variable `DEPLOY_ENABLED=true` and merge to `main`.
 5. Once LiteLLM is up, mint the app's scoped gateway key and put it in `.env` as `LITELLM_APP_KEY` ([Gateway backstop](#gateway-backstop)).
 
 Full runbook, scaling, backups, rollback and teardown: **[deploy/README.md](deploy/README.md)**.

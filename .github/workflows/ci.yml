@@ -84,9 +84,10 @@ name: CI
 # out of scope here (see deploy/README.md) — but static analysis + the
 # quality gate itself are still fully real and still hard-gate the build.
 #
-# All jobs below are independent (no `needs:` edges) and run fully in
-# parallel — the point of this whole file's own existence being fast CI, not
-# just correct CI.
+# The checks are independent (no `needs:` edges) and run in parallel: fast
+# feedback is the point. The only ordering is the release at the bottom:
+# image (build, smoke, scan, publish `:<sha>`) -> promote (`:latest`, main
+# only, after every check passed) -> deploy (deploy.yml, off until enabled).
 on:
   push:
     branches: [main]
@@ -193,9 +194,7 @@ jobs:
         working-directory: packages/billing
 
   # The authlimit service (specs/018) is a separate Go program with its own module: it cannot be tested by the Python jobs, and they cannot be
-  # broken by it. Hermetic like `test`: an in-memory Redis, a fake authorization server, no Docker services. The image build proves the
-  # Dockerfile parses and the static binary links; running it with no configuration proves it REFUSES to start (names the variables, never a
-  # value), which is the one behaviour of the image a build cannot show.
+  # broken by it. Hermetic like `test`: an in-memory Redis, a fake authorization server, no Docker services. Its image is the `image` job's.
   authlimit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -218,26 +217,6 @@ jobs:
           go generate ./...
           git diff --exit-code -- internal/api
         working-directory: services/authlimit
-      - name: The image builds and refuses to start without a configuration
-        run: |
-          docker build -t authlimit:ci services/authlimit
-          set +e
-          out=$(docker run --rm authlimit:ci 2>&1)
-          code=$?
-          set -e
-          echo "$out"
-          test "$code" = 2
-          echo "$out" | grep -q "AUTHLIMIT_KEYS_DIR: is required"
-          # It must never echo a VALUE: a Redis URL can carry a password.
-          out=$(docker run --rm -e AUTHLIMIT_REDIS_URL='http://:hunter2@redis:6379' authlimit:ci 2>&1 || true)
-          if echo "$out" | grep -q hunter2; then echo "::error::the service printed a configuration value"; exit 1; fi
-      - name: Trivy image — hard gate (fixable CRITICAL vulns)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: authlimit:ci
-          severity: CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
 
   # What a client reads is three OpenAPI documents (openapi.json, services/ml-service/openapi.json, services/authlimit/openapi.json). That
   # they are TRUE is held by tests in `test` (the two generated ones, tests/scripts/test_openapi_documents_are_current.py) and in
@@ -826,48 +805,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: docker build -t graph-agent-core:ci .
-      # Building proves the Dockerfile parses and the dependencies install; it
-      # says nothing about whether the image can DO anything. This image once
-      # built green for weeks while containing no skills, no subagents and no
-      # sandbox bridge — all three degrade to "empty" instead of failing, so the
-      # API and workers booted healthy and simply lacked the features. Running
-      # the image is the only check that sees what actually landed. Run as the image's own
-      # interpreter and working directory, exactly as a container would.
-      - name: The image contains what the app reads at runtime
-        run: |
-          docker run --rm -i --entrypoint python graph-agent-core:ci - <<'PY'
-          import asyncio
-          import sys
-
-          from app.agent.tools import skill_catalog as skills
-          from app.agent.tools import subagent_catalog as subagents
-          from app.adapters.outbound.mcp import sandbox_tools
-          from app.adapters.inbound.api import web_auth
-
-          problems = []
-          page = web_auth.WEB_DIST / "index.html"
-          if not page.is_file() or web_auth.PLACEHOLDER not in page.read_text(encoding="utf-8"):
-              problems.append(f"the built web page is missing or has no sign-in placeholder ({page}): GET / would be a 503")
-          if not list((web_auth.WEB_DIST / "assets").glob("*.js")):
-              problems.append("the web client's bundle is missing from the image")
-          if not skills.load_skills():
-              problems.append("the skill catalog is empty (the skills/ folders under app/domains are missing from the image)")
-          if not subagents.load_subagents():
-              problems.append("the subagent catalog is empty (the subagents/ folders under app/domains are missing from the image)")
-          try:
-              import scripts.tools.index_skills  # noqa: F401
-          except ImportError as exc:
-              problems.append(f"the scripts package is missing or broken: {exc}")
-          # The bridge's catalog is static, so the app's own loader can start it here, with no sandbox server, and must find exactly
-          # the five tools it pins: the whole stdio path (mcp 2.x client, opensandbox-mcp 1.1 server) in the built image.
-          tools, _ = asyncio.run(sandbox_tools.load_sandbox_tools())
-          if {t.name for t in tools} != set(sandbox_tools.PINNED_SANDBOX_TOOLS):
-              problems.append(f"the sandbox bridge did not list its pinned tools in the image (got {sorted(t.name for t in tools)})")
-
-          for problem in problems:
-              print(f"::error::{problem}")
-          sys.exit(1 if problems else 0)
-          PY
+      # Building says nothing about whether the image can DO anything; scripts/checks/image_contents.py says why and checks it.
+      - run: docker run --rm --entrypoint python graph-agent-core:ci -m scripts.checks.image_contents
 
   trivy:
     # See this file's own header comment for the hard-gate-CRITICAL-only,
@@ -1123,3 +1062,177 @@ jobs:
           -v ${{ github.workspace }}:/usr/src -w /usr/src
           sonarsource/sonar-scanner-cli@sha256:23ca0f137965d9dff2198074043fd48d386280bc5d0ccac8c8349cea4cf096a9
           -Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=300
+
+  # One leg per image production runs: build it, show what a build cannot, scan it, and on main publish exactly that build as `:<sha>`
+  # (the second build step reuses the first's layers from this runner's builder). `:latest` moves only in `promote`, below. The BuildKit
+  # cache has one scope per image: with the shared default scope each image's export overwrote the others', so none was ever reused.
+  image:
+    name: image (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write # used by the two steps that run on a push to main only
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: app, context: ., repository: graph-agent-core }
+          - { name: ml-service, context: services/ml-service, repository: graph-agent-core-ml-service }
+          - { name: authlimit, context: services/authlimit, repository: graph-agent-core-authlimit }
+    env:
+      IMAGE: ${{ matrix.name }}:ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Main writes the cache and pull requests only read it. On main the runtime stage is rebuilt every time: it holds `apt-get upgrade`,
+      # which a cached layer would freeze until the base image changed.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          # The stage that ships, named: a reordered Dockerfile must not publish the builder (pattern 76).
+          target: runtime
+          load: true
+          tags: ${{ env.IMAGE }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: ${{ github.event_name == 'push' && format('type=gha,mode=max,scope={0}', matrix.name) || '' }}
+          no-cache-filters: ${{ github.event_name == 'push' && 'runtime' || '' }}
+
+      - name: The app image contains what the app reads at runtime
+        if: matrix.name == 'app'
+        run: docker run --rm --entrypoint python "$IMAGE" -m scripts.checks.image_contents
+
+      - name: The ML service image can import its app
+        if: matrix.name == 'ml-service'
+        run: docker run --rm --entrypoint python "$IMAGE" -c "import main"
+
+      # The one behaviour of this image a build cannot show: with no configuration it refuses to start, naming variables and never a value.
+      - name: The authlimit image refuses to start without a configuration
+        if: matrix.name == 'authlimit'
+        run: |
+          set +e
+          out=$(docker run --rm "$IMAGE" 2>&1)
+          code=$?
+          set -e
+          echo "$out"
+          test "$code" = 2
+          echo "$out" | grep -q "AUTHLIMIT_KEYS_DIR: is required"
+          # It must never echo a VALUE: a Redis URL can carry a password.
+          out=$(docker run --rm -e AUTHLIMIT_REDIS_URL='http://:hunter2@redis:6379' "$IMAGE" 2>&1 || true)
+          if echo "$out" | grep -q hunter2; then echo "::error::the service printed a configuration value"; exit 1; fi
+
+      - name: Trivy — hard gate (fixable CRITICAL vulns)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+          exit-code: "1"
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish this build as the commit's image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          target: runtime
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/${{ matrix.repository }}:${{ github.sha }}
+          # A software bill of materials and SLSA build provenance, attached to the image as attestations (pattern 76).
+          provenance: mode=max
+          sbom: true
+
+  # `:latest` is the newest commit of main that passed every check. Every job is listed here by name (a test holds the list complete) and
+  # each result must be `success`: `failure()` alone would let a timed-out or skipped job through. `openapi` runs on pull requests only,
+  # and `deepeval` never gates on a score, so neither holds a release.
+  promote:
+    needs:
+      - lint
+      - alertmanager-config
+      - typecheck
+      - test
+      - web
+      - billing-package
+      - authlimit
+      - test-integration
+      - test-live
+      - promptfoo
+      - docker-build
+      - trivy
+      - semgrep
+      - checkov
+      - sonarqube
+      - image
+    if: >-
+      ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: promote
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      current: ${{ steps.head.outputs.current }}
+    steps:
+      # A slower run of an older commit must not put it back over a newer one.
+      - id: head
+        name: Is this still main's newest commit?
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          head=$(gh api "repos/$REPO/commits/main" --jq .sha)
+          if [ "$head" = "$SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::main has moved to $head: that commit's run promotes and deploys, not this one"
+            echo "current=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        if: steps.head.outputs.current == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag the three images `latest`
+        if: steps.head.outputs.current == 'true'
+        env:
+          OWNER: ${{ github.repository_owner }}
+          SHA: ${{ github.sha }}
+        run: |
+          for image in graph-agent-core graph-agent-core-ml-service graph-agent-core-authlimit; do
+            docker buildx imagetools create -t "ghcr.io/$OWNER/$image:latest" "ghcr.io/$OWNER/$image:$SHA"
+          done
+
+  # Off until the repository variable DEPLOY_ENABLED is `true` (deploy/README.md): with no droplet there is nothing to deploy to.
+  deploy:
+    needs: promote
+    if: ${{ !cancelled() && needs.promote.result == 'success' && needs.promote.outputs.current == 'true' && vars.DEPLOY_ENABLED == 'true' }}
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      image_tag: ${{ github.sha }}
+    secrets:
+      DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
+      OBS_DROPLET_HOST: ${{ secrets.OBS_DROPLET_HOST }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
