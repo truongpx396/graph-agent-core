@@ -11,7 +11,9 @@ that runs it, then announces what its update means. PRODUCTION_REVIEW.md R35, pa
 What is announced, each as `{"type": ...}` (the shapes `_run_graph_stream` already sent):
   - `retry`: what the client has shown so far is to be discarded (the answer was rejected or replaced);
   - `token` (after a `retry`): the replacement text, when no model call will follow to stream a new one;
-  - `compacted`: older context was trimmed before the model ran.
+  - `compacted`: older context was trimmed before the model ran;
+  - `hold` (from `agent` itself, before its model call) and `release` (check_output: the answer stands): keep the coming tokens back, then send them
+    (`runtime/held_answer.py`). Neither is forwarded to a client.
 """
 import inspect
 from collections.abc import Awaitable, Callable
@@ -19,6 +21,8 @@ from typing import Any
 
 from langchain_core.callbacks.manager import adispatch_custom_event
 from langchain_core.runnables import RunnableConfig
+
+from app.agent.graph.state import CONTEXT_GAP_REASON
 
 # The one custom event name; `_run_graph_stream` forwards every event of this name that does not come from a nested subagent run.
 STREAM_EVENT = "agent_stream"
@@ -37,6 +41,15 @@ def replaced_the_answer(update: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(text, str) and text:
         events.append({"type": "token", "content": text})
     return events
+
+
+def judged_the_answer(update: dict[str, Any]) -> list[dict[str, Any]]:
+    """check_output's: what `replaced_the_answer` says, `release` when the answer stands as written (anything held back goes out now, not when the turn
+    ends), and nothing at all for one `context_gap` is about to take back (it may have been repaired on the way, and sending that would put on screen
+    exactly what the stream is holding back: pattern 105)."""
+    if update.get("last_retry_reason") == CONTEXT_GAP_REASON:
+        return []
+    return replaced_the_answer(update) or ([] if update.get("last_retry_reason") else [{"type": "release"}])
 
 
 def rejected_the_answer(_update: dict[str, Any]) -> list[dict[str, Any]]:

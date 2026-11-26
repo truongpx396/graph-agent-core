@@ -235,8 +235,14 @@ def drop_citation_markers(content: str, markers: list[str]) -> str:
     on the one retry that did converge it dropped content to satisfy the check; docs/GRAPH_PATTERNS.md pattern 104.
 
     A marker takes the space before it with it (`"free [1]."` is `"free."`), or the space after it when it opens a line (`"[1] Free."` is `"Free."`), so
-    no gap is left. `[1]` never matches inside `[10]`."""
+    no gap is left. `[1]` never matches inside `[10]`. Code is left alone: in a fenced block or between backticks `items[1]` is an index, not a citation."""
     if not markers or not content:
         return content
     alternatives = "|".join(re.escape(marker) for marker in markers)
-    return re.sub(rf"(?m)^(?:{alternatives})[ \t]*|[ \t]*(?:{alternatives})", "", content)
+    pattern = rf"(?P<code>```(?s:.*?)(?:```|\Z)|`[^`\n]*`)|^(?:{alternatives})[ \t]*|[ \t]*(?:{alternatives})"
+    return re.sub(pattern, lambda match: match.group("code") or "", content, flags=re.MULTILINE)
+
+
+def drop_all_citation_markers(content: str) -> str:
+    """`content` with every `[n]` removed, for an answer that has no source list to point into (the second look, pattern 105)."""
+    return drop_citation_markers(content, sorted(set(re.findall(r"\[\d+\]", content))))

@@ -6,6 +6,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from langchain_core.callbacks.manager import adispatch_custom_event
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -19,18 +20,22 @@ from app.agent.cost import metering
 from app.agent.graph.links import LINK_REMINDER, mentions_link
 from app.agent.graph.messages import (
     CANNOT_HELP_MESSAGE,
+    CONTEXT_GAP_KEY,
     GATEWAY_REFUSAL_KEY,
     WITHHELD_MESSAGE,
+    context_gap_original,
     current_turn_messages,
     human_text,
     is_retry_artifact,
     is_user_message,
     last_human_message,
+    tool_ran_this_turn,
     with_turn_notes,
 )
 from app.agent.graph.model_route import routed_unreachable, tier_alias
 from app.agent.graph.skill_guards import pending_skill_required_tool
-from app.agent.graph.state import CONTEXT_GAP_REASON, State
+from app.agent.graph.state import State
+from app.agent.graph.stream_events import STREAM_EVENT
 from app.core import gateway, metrics
 from app.core.config import CHAT_MODEL, STALE_TOOL_RESULT_MAX_CHARS
 from app.core.untrusted import frame_untrusted
@@ -134,6 +139,7 @@ def make_graph_node_agent(
     cannot_open_links: bool = False,
     system_prompt: str,
     stale_tool_result_max_chars: int | None = None,
+    hold_context_gap: bool = False,
 ) -> Callable[..., Awaitable[dict[str, Any]]]:
     """Factory, not a plain function, because `agent` needs an LLM client; tests build it with a fake (e.g.
     GenericFakeChatModel) via `make_graph_node_agent(fake_llm)(state)` to cover message assembly without a network
@@ -151,6 +157,8 @@ def make_graph_node_agent(
       a turn whose question contains a link then carries a reminder that it can't be opened.
     - `stale_tool_result_max_chars`: an earlier turn's tool result longer than this reaches the model as a short note instead (`without_stale_tool_results`);
       `None` is the configured `STALE_TOOL_RESULT_MAX_CHARS`, 0 keeps them whole.
+    - `hold_context_gap`: tell the stream to keep this answer back until it is known not to be taken back (`context_gap`, pattern 105), so a person
+      never reads a "not found" that is about to be replaced. `build_graph` passes it when that check is on.
     - `system_prompt`: the calling domain's (`manifest.system_prompt`, bound by `build_graph`), the first
       message of EVERY call, taken from the manifest at call time rather than from the thread. Nothing
       persists a prompt in the checkpoint, so a prompt edit reaches every conversation on the next call with
@@ -189,6 +197,9 @@ def make_graph_node_agent(
         )
 
         def droppable(i: int, m: BaseMessage) -> bool:
+            # An answer taken back for a second look goes at once, in its own turn too (pattern 105).
+            if m.additional_kwargs.get(CONTEXT_GAP_KEY):
+                return True
             return turn_start is not None and i < turn_start and is_retry_artifact(m)
 
         if any(droppable(i, m) for i, m in enumerate(messages)):
@@ -229,8 +240,9 @@ def make_graph_node_agent(
             if citation_reminder:
                 after.append(CITATION_REMINDER)
 
-        if state.get("last_retry_reason") == CONTEXT_GAP_REASON:
-            # Holds for the whole re-ask, tool rounds included: check_output overwrites the reason when it next runs, and each turn starts with none.
+        second_look = context_gap_original(state["messages"]) is not None
+        if second_look:
+            # For the whole second look, tool rounds included: the line is on the question, and the question is the same message on every call of the turn.
             after.append(NO_BLOCK_REMINDER)
 
         pending_tool = pending_skill_required_tool(
@@ -284,6 +296,14 @@ def make_graph_node_agent(
         # on the local alias (the next call tries the routed alias again). This lives here and not in the
         # gateway's `fallbacks`, which would price and record the routed alias that did not answer.
         routed = tier_alias(state.get("model_route"))
+        if config is not None:
+            # Before the call, so the stream knows what to do with the first token (runtime/held_answer.py). Every call of a second look is held until
+            # check_output has judged it: its answer may be swapped for the first one or lose its markers, and either would redraw the page. A first
+            # answer with a block in front of it is held for one sentence, which is where an admission is.
+            if second_look:
+                await adispatch_custom_event(STREAM_EVENT, {"type": "hold", "until": "kept"}, config=config)
+            elif hold_context_gap and context and state.get("citations") and not tool_ran_this_turn(state["messages"]):
+                await adispatch_custom_event(STREAM_EVENT, {"type": "hold", "until": "first_sentence"}, config=config)
         try:
             if routed is None:
                 call = await metering.metered_invoke(

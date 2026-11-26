@@ -15,6 +15,7 @@ from langgraph.prebuilt import tools_condition
 
 from app.agent.graph.citations import (
     count_ungrounded_claims,
+    drop_all_citation_markers,
     drop_citation_markers,
     find_likely_misattributed,
     find_likely_uncited,
@@ -25,7 +26,11 @@ from app.agent.graph.loop_guards import (
     consecutive_repeat_count,
     mandatory_gate_reason,
 )
-from app.agent.graph.messages import GATEWAY_REFUSAL_KEY
+from app.agent.graph.messages import (
+    GATEWAY_REFUSAL_KEY,
+    context_gap_original,
+    tool_ran_this_turn,
+)
 from app.agent.graph.output_checks import ROUTED_TIERS, CheckContext, run_checks
 from app.agent.graph.output_guardrails import (
     strip_closing_offer,
@@ -143,6 +148,7 @@ def graph_node_check_output(
     enforce_citations: bool = True,
     skill_required_tools: tuple[str, ...] = (),
     skip_on_routed_tiers: frozenset[str] = frozenset(),
+    checks_off: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Judge the final answer: strip a fabricated reference footer, cut a closing offer off a complete answer,
     repair a missing citation marker and drop an unsupported one, then run every check in `graph/output_checks.py`'s registry. Returns
@@ -159,12 +165,32 @@ def graph_node_check_output(
     `skill_required_tools` is the subset of `SKILL_REQUIRED_TOOL_MARKERS` this domain has.
     `skip_on_routed_tiers` (`OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS`, validated at build) are checks that do not run when the turn was routed to the `medium`
     or `strong` tier: they exist to correct small local models, and a false positive costs a full retry round. The `local` tier is unchanged, and every
-    finding is counted by tier (`agent_output_check_fired_total`) so the list can be chosen from numbers.
+    finding is counted by tier (`agent_output_check_fired_total`) so the list can be chosen from numbers. `checks_off` do not run on any tier
+    (`CONTEXT_GAP_REASK_ENABLED=false`).
+
+    The second look (`context_gap`, pattern 105) has two rules of its own. If it looked nothing up, whatever it says came from the model's memory, so the
+    answer it replaced is put back: the re-ask exists to give a tool a chance, and must never end worse than not asking. And either way it has no source
+    list, so no `[n]` marker is shown.
     """
     tier = state.get("model_route") or "local"
     last = state["messages"][-1]
     content = getattr(last, "content", "") or ""
     citations = state.get("citations") or []
+
+    taken_back = context_gap_original(state["messages"])
+    # A gateway refusal is the turn's answer whatever came before it (`no_answer` judges it through here), so it is never restored over.
+    if taken_back is not None and not tool_ran_this_turn(state["messages"]) and not last.additional_kwargs.get(GATEWAY_REFUSAL_KEY):
+        # Measured: the second look without a tool is where the invented answers came from ("The CEO of Ecorp is John Doe", generic steps for a new
+        # laptop). The first answer already passed every check ahead of this one, so it is final.
+        metrics.agent_context_gap_reask_total.labels(outcome="restored").inc()
+        return {
+            "messages": [last.model_copy(update={"content": drop_all_citation_markers(str(taken_back.content))})],
+            "used_citations": [],
+            "ungrounded_claims_count": 0,
+            "output_findings": {},
+            "last_retry_reason": None,
+            "retry_reason_repeat_count": 0,
+        }
 
     # Strip a fabricated reference-list footer FIRST, before any citation
     # computation — it isn't a real answer sentence to judge grounding on,
@@ -222,6 +248,10 @@ def graph_node_check_output(
             shown_used = find_used_citations(shown, citations)
             message_update["messages"] = [last.model_copy(update={"content": shown})]
 
+    if taken_back is not None and drop_all_citation_markers(shown) != shown:
+        shown, shown_used = drop_all_citation_markers(shown), []
+        message_update["messages"] = [last.model_copy(update={"content": shown})]
+
     findings = run_checks(
         CheckContext(
             content=content,
@@ -235,11 +265,13 @@ def graph_node_check_output(
             enforce_citations=enforce_citations,
             skill_required_tools=skill_required_tools,
         ),
-        skip=skip_on_routed_tiers if tier in ROUTED_TIERS else frozenset(),
+        skip=checks_off | (skip_on_routed_tiers if tier in ROUTED_TIERS else frozenset()),
     )
     for code in findings:
         metrics.agent_output_check_fired_total.labels(check=code, tier=tier).inc()
     reason = next(iter(findings), None)
+    if taken_back is not None and reason is None:
+        metrics.agent_context_gap_reask_total.labels(outcome="looked_up").inc()
     prior_reason = state.get("last_retry_reason")
     if reason is None:
         repeat_count = 0

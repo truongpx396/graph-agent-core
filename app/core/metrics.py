@@ -180,6 +180,13 @@ agent_output_check_fired_total = Counter(
     ["check", "tier"],
 )  # check: a code in output_checks.CHECKS, or "misattributed" (repaired, not retried); tier: local | medium | strong
 
+agent_context_gap_reask_total = Counter(
+    "agent_context_gap_reask_total",
+    "Second looks that ended in an answer (check_output's context_gap, docs/GRAPH_PATTERNS.md pattern 105): `looked_up` when a tool ran and its answer "
+    "is shown, `restored` when none did and the first answer was put back. A mostly `restored` rate means the extra model call is not buying anything.",
+    ["outcome"],
+)  # outcome: looked_up | restored
+
 agent_zero_citations_total = Counter(
     "agent_zero_citations_total",
     "Non-empty final answers with retrieved context available but zero "

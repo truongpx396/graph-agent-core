@@ -4,7 +4,7 @@ Checked on the text it returns: the sentences stay exactly as written, only the 
 """
 import pytest
 
-from app.agent.graph.citations import drop_citation_markers
+from app.agent.graph.citations import drop_all_citation_markers, drop_citation_markers
 
 
 @pytest.mark.parametrize(
@@ -37,3 +37,20 @@ def test_it_leaves_other_whitespace_alone():
     """A list item's indentation and a blank line between paragraphs are the answer's layout, not the marker's gap."""
     text = "Intro [1].\n\n  - first point\n  - second point [1]."
     assert drop_citation_markers(text, ["[1]"]) == "Intro.\n\n  - first point\n  - second point."
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Use `items[1]` for the second one [1].", "Use `items[1]` for the second one."),
+        ("```py\nfirst = rows[1]\n```\nThat reads one row [1].", "```py\nfirst = rows[1]\n```\nThat reads one row."),
+        ("An unclosed fence is code to the end:\n```\nrows[1]", "An unclosed fence is code to the end:\n```\nrows[1]"),
+    ],
+)
+def test_an_index_inside_code_is_not_a_citation(text, expected):
+    """`items[1]` was removed as if it cited source 1, which changes what the code does."""
+    assert drop_citation_markers(text, ["[1]"]) == expected
+
+
+def test_dropping_every_marker_leaves_code_alone_too():
+    assert drop_all_citation_markers("Take `a[0]` [1][2].") == "Take `a[0]`."

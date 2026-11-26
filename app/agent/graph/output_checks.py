@@ -7,7 +7,7 @@ An `OutputCheck` holds everything one reason needs:
 - `detect(ctx)`: falsy when the answer passes, else the DETAIL the feedback needs (offending markers, the
   skipped tool's name, or just `True`);
 - `feedback(detail)`: the corrective message `retry_output` sends back, naming the actual problem rather than
-  "try again". `None` when there is nothing to tell the model: `retry_output` then removes the answer AND the
+  "try again". `None` when there is nothing to tell the model: `retry_output` then takes back the answer AND the
   pre-fetched block and asks again (`context_gap`);
 - `counter`: the metric incremented whenever it fires (`app/core/metrics.py`);
 - `trust_on_exhaust`: whether an answer rejected for this reason over and over is still safe to show verbatim.

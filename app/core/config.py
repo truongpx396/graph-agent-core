@@ -220,6 +220,9 @@ class Settings(BillingSettings):
     # changes until an operator has read `agent_output_check_fired_total{check, tier}` and chosen. `build_graph` refuses an unknown code, and `leaked_prompt`
     # and `fabricated`, which protect the person and apply to every tier. The local tier is never affected (PRODUCTION_REVIEW.md R32).
     output_checks_off_on_routed_tiers: str = ""
+    # An answer that opens by saying the pre-fetched documents lack it is asked once more without them, so the model can use a tool; the first answer comes
+    # back if it uses none (GRAPH_PATTERNS.md pattern 105). One extra model call on those turns, and their first sentence is held back while it is judged.
+    context_gap_reask_enabled: bool = True
 
     # Cross-session memory retention (app/core/security.py, app/adapters/outbound/qdrant/memory.py)
     # — a memory older than this is invisible at RECALL time (Policy.lower),
@@ -863,6 +866,7 @@ ANSWER_SAMPLE_SIZE = settings.answer_sample_size
 ANSWER_SAMPLE_TENANTS = tuple(t.strip() for t in settings.answer_sample_tenants.split(",") if t.strip())
 STALE_TOOL_RESULT_MAX_CHARS = settings.stale_tool_result_max_chars
 OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS = settings.output_checks_off_on_routed_tiers
+CONTEXT_GAP_REASK_ENABLED = settings.context_gap_reask_enabled
 SEMANTIC_CACHE_TTL_SECONDS = settings.semantic_cache_ttl_seconds
 MEMORY_RETENTION_DAYS = settings.memory_retention_days
 MAX_COST_USD_PER_TURN = settings.max_cost_usd_per_turn

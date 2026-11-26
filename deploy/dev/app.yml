@@ -30,6 +30,8 @@ x-app-env: &app-env
   # Empty leaves web_search declared but answering "not set up" (app/adapters/outbound/web/serper.py). A container does not read `.env`.
   SERPER_API_KEY: ${SERPER_API_KEY:-}
   WEB_SEARCH_MAX_RESULTS: ${WEB_SEARCH_MAX_RESULTS:-5}
+  # An answer saying the pre-fetched documents lack it is asked again without them (GRAPH_PATTERNS.md pattern 105). "false" turns that off.
+  CONTEXT_GAP_REASK_ENABLED: ${CONTEXT_GAP_REASK_ENABLED:-true}
   # opensandbox-mcp is a stdio subprocess of this process (app/adapters/outbound/mcp/sandbox_tools.py), so it resolves the in-network name. Only matters
   # with the `sandbox` profile up; without it the sandbox tools are absent.
   OPENSANDBOX_MCP_DOMAIN: opensandbox-server:8090

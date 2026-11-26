@@ -12,6 +12,7 @@ from app.agent.graph.build import GraphDeps
 from app.agent.graph.stream_events import (
     STREAM_EVENT,
     announcing,
+    judged_the_answer,
     rejected_the_answer,
     replaced_the_answer,
     trimmed_the_history,
@@ -116,10 +117,10 @@ async def test_a_rejected_answer_through_the_real_graph_is_announced_by_retry_ou
     assert ("retry_output", {"type": "retry"}) in seen
 
 
-async def test_a_turn_nothing_corrected_announces_nothing():
+async def test_a_turn_nothing_corrected_only_releases_which_no_client_sees():
     llm = GenericFakeChatModel(messages=iter([AIMessage(content="Refunds are possible within thirty days of purchase, with a receipt.")]))
 
-    assert await _announcements(build_graph(GraphDeps(llm=llm)), "what is the refund policy?") == []
+    assert await _announcements(build_graph(GraphDeps(llm=llm)), "what is the refund policy?") == [("check_output", {"type": "release"})]
 
 
 async def test_a_nested_subagent_run_announces_with_its_own_tag_so_the_parent_can_tell_it_apart(monkeypatch):
@@ -136,3 +137,18 @@ async def test_a_nested_subagent_run_announces_with_its_own_tag_so_the_parent_ca
             seen.append(event["metadata"].get("subagent_name"))
 
     assert seen and set(seen) == {"researcher"}
+
+
+class TestWhatCheckOutputAnnounces:
+    def test_an_answer_that_stands_releases_whatever_was_held(self):
+        assert judged_the_answer({"last_retry_reason": None}) == [{"type": "release"}]
+
+    def test_a_repaired_answer_is_sent_as_the_replacement(self):
+        update = {"messages": [AIMessage(content="Fixed.")], "last_retry_reason": None}
+        assert judged_the_answer(update) == [{"type": "retry"}, {"type": "token", "content": "Fixed."}]
+
+    def test_nothing_is_sent_for_an_answer_that_is_about_to_be_taken_back_even_if_it_was_repaired(self):
+        assert judged_the_answer({"messages": [AIMessage(content="Not found.")], "last_retry_reason": "context_gap"}) == []
+
+    def test_another_rejection_releases_nothing_the_retry_node_announces_it(self):
+        assert judged_the_answer({"last_retry_reason": "too_short"}) == []

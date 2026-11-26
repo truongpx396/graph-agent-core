@@ -7,12 +7,18 @@ The sentences below are the ones the model wrote.
 import uuid
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.agent.graph.agent_node import NO_BLOCK_REMINDER
 from app.agent.graph.build import GraphDeps
+from app.agent.graph.messages import (
+    CONTEXT_GAP_KEY,
+    GATEWAY_REFUSAL_KEY,
+    RETRY_ARTIFACT_KEY,
+)
 from app.agent.graph.output_guardrails import admits_context_gap
 from app.agent.graph.retry import graph_node_retry_output
+from app.agent.graph.routing import graph_node_check_output
 from app.agent.graph.state import MAX_ITERATIONS
 from app.core import metrics
 from tests import ecorp
@@ -88,11 +94,55 @@ class TestWhenTheCheckFires:
         assert _check(answer)["last_retry_reason"] is None
 
 
-def test_retry_output_removes_the_answer_and_the_block_and_says_nothing_to_the_model():
+def test_retry_output_takes_the_answer_and_the_block_back_and_says_nothing_to_the_model():
     update = graph_node_retry_output({"messages": [AIMessage(content=GAP, id="m1")], "last_retry_reason": "context_gap"})
     assert update["context"] == "" and update["citations"] == []
-    assert [type(m) for m in update["messages"]] == [RemoveMessage]
-    assert update["messages"][0].id == "m1"
+    (taken_back,) = update["messages"]  # no feedback message beside it
+    assert (taken_back.id, taken_back.content) == ("m1", GAP)  # same id: it replaces the answer in the thread
+    assert taken_back.additional_kwargs[RETRY_ARTIFACT_KEY] and taken_back.additional_kwargs[CONTEXT_GAP_KEY]
+
+
+TAKEN_BACK = AIMessage(content=GAP, id="a1", additional_kwargs={RETRY_ARTIFACT_KEY: True, CONTEXT_GAP_KEY: True})
+
+
+def _second_look(answer, *between, **kwargs):
+    messages = [HumanMessage(content="who works in engineering?"), TAKEN_BACK, *between, AIMessage(content=answer, id="a2", **kwargs)]
+    return ecorp.graph_node_check_output({"messages": messages, "citations": []})
+
+
+class TestTheSecondLook:
+    LOOKED = (
+        AIMessage(content="", tool_calls=[{"name": "query_employees", "args": {}, "id": "c1"}]),
+        ToolMessage(content="Priya Nair, Staff Engineer", tool_call_id="c1"),
+    )
+
+    def test_an_answer_that_looked_nothing_up_is_swapped_for_the_first_one_without_its_marker(self):
+        """Measured: this is where "The CEO of Ecorp is John Doe" and generic steps for a new laptop came from."""
+        before = metric_value(metrics.agent_context_gap_reask_total, outcome="restored")
+        result = _second_look("To request a laptop you would typically submit a ticket [2].")
+        assert result["messages"][-1].content == GAP.replace(" [1]", "")
+        assert result["messages"][-1].id == "a2"
+        assert (result["last_retry_reason"], result["used_citations"], result["ungrounded_claims_count"]) == (None, [], 0)
+        assert metric_value(metrics.agent_context_gap_reask_total, outcome="restored") == before + 1
+
+    def test_an_answer_that_looked_something_up_is_kept_and_shows_no_marker(self):
+        before = metric_value(metrics.agent_context_gap_reask_total, outcome="looked_up")
+        result = _second_look("Priya Nair works in engineering [1].", *self.LOOKED)
+        assert result["messages"][-1].content == "Priya Nair works in engineering."
+        assert (result["last_retry_reason"], result["ungrounded_claims_count"]) == (None, 0)
+        assert metric_value(metrics.agent_context_gap_reask_total, outcome="looked_up") == before + 1
+
+    def test_the_other_checks_still_judge_an_answer_that_looked_something_up(self):
+        assert _second_look(ecorp.ECORP_SYSTEM_PROMPT[:200], *self.LOOKED)["last_retry_reason"] == "leaked_prompt"
+
+    def test_a_gateway_refusal_is_never_swapped_back(self):
+        result = _second_look("I can't help with that request.", additional_kwargs={GATEWAY_REFUSAL_KEY: True})
+        assert "messages" not in result
+
+
+def test_switched_off_the_check_does_not_run():
+    state = {"messages": [HumanMessage(content="who?"), AIMessage(content=GAP, id="m1")], "citations": list(SOURCES)}
+    assert graph_node_check_output(state, system_prompt=ecorp.ECORP_SYSTEM_PROMPT, checks_off=frozenset({"context_gap"}))["last_retry_reason"] is None
 
 
 class TestEndToEnd:
@@ -125,10 +175,23 @@ class TestEndToEnd:
         assert [str(m.content) for m in seen[2] if isinstance(m, HumanMessage)] == [asked]
         assert [str(m.content) for m in result["messages"] if isinstance(m, HumanMessage)] == [self.QUESTION]
         assert result["messages"][-1].content == "Four engineers work there."
-        assert not any("does not provide specific information" in str(m.content) for m in result["messages"])
+        # The first answer stays in the thread only as an artifact: no transcript shows it and no later turn is sent it.
+        kept = [m for m in result["messages"] if "does not provide specific information" in str(m.content)]
+        assert [m.additional_kwargs.get(CONTEXT_GAP_KEY) for m in kept] == [True]
         assert metric_value(metrics.agent_retry_total) == before + 1
 
-    async def test_it_happens_once_a_second_admission_is_the_answer(self):
-        result, _ = await self._run(AIMessage(content=GAP), AIMessage(content="I don't have that information in my knowledge base."))
-        assert result["messages"][-1].content == "I don't have that information in my knowledge base."
+    async def test_it_happens_once_and_a_second_look_with_no_tool_ends_on_the_first_answer(self):
+        result, _ = await self._run(AIMessage(content=GAP), AIMessage(content="You would typically ask your manager."))
+        assert result["messages"][-1].content == GAP.replace(" [1]", "")
         assert result["iterations"] == 2
+
+    async def test_the_next_turn_is_not_sent_the_answer_that_was_taken_back(self):
+        async def search(query, ctx):
+            return "", []
+
+        seen: list = []
+        graph = ecorp.build_graph(GraphDeps(llm=queue_llm(AIMessage(content="Fine, thanks."), AIMessage(content="[]"), seen=seen), search_docs=search))
+        config = {"configurable": {"thread_id": str(uuid.uuid4()), "ctx": TEST_CTX}, "recursion_limit": MAX_ITERATIONS * 2 + 15}
+        earlier = [HumanMessage(content="who works in engineering?"), TAKEN_BACK, AIMessage(content="Priya Nair does.")]
+        await graph.ainvoke({"messages": [*earlier, HumanMessage(content="and how are you?")]}, config=config)
+        assert "does not provide specific information" not in "\n".join(str(m.content) for m in seen[0])

@@ -37,6 +37,7 @@ from app.agent.graph.messages import (
 from app.agent.graph.stream_events import STREAM_EVENT
 from app.agent.runtime import cancelled_turn
 from app.agent.runtime import core as runtime_module
+from app.agent.runtime.held_answer import HeldAnswer
 from app.core import gateway, metrics, tracing
 from app.core.config import (
     REQUEST_TIMEOUT_SECONDS,
@@ -314,6 +315,8 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
       A fourth source is a model stream that broke part-way and that the `agent` node's retry policy ran
       again (pattern 7): the second attempt's tokens would follow the first's, so a model call that starts
       while the previous one is still open, and had sent tokens, announces the restart the same way.
+      A node can also ask for tokens to be held back before they stream (`hold`, never forwarded; `held_answer.py`), so an answer that is about to
+      be taken back is never shown (pattern 105).
     - `{"type": "compacted"}` (NOT terminal): `compact_history` (pattern 41) trimmed context before `agent`
       ran, and said so the same way. Informational; fires only when it trimmed something.
     - `{"type": "citations", "items": [...]}` / `{"type": "followups", "items": [...]}`: just before "done",
@@ -337,6 +340,17 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
     model_call_open = False
     open_call_streamed = False
     first_token_seen = False  # what a person waits before they see anything: agent_first_token_seconds (R17)
+    held = HeldAnswer()
+
+    def answer_token(text: str) -> dict[str, Any]:
+        """The "token" event for text a person is about to see, whether it streamed straight through or was held first."""
+        nonlocal first_token_seen
+        if not first_token_seen:
+            first_token_seen = True
+            metrics.agent_first_token_seconds.observe(time.monotonic() - start)
+        final_answer.append(text)
+        return {"type": "token", "content": text}
+
     try:
         async for event in _iterate_with_timeout(
             graph.astream_events(graph_input, config=cfg, version="v2"),
@@ -356,6 +370,8 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
 
             elif kind == "on_chat_model_end" and is_answer_call:
                 model_call_open = False
+                if released := held.call_ended(called_a_tool=bool(getattr(event["data"].get("output"), "tool_calls", None))):
+                    yield answer_token(released)
 
             elif kind == "on_chat_model_stream" and is_answer_call:
                 # astream_events emits on_chat_model_stream for EVERY
@@ -377,13 +393,9 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
                 # deep); `metadata.subagent_name`, stamped only on the
                 # nested run's own config, can.
                 content = _text_content(event["data"]["chunk"].content)
-                if content:
+                if content and (released := held.feed(content)):
                     open_call_streamed = True
-                    if not first_token_seen:
-                        first_token_seen = True
-                        metrics.agent_first_token_seconds.observe(time.monotonic() - start)
-                    final_answer.append(content)
-                    yield {"type": "token", "content": content}
+                    yield answer_token(released)
 
             elif kind == "on_tool_start":
                 payload = {
@@ -412,15 +424,31 @@ async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, An
                 # `run_subagent` graph shares the node names and its announcements arrive on THIS stream, tagged `metadata.subagent_name`: they
                 # describe the subagent's own turn, and acting on them cleared the parent's answer and showed the subagent's text as the answer.
                 announced = event["data"]
-                if announced["type"] == "retry":
+                if announced["type"] == "hold":
+                    held.hold(announced["until"])  # from `agent`, before its call; not for the client
+                elif announced["type"] == "release":
+                    if released := held.release():
+                        yield answer_token(released)
+                elif announced["type"] == "retry":
+                    # Nothing to discard on screen when all there was to discard was held: a `retry` would show "revising" about text nobody saw.
+                    unseen = held.pending and not final_answer
+                    held.discard()
                     final_answer.clear()
-                    yield {"type": "retry"}
+                    if not unseen:
+                        yield {"type": "retry"}
                 elif announced["type"] == "token":
                     # The replacement text after a `retry`: no model call follows to stream a new one, and the trace and the fallback read `final_answer`.
-                    final_answer.append(announced["content"])
-                    yield {"type": "token", "content": announced["content"]}
+                    yield answer_token(announced["content"])
                 elif announced["type"] == "compacted":
                     yield {"type": "compacted"}
+
+        # Still held when the run is over: no node said what became of it, and a budget exit replaces an answer without saying so. What is held is only a
+        # preview, so send what the checkpoint has. Inside the `try`, so a consumer that stops at this yield is still recorded.
+        if held.pending:
+            held.discard()
+            last = ((await graph.aget_state(cfg)).values.get("messages") or [None])[-1]
+            if isinstance(last, AIMessage) and not last.tool_calls and (final_text := _text_content(last.content)):
+                yield answer_token(final_text)
 
     except TurnCancelledError:
         # Checked before the generic except below — a deliberate stop gets
