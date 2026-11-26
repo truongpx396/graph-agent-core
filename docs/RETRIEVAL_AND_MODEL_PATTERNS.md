@@ -28,6 +28,7 @@ What the agent knows (documents, memories, embeddings) and which model answers. 
 - **SSRF guard:** `https` only, every resolved address globally routable, no redirects.
 - **Bug:** the first guard was a deny-list and missed `100.64.0.0/10` (where cloud metadata lives). The fetcher also let the HTTP client resolve again after checking (a rebinding window) and read the whole body before the size check. It now connects to the address it checked and streams to the limit (R20).
 - **Bug:** re-uploading an EDITED document left the old chunks citable. An ingest with an `ingest_id` writes its own id space, then removes the tenant's chunks of that source from strictly OLDER ingests. "Delete whatever has a different id" was wrong: two simultaneous uploads deleted each other. `DELETE /ingest/documents` removes a document and its stored files (R18).
+- **Bug:** a 78 KB uploaded PDF made `pypdf` 5 inflate 80 MB. pypdf 6 stops it with `LimitReachedError`, which is not a `PdfReadError`, so the extractor catches the base `PyPdfError`: a bad file is a failed job, never an unexpected exception.
 - **Gaps:** an older upload that finishes last keeps its chunks until the next upload; the cache may quote old text for its TTL; nothing lists a tenant's documents. The **crawler's** rebinding window is not closed; its containment is the network (`deploy/README.md`).
 
 ### 33. Memory deletion audit, age selector, retention at recall

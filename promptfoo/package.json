@@ -3,7 +3,7 @@
   "private": true,
   "description": "Node tooling for this repo — promptfoo only. Every runtime dependency stays Python; this exists purely because promptfoo has no Python distribution, and lives here (with its lock file and node_modules) so the repo root stays Python-only.",
   "devDependencies": {
-    "promptfoo": "0.122.2"
+    "promptfoo": "0.126.0"
   },
   "optionalDependencies": {
     "@libsql/linux-x64-gnu": "0.5.29"
