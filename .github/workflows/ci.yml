@@ -154,6 +154,29 @@ jobs:
   # The billing package, installed ALONE into a clean environment (spec 011 D20, FR-016): not the lock file, not the agent app. If its
   # hermetic tests pass here, the package does not depend on anything it does not declare, which is the whole point of extracting it.
   # (The repo's own `test` job above also imports it, by path; this is the job that proves it does not need the rest.)
+  web:
+    # The web client (web/): its own lock file, and the one job besides `promptfoo` that needs Node. The API types it is written
+    # against are generated from openapi.json, so a contract change that was not regenerated fails here.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: The generated API types are openapi.json's (regenerating changes nothing)
+        run: npm run gen:api && git diff --exit-code -- src/shared/api/schema.gen.ts
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
   billing-package:
     runs-on: ubuntu-latest
     timeout-minutes: 10

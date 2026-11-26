@@ -1,0 +1,66 @@
+# Web client
+
+The browser UI of Graph Agent Core: React, TypeScript, Vite, Tailwind, TanStack Query (server state), Zustand (client state), oxlint and
+Vitest. It talks only to the HTTP API in [`openapi.json`](../openapi.json), and renders only the documented stream events.
+
+**Not served yet.** `GET /` still serves `app/adapters/inbound/api/static/index.html`. This app has the same screens and takes over in a
+follow-up change ([specs/023](../specs/023-web-client/plan.md)).
+
+## Run it
+
+```bash
+make web-install        # npm ci, once (Node 22, see .nvmrc)
+make serve              # the API on :8000, with AUTH_MODE=headers (the .env.example default); and a worker: make agent-worker
+make web-dev            # http://localhost:5173, hot reload; proxies /chat, /ingest, /health and /usage to the API
+```
+
+`WEB_API_TARGET=http://host:port make web-dev` points at another API. An API in `identity` mode answers the dev server with 401: sign-in
+redirects to the front door's own address, so it can only be tried there.
+
+`make web-check` runs what CI runs: lint, types, tests, build.
+
+## Layout
+
+```
+src/
+  main.tsx            the entry: theme, wiring, sign-in return, render
+  app/                composition: layout, the query client, and wiring.ts, the one place that joins features
+  features/
+    auth/             sign-in (authorization code with PKCE) and the Authorization header
+    chat/             the live conversation: model/ (messages, event reducer, turn store), ui/
+    sessions/         the conversation list, history pages, restoring a pause
+    theme/            light and dark
+    uploads/          documents for the knowledge base, with per-file progress
+    workspace/        tenant, principal, domain, and each domain's text
+  shared/             api/ (the client, the stream parser, the contract's types), lib/
+  test/               test setup, a fake API, the architecture test
+```
+
+### Rules (tests, not conventions: `src/test/architecture.test.ts`)
+
+- `shared` knows no feature. A feature uses `shared` and its own files, and another feature only through its `index.ts`, only along an
+  edge listed in the test (today: `sessions` uses `chat` and `workspace`). Anything else is joined in `app/wiring.ts`.
+- Only `shared/api/http.ts` calls the app's API, so identity headers and the 401 rule cannot be skipped. The one other `fetch` is
+  sign-in's code exchange with the authorization server.
+
+### Conventions
+
+- Server state (anything the API can be asked again) lives in TanStack Query; what only this tab knows lives in a Zustand store.
+- Model output is untrusted: no raw HTML, and nothing is fetched without a click (`features/chat/ui/Markdown.tsx` says why).
+- Colours are the tokens in `app/styles.css` (`bg-elevated`, `text-muted`, ...), never raw values, so both themes have one source.
+
+### The API's types
+
+`src/shared/api/schema.gen.ts` is generated from `../openapi.json`: after `make openapi`, run `make web-api` (CI fails while it is stale).
+`contract.test.ts` fails when a stream gains an event type the client does not handle.
+
+### Names the browser tests use
+
+`tests/live/` and `scripts/checks/authlimit_web_check.py` find things by id (`#input`, `#send`, `#messages`, `#authBox`, ...) and by class
+(`msg`, `user`, `assistant`, `status`, `tool-activity-line`, `answer-text`, `draft-text`, `approval`, `approval-question`, `citations`,
+`citation-item`). Keep them when restyling.
+
+## Adding a feature
+
+A folder under `features/` with an `index.ts` as its public face; its API calls in its own `api.ts`, using `shared/api`; compose it in
+`app/App.tsx`. If it needs another feature, prefer joining them in `app/wiring.ts` before adding an edge to the architecture test.

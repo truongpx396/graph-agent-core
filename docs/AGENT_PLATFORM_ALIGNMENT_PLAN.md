@@ -254,6 +254,10 @@ Group error codes into families in the envelope: `details.kind = "blocked" | "fa
 
 ## 5. Part B: the web UI (`index.html`)
 
+**Update 2026-11-26:** decision 1 below was taken the other way. The page is being rewritten as a React
+application in `web/` ([specs/023](../specs/023-web-client/plan.md)), so B1–B11 are built there, and the
+following paragraph's no-build advice and ES-module split no longer apply.
+
 Keep it framework-free for now. It's a reference client, and a no-build page is easy to audit. Do
 split it into a few native ES modules (`stream.js`, `turn.js`, `approval.js`, `sidebar.js`) as part
 of B1, because the file is already about 2,200 lines (CLAUDE.md's "~500 lines is a prompt").
@@ -446,7 +450,7 @@ the platform never has to guess.
 
 One logical change per PR, about 400 hand-written lines each (CLAUDE.md). Contract PRs regenerate
 `openapi.json`, update the Bruno collection and raise `info.version`. Parts A and C are a feature,
-so they should start with `/speckit-specify` as **specs/023**; Part B can follow that spec's task
+so they should start with `/speckit-specify` as **specs/024**; Part B can follow that spec's task
 phases.
 
 | Phase | PR | Contents | Depends on |
@@ -503,6 +507,7 @@ Phases 2 and 3 can run in parallel once Phase 1 merges.
 1. **Where the product UI lives.** This plan keeps `index.html` as a small reference client and puts
    the rich UI in the new platform. If you'd rather make graph-agent-core's own UI the product, B1–B11
    still apply, but you'd also want a framework and a build step.
+   **Decided 2026-11-26:** a framework and a build step ([specs/023](../specs/023-web-client/spec.md)).
 2. **Approval granularity.** Today a resume approves or declines all pending calls together. Should
    the card allow approving some calls and declining others? That's a larger change to the resume
    path. The plan assumes all-or-nothing for now.
@@ -510,5 +515,5 @@ Phases 2 and 3 can run in parallel once Phase 1 merges.
    (conventional for discovery). Either works; pick one before PR9.
 4. **First integration target.** Your own platform first (recommended: you control both sides of
    the contract), or a Paperclip/Multica adapter as an external proof?
-5. **Spec number.** Parts A and C as **specs/023** via `/speckit-specify`, with Part B in that spec's
+5. **Spec number.** Parts A and C as **specs/024** (023 is the web client) via `/speckit-specify`, with Part B in that spec's
    task phases, or Part B as its own spec?

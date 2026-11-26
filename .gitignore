@@ -13,8 +13,9 @@ var/
 packages/*/build/
 packages/*/src/*.egg-info/
 
-# Node (promptfoo only: package.json, its lock file and node_modules live in promptfoo/)
+# Node (promptfoo/ and web/, each with its own package.json, lock file and node_modules)
 node_modules/
+web/dist/
 .promptfoo/
 promptfoo/prompts/
 # `make promptfoo-redteam`'s working copies (one per domain: support/sales/
