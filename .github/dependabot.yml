@@ -3,7 +3,7 @@
 # with our secrets), but it also never updates itself: without this file the pins freeze at
 # today's versions and quietly miss security fixes in the actions themselves.
 #
-# github-actions and docker. The docker entry reads the two Dockerfiles' pinned `FROM` lines (the Python base image and uv, each
+# github-actions, docker and the web client's npm lock. The docker entry reads the two Dockerfiles' pinned `FROM` lines (the Python base image and uv, each
 # pinned by digest, ENGINEERING_PATTERNS.md pattern 76) and proposes a new digest weekly: that is what keeps a pinned base image
 # fresh. The compose files are NOT read (the `docker-compose` ecosystem would also propose postgres major versions); the LiteLLM
 # image digest there is bumped by hand, with `make gateway-check`. The pip ecosystem is left out on purpose:
@@ -28,6 +28,24 @@ updates:
         patterns: ["*"]
     commit-message:
       # Matches the repo's commit prefixes (fix:/feat:/test:/docs:/infra:/chore:).
+      prefix: infra
+
+  # The web client's lock file. promptfoo/ is left out: a dev-only tool nothing ships.
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    # Two weeks old before it is proposed, which is how the lock was first resolved (`npm install --before=`).
+    cooldown:
+      default-days: 14
+    groups:
+      web:
+        patterns: ["*"]
+    ignore:
+      # openapi-typescript needs TypeScript 5; a major is a decision, not a weekly bump.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+    commit-message:
       prefix: infra
 
   - package-ecosystem: docker

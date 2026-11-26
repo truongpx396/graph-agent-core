@@ -168,7 +168,7 @@ cannot be judged or safely changed later.
 ## Architecture & Technology Constraints
 
 - **Runtime**: Python 3.13 (Dockerfile and CI) for the app. A deployable program in another language is allowed only under
-  "Non-Python services" below. Tool, store, and client I/O is async-first. The
+  "Non-Python services" below, and browser code only under "Web client". Tool, store, and client I/O is async-first. The
   durable checkpointer (`AsyncPostgresSaver`) MUST be opened on the same event loop that uses it.
   `MemorySaver` is for tests and ephemeral subagent runs only.
 - **LLM access**: every chat and embedding call goes through the LiteLLM proxy
@@ -251,6 +251,17 @@ cannot be judged or safely changed later.
   - Its secrets (signing keys) are mounted at run time from outside the repository; they are never baked into an image or
     committed.
   - A further language or service needs its own Complexity Tracking entry in its plan.
+- **Web client**: the browser UI (`web/`, TypeScript, built to static files) follows these rules.
+  - It lives in `web/` with its own `package.json` and lock file, its own tests and its own CI job. A dependency release is
+    taken once it is two weeks old.
+  - It imports nothing from the app and the app imports nothing from it. They meet only over the HTTP API: its types are
+    generated from `openapi.json`, and CI fails while they are stale.
+  - It decides nothing about identity, tenancy, authorization, approval or limits (Principles I and II): the server does.
+    It sends an approval only after a person's action, never on its own.
+  - Model output and retrieved text are data (Principle VI): no raw HTML is rendered from them, and nothing in them makes
+    the browser request anything without a click.
+  - It loads no script or asset from a third party at run time, and keeps an access token only in `sessionStorage`.
+  - Its module boundaries are held by a test that fails the build, and its default tests are hermetic (Principle VII).
 
 ## Development Workflow & Quality Gates
 
@@ -298,4 +309,4 @@ states the intent and the conflicting document MUST be corrected.
 - **Runtime guidance**: day-to-day development guidance for agents and contributors lives in
   `CLAUDE.md` and `.claude/rules/`; those files MUST NOT contradict this constitution.
 
-**Version**: 1.4.5 | **Ratified**: 2026-10-01 | **Last Amended**: 2026-11-09
+**Version**: 1.5.0 | **Ratified**: 2026-10-01 | **Last Amended**: 2026-11-26

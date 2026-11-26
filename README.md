@@ -811,7 +811,7 @@ until configured**.
 
 ## 🔧 Make targets
 
-`make help` lists everything. The `Makefile` holds the shared settings and the includes; the targets are in `make/`, one file per topic: `stack.mk` (start, stop, reset, observability), `data.mk` (models, the vector store), `host.mk` (the app's processes on your machine), `gateway.mk` (the front door and its checks), `droplet.mk` (the dev stack on one droplet), `test.mk` (tests, lint, load tests, smoke checks), `evals.mk`, `security.mk` and `admin.mk` (back-office operator commands). The ones you will use:
+`make help` lists everything. The `Makefile` holds the shared settings and the includes; the targets are in `make/`, one file per topic: `stack.mk` (start, stop, reset, observability), `data.mk` (models, the vector store), `host.mk` (the app's processes on your machine), `gateway.mk` (the front door and its checks), `droplet.mk` (the dev stack on one droplet), `test.mk` (tests, lint, load tests, smoke checks), `evals.mk`, `web.mk` (the web client), `security.mk` and `admin.mk` (back-office operator commands). The ones you will use:
 
 | Target | Does |
 |---|---|
@@ -820,6 +820,7 @@ until configured**.
 | `make up-app` | `make up` plus the containerized `api`, `agent-worker` (every domain) and `ingest-worker` |
 | `make up-all` · `make down-all` | Everything in containers behind the front door (infra, app, MCP gateway, observability; not the sandbox or SonarQube), web UI https://api.localhost:8443/; first time also `make front-door-ca` (then trust the CA); `make front-door-bootstrap` prints the demo users' initial passwords. `down-all` stops every container, any profile (keeps data) |
 | `make serve` | API + web UI on :8000 |
+| `make web-install` · `make web-dev` · `make web-check` | The web client in [web/](web/README.md) (needs Node 22): install · dev server on :5173 against `make serve` · lint, types, tests and build |
 | `make chat` · `make chat-hitl` | CLI agent · with approval prompts. Both sign you in at the front door (`python -m app.adapters.inbound.channels.cli.chat --sign-out` forgets it) and need that domain's worker: `AGENT_DOMAIN` picks it |
 | `make agent-worker` · `make agent-worker-all` · `make ingest-worker` | Queue consumers: one domain (`AGENT_WORKER_DOMAINS=support,ops` picks others) · every domain · ingestion |
 | `make telegram[-support\|-sales]` · `make telegram-person ACTION=add\|disable\|enable TELEGRAM_ID=<id>` | Telegram gateway for a domain (needs `TELEGRAM_BOT_TOKEN`, `TELEGRAM_PERSON_SECRET` or the `TELEGRAM_LINKING` settings, and that domain's worker) · add, disable or re-enable a Telegram person |
@@ -873,16 +874,17 @@ scripts/       jobs/ (scheduled one-shots), checks/ (smokes, probes, eval), tool
 services/      what runs as its own process, each with its own Dockerfile: authlimit/ (the edge auth and rate-limit service: the only Go in the repo) and ml-service/ (rerank, prompt guard, embeddings, label sets)
 Dockerfile     the app image (at the root: the build context)
 evals/ scripts/model_eval/   the model-evaluation harness and its frozen datasets, candidates, baselines
-specs/ .specify/          Spec Kit specs 001–022 and the constitution
+specs/ .specify/          Spec Kit specs 001–023 and the constitution
+web/                      the web client (React, TypeScript, Vite) that will replace the built-in page; not served yet (web/README.md)
 deploy/                   dev/ and prod/ (compose parts, Caddyfile, LiteLLM config, env example), shared/caddy/ (the front door's routing), images/ (sandbox builds), terraform/{prod,dev}/ (DigitalOcean droplets); deploy/README.md is the runbook
 observability/            Prometheus (+ alerts.yml), Alertmanager, Loki, Promtail, otel-collector, Grafana
 postgres-init/            numbered SQL schema (fresh volumes only)
 tests/                    mirrors app/ (adapters/inbound, adapters/outbound, services/, scripts/); fakes/ (in-memory ports); integration/, live/, deepeval/ are the marked tiers
 packages/billing/         the independent billing package: src, tests, schema, alerts, docs, specs
-promptfoo/ garak/ loadtest/   prompt checks (the repo's only package.json), jailbreak scan, Locust
+promptfoo/ garak/ loadtest/   prompt checks (Node), jailbreak scan, Locust
 bruno/                    the HTTP API as a Bruno collection (.bru requests, environments, a sample PDF)
 openapi.json              the chat API's OpenAPI document (generated: make openapi); the ML service's and authlimit's sit beside their Dockerfiles
-make/                     stack.mk, data.mk, host.mk, gateway.mk, droplet.mk, test.mk, evals.mk, security.mk, admin.mk: targets the Makefile includes
+make/                     stack.mk, data.mk, host.mk, gateway.mk, droplet.mk, test.mk, evals.mk, web.mk, security.mk, admin.mk: targets the Makefile includes
 .github/workflows/        ci, deploy, ai-review, terraform-validate, redteam, strix, zap
 ```
 

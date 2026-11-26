@@ -27,7 +27,7 @@ Read these before changing behavior; they hold the reasoning this file deliberat
 ## Commands
 
 The Makefile assumes an activated venv: `source .venv/bin/activate`. It holds the shared settings, `make help` and the includes; the targets are in `make/`, one file per topic: `stack.mk` (start, stop, reset,
-observability), `data.mk` (models, the vector store), `host.mk` (the app's processes on the host), `gateway.mk` (the front door and its checks), `droplet.mk` (the dev stack on one droplet), `test.mk` (tests, lint, load tests, smoke), `evals.mk`,
+observability), `data.mk` (models, the vector store), `host.mk` (the app's processes on the host), `gateway.mk` (the front door and its checks), `droplet.mk` (the dev stack on one droplet), `test.mk` (tests, lint, load tests, smoke), `evals.mk`, `web.mk` (the web client),
 `security.mk` and `admin.mk` (back-office commands). `make help` groups them by `##@ Topic` markers. Every rule is phony by computation, so a new target needs no list entry. The env-example test scans `.mk` too.
 
 ```bash
@@ -44,6 +44,7 @@ make test-integration  # real Postgres/Redis/Qdrant via testcontainers — needs
 make test-live         # real Ollama + full stack + Playwright — needs Docker
 make up                # docker-compose infra (needs a native Ollama on the host, see README)
 make serve             # FastAPI on :8000 (web UI at /)
+make web-dev           # the web client in web/ on :5173 against that API (needs Node; `make web-check` is CI's `web` job)
 make reembed COLLECTION_NAME=docs   # rebuild a vector collection under the current embedding identity, swap atomically (ARGS=--dry-run first)
 make agent-worker      # queue consumer for the Ecorp domain (AGENT_WORKER_DOMAINS=support,ops picks others; agent-worker-all serves every domain)
 make chat              # CLI agent; chat-hitl adds approval prompts (turns go through the queue: run `make agent-worker` too)
@@ -130,8 +131,9 @@ they delete volumes or kill running processes.
   dimension, prefixes and revision, and the app refuses to read or write one that disagrees); `app/core/routing_policy.py` (the rules, the label table and
   `decide`: pure, the evaluation harness runs it too), `app/adapters/outbound/mlservice/classification.py` (the client for the ML service's label sets) and
   `app/agent/graph/model_route.py` are the router's whole footprint in the app, and it can only write `State.model_route`.
-- `promptfoo/` — the prompt checks, and the only Node in the repo: its `package.json`, lock file and `node_modules`
+- `promptfoo/` — the prompt checks: its `package.json`, lock file and `node_modules`
   live here, so every `npm`/`npx` runs from this directory (`make promptfoo` does that). The root stays Python-only.
+- `web/` — the web client (React, TypeScript, Vite, Tailwind, TanStack Query, Zustand, oxlint; specs/023, constitution 1.5.0 "Web client"), **not served yet**: `GET /` is still `app/adapters/inbound/api/static/`. Feature modules that do not import each other except along the edges `web/src/test/architecture.test.ts` lists; types generated from `openapi.json` (`make web-api` after `make openapi`, or CI's `web` job fails). `web/README.md` has the rules, and the ids and class names the browser tests rely on.
 - `bruno/` — the HTTP API as a Bruno collection (text `.bru` files, no Node project: `bruno/README.md`). A new or changed endpoint gets its
   request in the same change, a tag from `app/adapters/inbound/api/openapi.py` and a `make openapi`; `tests/adapters/inbound/api/test_bruno_collection_matches_api.py` fails on a route, body field, header or variable that drifted.
 
@@ -202,4 +204,4 @@ story. Amend the constitution only through `/speckit-constitution` and a PR.
 Path-scoped guidance loads automatically from `.claude/rules/`: `side-effect-tools.md`,
 `runtime-reliability.md`, `testing.md`.
 
-The billing package's own specs (010-013) live in `packages/billing/specs/`; `specs/` keeps a one-file pointer for each, so Spec Kit still counts the numbers as taken (014 is the model-serving and evaluation-harness spec, 015 builds on it with label sets on the ML service and tiered model routing, 016 puts that behind a decision interface shaped like the hosted Jev one, 017 is the MCP gateway, 018 is the edge authentication and rate-limit service, 019 is the hexagonal restructuring: ports, adapters and a composition root, 020 puts the CLI and the Telegram channel behind the front door, 021 gives the Telegram channel approvals by button, parallel chats, a webhook and account linking, and 022 puts PgBouncer in front of the app's databases and adds Pyroscope profiling; the next is 023).
+The billing package's own specs (010-013) live in `packages/billing/specs/`; `specs/` keeps a one-file pointer for each, so Spec Kit still counts the numbers as taken (014 is the model-serving and evaluation-harness spec, 015 builds on it with label sets on the ML service and tiered model routing, 016 puts that behind a decision interface shaped like the hosted Jev one, 017 is the MCP gateway, 018 is the edge authentication and rate-limit service, 019 is the hexagonal restructuring: ports, adapters and a composition root, 020 puts the CLI and the Telegram channel behind the front door, 021 gives the Telegram channel approvals by button, parallel chats, a webhook and account linking, 022 puts PgBouncer in front of the app's databases and adds Pyroscope profiling, and 023 rewrites the web UI as a React application in `web/`; the next is 024).

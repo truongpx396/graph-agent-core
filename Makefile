@@ -6,6 +6,7 @@
 #   droplet.mk   the dev stack on one DigitalOcean droplet
 #   test.mk      tests, static checks, load tests, smoke checks
 #   evals.mk     model and prompt evaluation, red team
+#   web.mk       the web client in web/ (needs Node)
 #   security.mk  scanners, SonarQube, DefectDojo
 #   admin.mk     sweeps, billing, budgets, people and tokens
 
@@ -63,6 +64,7 @@ include make/gateway.mk
 include make/droplet.mk
 include make/test.mk
 include make/evals.mk
+include make/web.mk
 include make/security.mk
 include make/admin.mk
 
