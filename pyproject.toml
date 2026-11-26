@@ -27,7 +27,7 @@ faulthandler_timeout = 300
 # ANDing with it (verified directly: `pytest -m integration` runs ONLY the
 # `integration`-marked tests, not "integration AND NOT integration") — see
 # Makefile's `test-integration`/`test-live` targets and
-# .github/workflows/ci.yml, both of which rely on exactly that override
+# CI, which relies on exactly that override
 # (GRAPH_PATTERNS.md pattern 48).
 addopts = '-m "not integration and not llm and not e2e and not deepeval and not crawl and not sandbox"'
 markers = [
@@ -122,7 +122,7 @@ ignore_missing_imports = true
 # `Any` for a free-form JSON payload), `warn_return_any` (a function declared to return `str` does not hand back an `Any`), `warn_unused_ignores`
 # and `warn_redundant_casts` (a `type: ignore` or a `cast` that no longer does anything is a stale claim about the code), `no_implicit_reexport`
 # (a name another module imports from this one is re-exported with `X as X`), `strict_equality`, `disallow_untyped_calls` and the rest. mypy is
-# pinned in requirements-dev.txt and the CI job, so a release cannot add a check unseen.
+# pinned in requirements-lint.txt (which CI installs), so a release cannot add a check unseen.
 strict = true
 # Third-party stubs this app depends on (redis-py's Streams commands,
 # qdrant-client's Filter/Condition unions, RediSearch's create_index) are
@@ -133,3 +133,13 @@ strict = true
 files = ["app", "scripts", "packages/billing/src", "services/ml-service/ml_service"]
 # services/ml-service is on the path so the `ml_service` package resolves as a top-level name (its directory name has a hyphen).
 mypy_path = "packages/billing/src:services/ml-service"
+
+# `pytest --cov` (CI's `test` job). The floor is two points under what the hermetic suite covered when it was set (85%, 2026-11-26): it is there to
+# stop coverage sliding unseen, not to be a target. The marked tiers (integration, live) add coverage this number does not count.
+[tool.coverage.run]
+source = ["app", "packages/billing/src/credit_billing"]
+
+[tool.coverage.report]
+fail_under = 83
+skip_covered = true
+

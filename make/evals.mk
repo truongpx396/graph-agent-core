@@ -40,6 +40,8 @@ probe-tools:  ## Does the chat model emit usable tool calls? 25 prompts plus 4 t
 
 ##@ Prompt checks and LLM-judged quality
 
+# `npm install`, not `npm ci`: the lock's optional native bindings (libsql, one per OS and arch) are a snapshot of the machine that wrote it,
+# and `npm ci` then fails on Linux with "libsql binding is missing". `--include=optional` is promptfoo's documented fix (needed either way).
 promptfoo:  ## Prompt regression checks for the domain system prompts against a real Ollama
 	cd promptfoo && npm install --include=optional
 	python -m promptfoo.dump_prompts
@@ -47,9 +49,10 @@ promptfoo:  ## Prompt regression checks for the domain system prompts against a 
 		npx promptfoo eval --config $$domain.yaml || exit 1; \
 	done
 
-# Read the reasons, not just pass/fail (GRAPH_PATTERNS.md 48); CI never fails on a score.
+# Read the reasons, not just pass/fail (GRAPH_PATTERNS.md 48); it never fails on a score. Nightly in .github/workflows/llm-evals.yml.
+# `tests/deepeval`, not the whole suite: collecting the API tests configures logging at import and floods every graph turn with it.
 deepeval:  ## LLM-judged RAG quality, conversation simulation and tool-call checks (needs Docker, GOOGLE_API_KEY, GROQ_API_KEY)
-	DEEPEVAL_TELEMETRY_OPT_OUT=1 pytest -m deepeval -q -s --reruns 2 --reruns-delay 10 --only-rerun "(ServerError|UNAVAILABLE|RESOURCE_EXHAUSTED|DEADLINE_EXCEEDED|RateLimitError|APITimeoutError|APIConnectionError|InternalServerError)" tests/deepeval
+	DEEPEVAL_TELEMETRY_OPT_OUT=1 pytest -m deepeval -q -s -v --reruns 2 --reruns-delay 10 --only-rerun "(ServerError|UNAVAILABLE|RESOURCE_EXHAUSTED|DEADLINE_EXCEEDED|RateLimitError|APITimeoutError|APIConnectionError|InternalServerError)" tests/deepeval
 
 ##@ Red team
 
@@ -58,16 +61,18 @@ deepeval:  ## LLM-judged RAG quality, conversation simulation and tool-call chec
 # --max-concurrency 1 --delay 2100: serial calls >2s apart, under the free Gemini tier's 30 req/min (redteam.yaml, RATE LIMIT).
 # -o per stanza: `redteam run` writes to promptfoo/redteam.yaml whatever --config is (promptfoo's own default), which clobbered
 # the hand-authored support file once; so each scratch config is its own output. Explicit stanzas, not a loop: support's file has no domain prefix.
-# Leading `-`: promptfoo exits 100 as soon as any case fails, and a finding is the point; carry on to the next domain.
+# promptfoo exits 100 when a case fails. A finding is the point of a red team, so 100 carries on to the next domain; any other failure
+# (npm, Ollama, the Gemini key, a crash) stops here and fails the run.
+redteam_run = cp promptfoo/$(1) promptfoo/.$(2)-redteam-run-scratch.yaml && cd promptfoo && \
+	{ PROMPTFOO_DISABLE_REMOTE_GENERATION=true npx promptfoo redteam run --config .$(2)-redteam-run-scratch.yaml \
+	--output .$(2)-redteam-run-scratch.yaml --max-concurrency 1 --delay 2100 || test $$? -eq 100; }
+
 promptfoo-redteam:  ## Adversarial variants of the support/sales/ops prompts, graded by Gemini (needs GOOGLE_API_KEY)
 	cd promptfoo && npm install --include=optional
 	python -m promptfoo.dump_prompts
-	-cp promptfoo/redteam.yaml promptfoo/.support-redteam-run-scratch.yaml
-	-cd promptfoo && PROMPTFOO_DISABLE_REMOTE_GENERATION=true npx promptfoo redteam run --config .support-redteam-run-scratch.yaml --output .support-redteam-run-scratch.yaml --max-concurrency 1 --delay 2100
-	-cp promptfoo/sales-redteam.yaml promptfoo/.sales-redteam-run-scratch.yaml
-	-cd promptfoo && PROMPTFOO_DISABLE_REMOTE_GENERATION=true npx promptfoo redteam run --config .sales-redteam-run-scratch.yaml --output .sales-redteam-run-scratch.yaml --max-concurrency 1 --delay 2100
-	-cp promptfoo/ops-redteam.yaml promptfoo/.ops-redteam-run-scratch.yaml
-	-cd promptfoo && PROMPTFOO_DISABLE_REMOTE_GENERATION=true npx promptfoo redteam run --config .ops-redteam-run-scratch.yaml --output .ops-redteam-run-scratch.yaml --max-concurrency 1 --delay 2100
+	$(call redteam_run,redteam.yaml,support)
+	$(call redteam_run,sales-redteam.yaml,sales)
+	$(call redteam_run,ops-redteam.yaml,ops)
 
 garak:  ## Fast garak jailbreak/injection probes; run in a SEPARATE Python env (garak upgrades langgraph-checkpoint past our pin)
 	python -m pip install -q -r garak/requirements-garak.txt

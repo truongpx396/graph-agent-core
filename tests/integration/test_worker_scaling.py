@@ -62,8 +62,8 @@ from tests.containers import (
 # caused an intermittent failure in TestScaledWorkersHandleHITLAndSubagentDelegation under `-n auto` (12
 # workers) that vanished when the test ran alone. It is the same fix as tests/containers.py ("cross-worker
 # sharing under xdist is not free") applied to the subprocess stack layered on those containers. Needs
-# `--dist=loadgroup` on the pytest command (`load`/`loadscope` ignore the marker); see ci.yml's
-# `test-integration` job and the Makefile target, the only places `-m integration` runs. Every other job keeps
+# `--dist=loadgroup` on the pytest command (`load`/`loadscope` ignore the marker); see
+# `make test-integration`, the only place `-m integration` runs (CI's `test-integration` job calls it). Every other job keeps
 # its default scheduler.
 pytestmark = [pytest.mark.integration, pytest.mark.xdist_group(name="scaled_stack")]
 

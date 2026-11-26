@@ -1,0 +1,21 @@
+# Test tools, none of them runtime dependencies: they are not in requirements.txt or the lock file, so the app image carries no test runner.
+# CI's pytest jobs install the lock plus this file, and requirements-dev.txt includes it, so a local run and CI use the same versions.
+
+# The runner and its asyncio plugin (`asyncio_mode = "auto"` in pyproject.toml needs it), parallel runs and coverage.
+pytest==8.4.2
+pytest-asyncio==1.4.0
+pytest-xdist==3.8.0
+pytest-cov==7.0.0
+coverage==7.11.0
+
+# Real, ephemeral Docker services (tests/containers.py). Its cross-worker reuse needs `filelock`, deliberately not pinned here: it is already
+# in the lock file, and a second pin once made one combined `pip install` unsolvable.
+testcontainers[postgres,redis,ollama]==4.9.0
+
+# Browser E2E (tests/live/). Needs `playwright install --with-deps chromium` once.
+pytest-playwright==0.7.1
+
+# Not in the lock file, but the hermetic suite imports them (specs/014): the public parquet datasets of scripts/model_eval, and
+# services/ml-service/ml_service/metrics.py, whose image gets the same pin from services/ml-service/requirements.txt (a test keeps them equal).
+pyarrow==26.0.0
+prometheus-client==0.26.0

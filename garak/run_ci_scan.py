@@ -1,5 +1,5 @@
-"""Fast, curated garak probe subset against the real model, REPORT-ONLY, run on every push
-(`.github/workflows/ci.yml`'s `garak` job; `make garak` locally). Design: `garak/config.yaml`'s header and
+"""Fast, curated garak probe subset against the real model, REPORT-ONLY, run by hand
+(`make garak`; it is not in CI). Design: `garak/config.yaml`'s header and
 GRAPH_PATTERNS.md pattern 48. This docstring explains why it is report-only, a conclusion reached empirically,
 not a default.
 

@@ -1,163 +1,137 @@
 name: CI
 
-# Runs on every push/PR against main. Deliberately does NOT run scripts/checks/eval.py
-# here (see README's Troubleshooting / GRAPH_PATTERNS.md) — that harness
-# needs the real stack (Ollama models, Qdrant, a warm local model) and is
-# meant for a maintainer to run deliberately (`make eval`) before a release,
-# not as a per-PR gate against free-tier CI minutes and a cold model. The
-# `test` job below is exactly the subset designed to need none of that
-# (a fake LLM, no live services — see tests/conftest.py).
+# Every pull request and push to main. The branch ruleset requires ONE check, `ci-ok`, which stands for all of this (ENGINEERING_PATTERNS.md
+# pattern 107, which also holds the reasoning and history behind the jobs).
 #
-# `test-integration`/`test-live`/`promptfoo` are the newer, DELIBERATELY
-# DIFFERENT tradeoff from scripts/checks/eval.py above: real backends via
-# testcontainers (test-integration/test-live) or a small Ollama sidecar
-# (promptfoo), but a genuinely SMALL model and a FAST, curated subset each —
-# cheap enough to run on every push, unlike eval.py's real release-gating
-# CHAT_MODEL and 5-repetitions-per-case statistical gate. See
-# GRAPH_PATTERNS.md pattern 48 for the full design writeup, including why
-# each of these is a distinct, non-redundant check rather than a smaller
-# copy of the others.
+#   changes -+- lint, config, typecheck, test, billing-package, web, authlimit, openapi, security ------+
+#            +- test-integration, test-live, promptfoo, image   (skipped for documentation-only PRs) --+- ci-ok - promote - deploy (main only)
 #
-# `garak` (a raw-model jailbreak/injection scan) is deliberately NOT a CI
-# job — `make garak`/`make garak-full` only, the same "maintainer runs this
-# deliberately" framing as `make eval` above, not a per-push gate. It found
-# real value (see GRAPH_PATTERNS.md pattern 48's disclosed finding on this
-# app's small model's own jailbreak resistance) but never gated the build
-# even when it did run here — moved to fully manual instead of keeping a
-# CI job that was always report-only.
-#
-# `trivy` (dependency/secret/IaC-misconfig scanning) IS a per-push job below,
-# unlike garak — it's fast (no live services, no model) and its findings are
-# mostly deterministic given this repo's own lock files. The one thing that
-# ISN'T deterministic: Trivy's CVE database updates independently of any
-# code change here, so the same commit can start failing this job weeks
-# later purely because a new CVE got published against an already-pinned
-# dependency — a different, external-state kind of flakiness than garak's
-# own reasons for staying manual. Split the difference instead of picking
-# one extreme: hard-gate only CRITICAL severity WITH a known fix
-# (`ignore-unfixed` drops the ones a version bump can't solve today anyway),
-# report everything else (HIGH severity, and Dockerfile/compose
-# misconfigurations) to the Security tab instead of failing the build. See
-# the `trivy` job's own comments below for the exact policy per step.
-#
-# `strix` (an autonomous AI pentest agent, https://github.com/usestrix/strix)
-# is NOT in this file at all — see .github/workflows/strix.yml, a separate
-# workflow_dispatch-only file. It actively attacks whatever target it's
-# pointed at using a paid cloud LLM (not this app's local-only Ollama), so
-# unlike everything else here it costs real money per run and needs a human
-# to deliberately trigger it — the same "maintainer runs this deliberately"
-# framing as `make eval`/`make garak-full`/`make deepeval` above, just
-# enforced by the trigger type itself rather than by convention/Makefile-only
-# placement, since a workflow_dispatch job can't accidentally run on
-# somebody else's PR the way a `push`/`pull_request` trigger could.
-#
-# `semgrep` (SAST over this app's own Python/Dockerfile source) and
-# `checkov` (IaC misconfiguration scanning over deploy/terraform/**) are per-
-# push jobs, same reasoning as `trivy`: no live services, deterministic
-# given a commit, cheap enough to gate every push rather than needing a
-# human to trigger them. Each hard-gates on any finding — both were run
-# against this exact repo state before being wired up here (not guessed):
-# semgrep found one real, since-annotated finding (app/adapters/inbound/api/main.py's
-# env-gated CORS wildcard — see its own `nosemgrep` comment for why it's a
-# deliberate false positive, not a fix); checkov's only finding
-# (CKV_DIO_2, "droplet specifies an SSH key") is a verified static-analysis
-# limitation against a required Terraform variable with no default — see
-# .checkov.yaml's own comment. Neither job re-scans what `trivy` above
-# already covers (Dockerfile/docker-compose misconfig, dependency CVEs,
-# secrets) — semgrep's rulesets target source-code patterns trivy's
-# scanners don't parse at all, and checkov here is scoped to
-# deploy/terraform only (see .checkov.yaml), the one IaC surface trivy's
-# own filesystem walk has nothing meaningful to say about beyond generic
-# misconfig heuristics.
-#
-# `sonarqube` (self-hosted Community Edition, not SonarCloud — see
-# deploy/dev/observability.yml's `quality` profile for the same image used
-# persistently outside CI) runs its own ephemeral server as a job step
-# (same explicit `docker run` sidecar shape this file's `promptfoo` job
-# already uses for its own Ollama, not GH Actions' `services:` block or
-# testcontainers-python — this server needs to be healthy and have ingested
-# the scanner's report before the quality-gate poll makes sense, which a
-# plain step-ordered `docker run` guarantees more simply here than
-# coordinating around `services:`' own startup-before-any-step ordering).
-# Ephemeral means no cross-run history/trend dashboards — a real
-# always-on SonarQube server would need its own persistent deployment,
-# out of scope here (see deploy/README.md) — but static analysis + the
-# quality gate itself are still fully real and still hard-gate the build.
-#
-# The checks are independent (no `needs:` edges) and run in parallel: fast
-# feedback is the point. The only ordering is the release at the bottom:
-# image (build, smoke, scan, publish `:<sha>`) -> promote (`:latest`, main
-# only, after every check passed) -> deploy (deploy.yml, off until enabled).
+# Checks run in parallel (fast feedback is the point); only the release at the end is ordered. Not here, on purpose: deepeval and the red team
+# (llm-evals.yml: nightly, they never gate on a score), and `make eval`, garak, Strix and ZAP (a person runs those).
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
-# Every job below has a `timeout-minutes`. Without one a stalled job runs to GitHub's 6-hour cap: 28 of the 300 runs since
-# 2026-10-07 had a job past 45 minutes. test-integration did it 20 times (all cancelled, after 78 minutes to the cap; healthy: 10),
-# test and test-live once each (cancelled at the cap; healthy: 5 and 17). Each limit is at least 2.5x the longest healthy run of
-# its job (5 minutes at the least), so a stall fails in minutes and a slow-but-healthy run does not. deepeval is the exception:
-# usually 2-21 minutes, with a slow tail of 56-140 (three of those green), so its limit sits above its slowest green run.
-# Re-measure before tightening one.
+permissions:
+  contents: read
+
+# A new push to a pull request cancels its older run. Runs on main are never cancelled: each may be the one that releases.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+# Each `timeout-minutes` is at least 2.5x the job's longest healthy run (5 at the least): 28 of 300 runs once had a job stall past 45 minutes
+# (tests/core/test_ci_jobs_have_timeouts.py). Re-measure before tightening one.
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2 # on a pull request HEAD is the merge commit and HEAD^1 its base
+          persist-credentials: false
+      - id: diff
+        name: Does this change anything but documentation?
+        env:
+          EVENT: ${{ github.event_name }}
+        shell: bash
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            git diff --name-only HEAD^1 HEAD | python3 scripts/tools/ci_gate.py changes | tee -a "$GITHUB_OUTPUT"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ruff, then actionlint, zizmor and shellcheck on the workflows and shell scripts.
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.13"
-      - run: pip install ruff==0.16.4
-      - run: ruff check .
+          persist-credentials: false
+      - uses: ./.github/actions/setup-python
+        with:
+          requirements: requirements-lint.txt
+      - run: make lint lint-workflows
 
-  # The production Alertmanager config is validated by Alertmanager itself, not just parsed:
-  # only `amtool` knows whether the config loads — and a config that fails to load is an Alertmanager that
-  # never starts (spec 008 A7).
-  alertmanager-config:
+  # What only the tool that reads a config knows: whether compose, Prometheus, Alertmanager and Terraform will accept it.
+  config:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: amtool check-config on the production config
+        with:
+          persist-credentials: false
+      - run: make compose-check
+      - run: make monitoring-check
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.9.8"
+      # Structural only: a `plan` needs the state, which stays off CI (deploy/README.md). Misconfiguration scanning is security.yml's Checkov.
+      - name: terraform fmt and validate (each root)
+        working-directory: deploy/terraform
         run: |
-          printf '%s' 'https://hooks.slack.com/services/T000/B000/XXXX' > "$RUNNER_TEMP/slack_webhook_url"
-          docker run --rm --entrypoint amtool \
-            -v "$PWD/observability/alertmanager/alertmanager.prod.yml:/etc/alertmanager/alertmanager.yml:ro" \
-            -v "$RUNNER_TEMP/slack_webhook_url:/tmp/slack_webhook_url:ro" \
-            prom/alertmanager:latest check-config /etc/alertmanager/alertmanager.yml
+          terraform fmt -check -diff -recursive
+          for root in prod dev; do
+            (cd "$root" && terraform init -backend=false && terraform validate)
+          done
 
   typecheck:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.13"
-      - run: pip install -r requirements-lock.txt mypy==2.3.1
+          persist-credentials: false
+      - uses: ./.github/actions/setup-python
+        with:
+          requirements: requirements-lock.txt requirements-lint.txt
+      # `mypy`, not through make: the Makefile exports PYTHONPATH, and this job proves `mypy_path` is enough without it or an install.
       - run: mypy
 
+  # The hermetic suite: a fake LLM, no live services (tests/conftest.py). Coverage has a floor (pyproject.toml), not a target.
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-python
+        with:
+          requirements: requirements-lock.txt requirements-test.txt
+      # `pytest`, not `make test`: proves `pythonpath` is enough without the Makefile's PYTHONPATH or an install.
+      - run: pytest -n auto -q --cov
+      - name: Coverage in the run summary
+        if: ${{ !cancelled() }}
+        run: echo "Line coverage of app/ and the billing package, hermetic tests only - $(coverage report --format=total || true)%" >> "$GITHUB_STEP_SUMMARY"
+
+  # The billing package installed ALONE (spec 011 D20, FR-016): not the lock file, not the app. Passing here proves it depends on nothing undeclared.
+  billing-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
-      # pytest, pytest-asyncio, pyarrow and prometheus-client are not in the lock file (test tools and dev/aux-image dependencies, specs/014),
-      # so the hermetic suite needs them named here (keep the pins equal to requirements-dev.txt and services/ml-service).
-      - run: pip install -r requirements-lock.txt pytest==8.4.2 pytest-asyncio==1.4.0 pytest-xdist==3.8.0 pyarrow==26.0.0 prometheus-client==0.26.0
-      - run: pytest -n auto -q
+      - run: pip install "./packages/billing[test]"
+      - name: The agent app is not importable from here
+        working-directory: packages/billing
+        run: python -c "import importlib.util, sys; sys.exit(1 if importlib.util.find_spec('app') else 0)"
+      - run: pytest -q
+        working-directory: packages/billing
 
-  # The billing package, installed ALONE into a clean environment (spec 011 D20, FR-016): not the lock file, not the agent app. If its
-  # hermetic tests pass here, the package does not depend on anything it does not declare, which is the whole point of extracting it.
-  # (The repo's own `test` job above also imports it, by path; this is the job that proves it does not need the rest.)
+  # The web client (web/). The API types it is written against are generated from openapi.json, so a contract change not regenerated fails here.
   web:
-    # The web client (web/): its own lock file, and the one job besides `promptfoo` that needs Node. The API types it is written
-    # against are generated from openapi.json, so a contract change that was not regenerated fails here.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -165,6 +139,8 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
@@ -178,58 +154,50 @@ jobs:
       - run: npm test
       - run: npm run build
 
-  billing-package:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.13"
-      - run: pip install "./packages/billing[test]"
-      - name: The agent app is not importable from here
-        working-directory: packages/billing
-        run: python -c "import importlib.util, sys; sys.exit(1 if importlib.util.find_spec('app') else 0)"
-      - run: pytest -q
-        working-directory: packages/billing
-
-  # The authlimit service (specs/018) is a separate Go program with its own module: it cannot be tested by the Python jobs, and they cannot be
-  # broken by it. Hermetic like `test`: an in-memory Redis, a fake authorization server, no Docker services. Its image is the `image` job's.
+  # The authlimit service (specs/018), its own Go module: an in-memory Redis, a fake authorization server, no Docker. Its image is the `image`
+  # job's, its known vulnerabilities security.yml's.
   authlimit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: services/authlimit
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The newest 1.26 patch, as the image's tag resolves to: go.mod's `go 1.26.0` would test against a standard library with known holes.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: services/authlimit/go.mod
+          go-version: "1.26.x"
+          check-latest: true
           cache-dependency-path: services/authlimit/go.sum
-      - name: go vet
-        run: go vet ./...
-        working-directory: services/authlimit
+      - run: go vet ./...
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+          working-directory: services/authlimit
       - name: go test -race (reads the shared vectors in testdata/auth-vectors)
         run: go test -race -count=1 ./...
-        working-directory: services/authlimit
-      # The routing and the body types are GENERATED from openapi.json (internal/api). A document edited without `make authlimit-generate`
-      # leaves code that describes yesterday's API; the generator's version is pinned in internal/api/generate.go.
-      - name: The generated code is the document's (go generate, then no difference)
+      # Routing and body types are GENERATED from openapi.json (internal/api): a document edited without `make authlimit-generate` fails here.
+      - name: The generated code is the document's
         run: |
           go generate ./...
           git diff --exit-code -- internal/api
-        working-directory: services/authlimit
 
-  # What a client reads is three OpenAPI documents (openapi.json, services/ml-service/openapi.json, services/authlimit/openapi.json). That
-  # they are TRUE is held by tests in `test` (the two generated ones, tests/scripts/test_openapi_documents_are_current.py) and in
-  # `authlimit` (the hand-written one, internal/server/openapi_test.go). This job asks the other question: does the change BREAK a client of
-  # what main serves? oasdiff compares each document with main's (`make openapi-breaking`; a deliberate break is one line in
-  # .github/openapi-breaking-ignore.txt and still needs a new major version), and `make openapi-version` fails any other change to the
-  # contract that left `info.version` where it was. A pull request only: there is no "before" on a push to main.
+  # Does the change BREAK a client of what main serves? (That the three OpenAPI documents are TRUE is held by tests in `test` and `authlimit`.)
+  # A deliberate break is one line in .github/openapi-breaking-ignore.txt and still needs a new major version. Pull requests only: a push to
+  # main has no "before".
   openapi:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      BASE_REF: ${{ github.base_ref }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: services/authlimit/go.mod
@@ -237,849 +205,129 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0 (scripts.tools.openapi_version is stdlib only)
         with:
           python-version: "3.13"
-      # The checkout is the merge of the PR into main, so this compares what main would become with what main is now.
+      # The checkout is the merge of the PR into main, so this compares what main would become with what it is now.
       - name: Fetch main, the side to compare with
-        env:
-          BASE_REF: ${{ github.base_ref }}
         run: git fetch --no-tags --depth=1 origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
       - name: Install oasdiff
         env:
           GOTOOLCHAIN: auto # v1.35.0's go.mod asks for a newer toolchain than the one set up above; Go fetches it
         run: go install github.com/oasdiff/oasdiff@v1.35.0
       - name: Breaking changes against main (and a breaking one needs a new major version)
-        env:
-          BASE_REF: ${{ github.base_ref }}
         run: make openapi-breaking OPENAPI_BASE="origin/${BASE_REF}"
       - name: A changed contract has a higher version than main's
-        env:
-          BASE_REF: ${{ github.base_ref }}
         run: make openapi-version OPENAPI_BASE="origin/${BASE_REF}"
 
+  # Real Postgres, Redis and Qdrant through testcontainers (tests/containers.py), no LLM. Then the billing package's own.
   test-integration:
-    # Real Postgres/Redis/Qdrant via testcontainers (tests/containers.py) —
-    # no LLM, so this stays cheap; GH-hosted ubuntu-latest runners already
-    # have Docker running, no extra setup step needed.
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.13"
-      - run: >
-          pip install -r requirements-lock.txt
-          pytest==8.4.2
-          pytest-asyncio==1.4.0
-          pytest-xdist==3.8.0
-          "testcontainers[postgres,redis,ollama]==4.9.0"
-      # The billing package is installed the way the Docker image installs it (spec 011), BEFORE anything runs the app. pytest's `pythonpath`
-      # puts it on sys.path of the pytest process only; a uvicorn, agent-worker or script process this job starts does not inherit that, and
-      # the lock file does not carry the package (it is a freeze of requirements.txt). Without this step those processes die on
-      # `import credit_billing` (the first PR C run failed test-integration and promptfoo exactly so). The `test` and `typecheck` jobs
-      # deliberately do not install it: they are the ones that prove `pythonpath` and `mypy_path` are enough.
-      - run: pip install --no-deps ./packages/billing
-      # --dist=loadgroup: tests/integration/test_worker_scaling.py's own
-      # xdist_group marker needs this to actually take effect (plain `load`
-      # ignores it) — forces its 3 heavy real-subprocess tests onto ONE
-      # worker so its module-scoped `scaled_stack` fixture (5 real
-      # agent_worker.py + uvicorn + fake_llm_server processes) only ever
-      # builds once per run, not once per xdist worker that happens to pick
-      # up one of its tests. See that module's own comment for the real,
-      # reproduced intermittent failure this fixes, not a theoretical one.
-      - run: pytest -n auto -m integration -q --dist=loadgroup
-      # The billing package's own real-Postgres tests (a separate process: its `tests` package is not this repo's).
-      - run: pytest -m integration -q
-        working-directory: packages/billing
+          persist-credentials: false
+      - uses: ./.github/actions/setup-python
+        with:
+          requirements: requirements-lock.txt requirements-test.txt
+          billing: "true"
+      - run: make test-integration
 
+  # A real small model, the app and its workers, real crawl4ai renders and a Playwright browser run (tests/live/, GRAPH_PATTERNS.md pattern 50).
+  # Why three pytest processes and not one: make/test.mk.
   test-live:
-    # Real small Ollama model + the full app/agent-worker stack, incl. a
-    # Playwright browser E2E (tests/live/, GRAPH_PATTERNS.md pattern 50)
-    # and real crawl4ai renders against a real `unclecode/crawl4ai`
-    # container (the `crawl` marker, self-provisioned via
-    # tests/containers.py::ensure_crawl4ai() same as every other
-    # testcontainers-managed dependency in this job, 2026-09-17 —
-    # previously its own explicit `docker run` sidecar step below) — the
-    # expensive job, so its Ollama model pull is cached across runs (see
-    # tests/containers.py's own ensure_ollama docstring for why
-    # `ollama_home` makes this possible at all: a stable HOST directory
-    # bind-mounted into a fresh container each run).
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      TEST_LLM_MODEL: qwen2.5:3b
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.13"
-      - run: >
-          pip install -r requirements-lock.txt
-          pytest==8.4.2
-          pytest-asyncio==1.4.0
-          pytest-xdist==3.8.0
-          "testcontainers[postgres,redis,ollama]==4.9.0"
-          pytest-playwright==0.7.1
-      # The billing package, as in test-integration (see the comment there): a process this job starts does not see pytest's `pythonpath`.
-      - run: pip install --no-deps ./packages/billing
-      # The page the `e2e` tests drive: the API serves it from web/dist, as the image does.
+          persist-credentials: false
+      - uses: ./.github/actions/setup-python
+        with:
+          requirements: requirements-lock.txt requirements-test.txt
+          billing: "true"
+      # The page the browser tests drive: the API serves it from web/dist, as the image does.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: npm ci && npm run build
-        working-directory: web
-      # For this job's OWN `e2e` browser tests (pytest-playwright driving
-      # the built-in web UI) — unrelated to crawl4ai (self-provisioned via
-      # testcontainers, see above), but this job still needs a real browser
-      # itself.
+      - run: make web-build
       - run: playwright install --with-deps chromium
-      # restore only: the save is the last step of this job (see .github/actions/save-ollama-cache).
-      # The key names BOTH models `ensure_ollama` pulls (the chat model, and nomic-embed-text, its
-      # default `embed_model`), because test-live and deepeval share one cache and must not be
-      # handed a directory that has only one of them. Change the key if that default changes.
+      # The key names BOTH models `ensure_ollama` pulls (chat and nomic-embed-text): deepeval shares it, and must not get a directory with one.
       - id: ollama-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/graph-agent-core-ollama-models
           key: ollama-models-${{ runner.os }}-${{ env.TEST_LLM_MODEL }}-nomic-embed-text
-        env:
-          TEST_LLM_MODEL: qwen2.5:3b
-      # TWO separate pytest invocations, not one combined
-      # `-m "llm or e2e or crawl"` run — real bug, root-caused live
-      # (2026-09-21, after two different attempted fixes elsewhere didn't
-      # help): `llm`/`crawl` tests are `async def` (pytest-asyncio-managed),
-      # `e2e` tests are plain sync `def` driving pytest-playwright's SYNC
-      # API, which runs its own event loop internally. Mixing both kinds
-      # under one `-n auto` run lets xdist schedule an `e2e` test and an
-      # async test onto the SAME worker process — once that happens,
-      # Playwright's own internal event-loop management leaves that
-      # worker's asyncio state corrupted for pytest-asyncio's own Runner,
-      # and every SUBSEQUENT async test scheduled onto that same worker
-      # fails with `RuntimeError: Runner.run() cannot be called from a
-      # running event loop` (or its teardown-time sibling) regardless of
-      # what it actually tests — reproduced directly, repeatedly, hitting
-      # 4-6 completely unrelated tests across different files in a single
-      # real run. Two separate invocations guarantee full PROCESS
-      # isolation between the two kinds — no worker ever runs both. Both
-      # still share the same underlying Postgres/Redis/Qdrant/Ollama
-      # containers via tests/containers.py's own cross-invocation cache
-      # (that's what it's for); the second invocation pays a modest
-      # extra startup cost rebuilding them after the first's teardown,
-      # traded for this being a real, direct fix rather than more
-      # guesswork at the actual root cause.
-      - run: pytest -n auto -m "llm or crawl" -q
-        env:
-          TEST_LLM_MODEL: qwen2.5:3b
-      # No `-n auto` here, deliberately: `real_stack`/`real_stack_with_
-      # retrieval` (tests/live/conftest.py) are session-scoped PER XDIST
-      # WORKER PROCESS, not shared across workers — under `-n auto`,
-      # MULTIPLE workers could each spin up their own `real_stack`
-      # instance simultaneously, all pointed at the SAME shared, cached
-      # Redis (tests/containers.py's own `_acquire("redis", ...)`),
-      # reintroducing the exact cross-worker Streams consumer-group
-      # contention `real_stack_with_retrieval`'s own dedicated
-      # `_private_redis()` was built to avoid — but `real_stack` itself
-      # was never given that same protection, since it was written
-      # assuming a single instance ever exists at a time. Caught live
-      # testing this same split locally (`-n 4 -m e2e`): all 6 e2e tests
-      # failed, several with empty answers and the same "model \"embed\"
-      # not found" signature as the original cross-worker bug. `e2e`
-      # tests are already this suite's expensive tier (real browser + real
-      # inference, only 6 of them) — running them serially sidesteps the
-      # whole multi-worker-fixture-instance risk entirely rather than
-      # chasing a second fix for it.
-      # The GATE: every e2e test that does not need the model to chain calls (a single tool call, a citation,
-      # the approve/reject round trip, the UI helpers). Every one of these has passed in every CI run since
-      # Oct 3, so a red here is a real regression, not the model's mood.
-      - run: pytest -m "e2e and not advisory" -q
-        env:
-          TEST_LLM_MODEL: qwen2.5:3b
-      # ADVISORY, deliberately non-blocking (`continue-on-error`): the two multi-step tests (a skill, a
-      # subagent delegation) need the 3B model to chain 3+ calls and stop failing in a way no test or tool
-      # wording fixed (GRAPH_PATTERNS.md pattern 48). They still run, and a failure prints the page transcript,
-      # so the signal is kept without a red gate on model behaviour, the same posture as the `deepeval` job.
-      # `!cancelled()`: they run even when the gate above failed, so one run shows both. A second pytest
-      # invocation, not `-m e2e` once, for the same process-isolation reason the llm/e2e split above documents.
-      - name: Multi-step e2e tests (advisory, non-blocking)
+      - run: make test-live-models
+      # THE GATE: every browser test that does not need the model to chain calls.
+      - run: make test-live-e2e
+      # ADVISORY: the two multi-step tests need a 3B model to chain 3+ calls. `!cancelled()`, so one run shows both results.
+      - name: Multi-step browser tests (advisory)
         if: ${{ !cancelled() }}
         continue-on-error: true
-        run: pytest -m "e2e and advisory" -q
-        env:
-          TEST_LLM_MODEL: qwen2.5:3b
-      # Not actions/cache's own post-job save: that one cannot read the root-owned files the Ollama
-      # container wrote (tar exit 2, so it has never saved) and is skipped when the job is red. See the action.
+        run: make test-live-advisory
+      # Not actions/cache's post-job save, which cannot read the root-owned files Ollama wrote and is skipped when the job is red.
       - if: ${{ !cancelled() }}
         uses: ./.github/actions/save-ollama-cache
         with:
           key: ${{ steps.ollama-cache.outputs.cache-primary-key }}
           cache-hit: ${{ steps.ollama-cache.outputs.cache-hit }}
 
+  # Black-box regression on the domain system prompts against a small Ollama model (GRAPH_PATTERNS.md pattern 48).
   promptfoo:
-    # Black-box prompt regression against the real domain system prompts —
-    # a single small Ollama sidecar (GH Actions `services:`, not
-    # testcontainers-python: this job is one CLI invocation from one
-    # process, not many xdist workers needing programmatic, shared
-    # container lifecycle — see GRAPH_PATTERNS.md pattern 48). Node only
-    # for promptfoo itself; every other job in this file stays pure Python.
-    # Ollama runs as an explicit `docker run` STEP, not GH Actions'
-    # `services:` block — verified against GH's own documented behavior
-    # that service containers start BEFORE any job step runs, which would
-    # make the `actions/cache` restore below (a regular step) powerless to
-    # affect a service container's volume mount: the mount would already be
-    # in place, from whatever was on disk before the cache restore ever
-    # ran. A plain step-ordered `docker run` avoids that entirely.
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      PROMPTFOO_MODEL: qwen2.5:1.5b
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.13"
+          persist-credentials: false
+      - uses: ./.github/actions/setup-python
+        with:
+          billing: "true"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
-      # restore only: the save is the last step of this job (see .github/actions/save-ollama-cache).
-      - id: ollama-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: ollama
+        uses: ./.github/actions/ollama
         with:
-          path: ~/.cache/graph-agent-core-ollama-models
-          key: ollama-models-${{ runner.os }}-${{ env.PROMPTFOO_MODEL }}
-        env:
-          PROMPTFOO_MODEL: qwen2.5:1.5b
-      # Pre-creates the bind-mount SOURCE as the normal `runner` user before
-      # `docker run` ever touches it — verified directly this matters: when
-      # a bind-mount source doesn't exist yet, `docker run` (root-run
-      # daemon, on a real Linux runner — unlike macOS Docker Desktop's VM,
-      # where this was never reproducible locally) creates it, along with
-      # any missing parent (~/.cache itself, on a cache-miss run), owned by
-      # root. That broke `garak`'s own `~/.cache/garak` creation later in
-      # THAT job with a plain `PermissionError` — unrelated to this cache
-      # path, but the same shared parent directory. Pre-creating this one
-      # path is enough: `mkdir -p` makes every ancestor, `~/.cache`
-      # included, as `runner`.
-      - run: mkdir -p ~/.cache/graph-agent-core-ollama-models
-      - run: >
-          docker run -d --name ollama -p 11434:11434
-          -v ${HOME}/.cache/graph-agent-core-ollama-models:/root/.ollama
-          ollama/ollama:latest
-      - run: >
-          timeout 60 bash -c 'until docker exec ollama ollama list >/dev/null 2>&1; do sleep 1; done'
-      # `$PROMPTFOO_MODEL`, not a hardcoded tag — this step used to pull a
-      # literal `qwen2.5:1.5b` regardless of what the cache-key/eval-step
-      # `env:` blocks below actually asked for, a silent drift trap if the
-      # model tag is ever bumped in one of those but not here (Ollama would
-      # have the OLD model cached while promptfoo asks for the NEW tag).
-      - run: docker exec ollama ollama pull "$PROMPTFOO_MODEL"
-        env:
-          PROMPTFOO_MODEL: qwen2.5:1.5b
-      - run: pip install -r requirements-lock.txt
-      # The billing package, as in test-integration (see the comment there): a process this job starts does not see pytest's `pythonpath`.
-      - run: pip install --no-deps ./packages/billing
-      # `npm install`, not `npm ci`: package-lock.json's optional-dependency
-      # entries (native platform bindings — promptfoo transitively depends
-      # on @libsql, which ships one binding package per OS/arch) are a
-      # snapshot of whatever platform last ran a full `npm install`, which
-      # won't always be this runner's — caught directly in CI as a
-      # "libsql binding for linux-x64-gnu is missing" failure from `npm
-      # ci`'s strict lockfile-only install (the lockfile here was generated
-      # on macOS). `npm install` re-resolves optional deps for the CURRENT
-      # platform at install time regardless of what's in the lockfile,
-      # trading strict reproducibility (acceptable for a dev-only tool with
-      # no runtime footprint in the shipped app) for robustness against
-      # exactly this cross-platform mismatch. `--include=optional` is
-      # promptfoo's own documented fix for this exact error (still needed
-      # even with `npm install`, not just `npm ci` — confirmed directly:
-      # plain `npm install` alone still failed the same way on this repo's
-      # dependency tree) — see
-      # https://www.promptfoo.dev/docs/usage/troubleshooting/#libsql-binding-not-found.
-      # package.json, its lock file and node_modules live in promptfoo/, so the Node steps run from there.
-      - run: npm install --include=optional
-        working-directory: promptfoo
-      - run: python -m promptfoo.dump_prompts
-      - run: |
-          for domain in support ops sales; do
-            npx promptfoo eval --config $domain.yaml
-          done
-        working-directory: promptfoo
-        env:
-          PROMPTFOO_MODEL: qwen2.5:1.5b
-      # Not actions/cache's own post-job save: that one cannot read the root-owned files the Ollama
-      # container wrote (tar exit 2, so it has never saved) and is skipped when the job is red. See the action.
+          model: ${{ env.PROMPTFOO_MODEL }}
+      - run: make promptfoo
       - if: ${{ !cancelled() }}
         uses: ./.github/actions/save-ollama-cache
         with:
-          key: ${{ steps.ollama-cache.outputs.cache-primary-key }}
-          cache-hit: ${{ steps.ollama-cache.outputs.cache-hit }}
-
-  deepeval:
-    # LLM-judged RAG quality + multi-turn conversation simulation + tool-
-    # call trajectory correctness (tests/deepeval/test_rag_quality_deepeval.py,
-    # test_conversation_simulator_deepeval.py,
-    # test_tool_correctness_deepeval.py, `@pytest.mark.deepeval`) — added
-    # 2026-09-16 as a NON-BLOCKING CI signal, not a gate. Every file's
-    # `LLMTestCase`/`ConversationalTestCase` are constructed with
-    # `flaky=True` (deepeval's own mechanism, confirmed directly in the
-    # installed `deepeval==4.2.0` source: a flaky test case's failed metric
-    # prints a `warnings.warn(...)` instead of raising `AssertionError`, so
-    # the pytest test itself still passes). That's deliberately different
-    # from `promptfoo redteam`/`garak`, which stay fully manual
-    # (GRAPH_PATTERNS.md pattern 48) — this job CAN still fail red, just
-    # only on a genuine crash (an unreachable Ollama, a broken
-    # `build_graph()`, an import error), never on the judge disagreeing
-    # with itself. Read this job's own log for the printed `reason` fields
-    # — a clean pass here is "nothing crashed," not "the judge approved."
-    #
-    # Testcontainers-python (tests/containers.py's `ensure_ollama`), not the
-    # `promptfoo` job's own manual `docker run` sidecar above — these tests
-    # go through the `deepeval_ollama` fixture (tests/deepeval/conftest.py),
-    # which already drives Ollama that way; same shape `test-live` already
-    # uses for its own Ollama fixture, minus the Postgres/Redis/crawl4ai
-    # services those tests need but these don't (`build_graph()` with no
-    # `checkpointer` argument — both files' own construction — defaults to
-    # an in-memory `MemorySaver`, see app/agent/graph/build.py).
-    #
-    # `DEEPEVAL_MODEL` stays `qwen2.5:3b` here, NOT `TEST_LLM_MODEL`'s
-    # CI-speed `1.5b` — this is `make deepeval`'s own local default (see
-    # tests/deepeval/conftest.py), kept as-is rather than downgraded for CI
-    # speed: it's the TARGET, and a finding needs to be about the model this
-    # app actually deploys, not a smaller stand-in (GRAPH_PATTERNS.md
-    # pattern 48).
-    #
-    # UPDATE 2026-09-16: the JUDGE (a separate concern from the target
-    # above) moved to Groq's `openai/gpt-oss-120b` — see
-    # tests/deepeval/conftest.py's own `DEEPEVAL_JUDGE_MODEL` comment for the
-    # full reasoning (the same target/judge split, and same "the local
-    # judge was unreliable, a stronger one elsewhere fixes it" pattern,
-    # `promptfoo/redteam.yaml`'s move to Gemini already established).
-    #
-    # UPDATE 2026-09-17: moved again, from Groq to `gemini-3.1-flash-lite`
-    # via deepeval's own native `GeminiModel` — the SAME model+key
-    # `promptfoo/redteam.yaml`'s `redteam.provider` already uses, so this
-    # job now reuses the `GOOGLE_API_KEY` repo secret `redteam.yml` already
-    # needs (Settings > Secrets and variables > Actions) instead of a
-    # second, Groq-only one. `google-genai` isn't a `deepeval==4.2.0`
-    # dependency (same shape as `OllamaModel`'s own `ollama` package below —
-    # deepeval declares support for a provider without requiring its SDK),
-    # so it's installed as its own step; the `deepeval_judge` fixture
-    # itself still fails with a clear message if the key is missing, so no
-    # separate pre-check step here the way `.github/workflows/redteam.yml`
-    # needed one (that job's failure mode would otherwise be an opaque
-    # crash deep inside `npx`, not a pytest fixture that can just say why).
-    #
-    # UPDATE 2026-09-18, real finding from run 35230147154 (PR #41)'s first
-    # real Gemini-judge run, not anticipated in advance: `GOOGLE_API_KEY`
-    # above is NOT the only judge key this job needs anymore.
-    # `test_conversation_simulator_deepeval.py`'s two tests hard-crashed —
-    # `google.genai.errors.ClientError: 400 INVALID_ARGUMENT ... Unknown
-    # name "additional_properties" at 'generation_config.response_schema'`
-    # — because `KnowledgeRetentionMetric` (deepeval's own
-    # `knowledge_retention/schema.py::Knowledge.data:
-    # Optional[Dict[str, Union[str, List[str]]]]`) unconditionally requests
-    # a Dict-typed structured-output schema, and Gemini's `response_schema`
-    # (a restricted OpenAPI-3.0 subset) rejects the `additionalProperties`
-    # keyword Pydantic emits for any open-ended `Dict[...]` field —
-    # confirmed directly by reading that schema class, not guessed from the
-    # error text alone. Not fixable by a generation_kwargs tweak or a
-    # smaller/different Gemini model — the Gemini API itself doesn't
-    # support this JSON Schema keyword, full stop. So
-    # `test_conversation_simulator_deepeval.py` alone keeps its own
-    # separate `deepeval_conversation_judge` fixture (Groq's
-    # `openai/gpt-oss-120b` again, the SAME provider `deepeval_judge` used
-    # before this whole Gemini migration — see that fixture's own
-    # docstring in tests/deepeval/conftest.py) for BOTH of its roles
-    # (simulating the persona AND grading `KnowledgeRetentionMetric`/
-    # `RoleAdherenceMetric`), needing `GROQ_API_KEY` below again — while
-    # `test_rag_quality_deepeval.py`/`test_tool_correctness_deepeval.py`
-    # stay on Gemini via the shared `deepeval_judge` fixture, since neither
-    # of those files' metrics touch a Dict-typed schema. Two judge keys
-    # instead of one, but for a real, structural reason, not a preference.
-    #
-    # UPDATE 2026-09-18, also from that same first real run: the pytest
-    # step below used to have NO `shell:` key and a comment here claimed
-    # GH Actions' default shell already sets `pipefail` — WRONG, see that
-    # step's own comment for the full correction. That bug is why the two
-    # crashes above didn't already turn this job red in run 35230147154;
-    # `shell: bash` there is the fix, verified against GitHub's own docs.
-    runs-on: ubuntu-latest
-    timeout-minutes: 150
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.13"
-      - run: pip install -r requirements-lock.txt "testcontainers[postgres,redis,ollama]==4.9.0" ollama==0.6.2
-      # The billing package, as in test-integration (see the comment there): a process this job starts does not see pytest's `pythonpath`.
-      - run: pip install --no-deps ./packages/billing
-      # deepeval==4.2.0 itself, `--no-deps`: the same click conflict
-      # requirements-dev.txt's own comment already discloses for local dev
-      # (deepeval declares `click<8.4.0`; huggingface-hub — a real
-      # transitive dep via fastembed — declares `click>=8.4.2`), but a HARD
-      # one here rather than the "false alarm" that comment describes.
-      # requirements-dev.txt gets away with a plain, undecorated `pip
-      # install` because it layers onto the UNPINNED requirements.txt,
-      # where pip's resolver is free to downgrade huggingface-hub itself to
-      # something older that doesn't need click>=8.4.2 at all. This job
-      # layers onto requirements-lock.txt instead (like every other job in
-      # this file, for reproducibility) — huggingface-hub==1.30.0 there is
-      # a hard pin, so no click version can satisfy both sides at once
-      # (confirmed directly with `pip install --dry-run` against this exact
-      # lockfile). `rich` has the same shape of conflict (deepeval wants
-      # <15.0.0, this app is pinned to rich==15.0.0). `--no-deps` skips
-      # deepeval's own dependency resolution entirely, so the line below
-      # installs ONLY the deepeval-specific packages requirements-lock.txt
-      # doesn't already provide (checked by hand against deepeval 4.2.0's
-      # full requires_dist) — click/rich/tabulate stay at THIS APP's newer
-      # pinned versions rather than deepeval's older declared caps.
-      # Verified for real, not assumed: a clean `import deepeval` (plus
-      # every deepeval symbol this repo's own tests/deepeval/*.py
-      # files import) and a full `pytest -m deepeval --collect-only` both
-      # succeed against this exact combination in an isolated venv built
-      # from this same lockfile.
-      - run: pip install --no-deps deepeval==4.2.0
-      - run: pip install nest_asyncio posthog pyfiglet pytest==8.4.2 pytest-asyncio==1.4.0 pytest-repeat pytest-rerunfailures pytest-xdist questionary "tabulate<0.10.0"
-      # `deepeval_judge`'s GeminiModel (tests/deepeval/conftest.py) needs
-      # google-genai — same "--no-deps, add the one real transitive dep by
-      # hand" shape as deepeval==4.2.0 above, and the SAME conflict class:
-      # google-genai==2.24.0 declares `websockets<17.0`, this lockfile pins
-      # `websockets==17.1`. Verified directly this is another false alarm,
-      # not a real break: GeminiModel.generate()/a_generate() only ever
-      # call client.models.generate_content()/client.aio.models.generate_content()
-      # (a plain HTTPS request), never the Live API — the only thing in the
-      # SDK that actually touches the websockets package. A clean `import
-      # google.genai` plus `genai.Client(api_key=...)` both succeed against
-      # this exact websockets==17.1 in an isolated venv. google-auth is the
-      # one real runtime dep --no-deps skips (needed at import time, not
-      # just for Vertex AI auth) — installed with its own normal resolver
-      # pass since, unlike google-genai, it has no version conflict against
-      # this lockfile (its only non-extra requirements, pyasn1-modules and
-      # cryptography>=38.0.3, are either already satisfied or newly added
-      # with no downgrade needed).
-      - run: pip install --no-deps google-genai==2.24.0
-      - run: pip install google-auth==2.58.0
-      # restore only: the save is the last step of this job (see .github/actions/save-ollama-cache).
-      # The key names BOTH models `ensure_ollama` pulls (the chat model, and nomic-embed-text, its
-      # default `embed_model`), because test-live and deepeval share one cache and must not be
-      # handed a directory that has only one of them. Change the key if that default changes.
-      - id: ollama-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/graph-agent-core-ollama-models
-          key: ollama-models-${{ runner.os }}-${{ env.DEEPEVAL_MODEL }}-nomic-embed-text
-        env:
-          DEEPEVAL_MODEL: qwen2.5:3b
-      # test_tool_correctness_deepeval.py::test_fetch_external_reference_tool_call_is_correct_and_well_argued
-      # is this job's only test that needs a real crawl4ai server — its own
-      # `_use_crawl4ai_server` fixture self-provisions one via
-      # tests/containers.py::ensure_crawl4ai() (2026-09-17, same
-      # testcontainers-managed pattern `test-live` uses above, replacing
-      # what used to be this job's own explicit `docker run` sidecar step)
-      # — see that fixture's own docstring for why the test deliberately
-      # does NOT carry `@pytest.mark.crawl`, unlike every other
-      # real-crawl4ai test in this repo (that mark would pull it into
-      # test-live's own selection instead, a real CI job this test can't
-      # run under since test-live never installs the `deepeval` package).
-      # Every other test this job runs neither needs nor starts this
-      # container — `ensure_crawl4ai()` is only called when that one
-      # fixture is actually requested.
-      # `-v` on top of this file's usual `-q -s`: deepeval's own per-metric
-      # score/reason text only prints with -s (no capture) regardless, but
-      # -v makes sure the test's own pass/fail line isn't swallowed by -q's
-      # one-dot-per-test default in the saved log below. `tee`, not a plain
-      # redirect — still shows live in the job's own log too, not hidden
-      # until the artifact is downloaded.
-      #
-      # FIX 2026-09-18, a real bug caught by a real run, not a hypothetical:
-      # this step used to have NO `shell:` key, and a comment here claimed
-      # GH Actions' default `run:` shell already sets `pipefail`. That claim
-      # was wrong — checked directly against GitHub's own docs (Workflow
-      # syntax > "Exit codes and error action preference"): an UNSPECIFIED
-      # shell on Linux runs `bash -e {0}`, NOT `bash --noprofile --norc -eo
-      # pipefail {0}` — pipefail is only added when a step spells out
-      # `shell: bash` explicitly, which this one never did. Caught live in
-      # run 35230147154 (PR #41): pytest itself printed "3 failed, 7
-      # passed" in this exact step's own log, yet the step — and the whole
-      # job — reported success, because `tee`'s exit code (0), not
-      # pytest's, is what an `-e`-only shell without pipefail propagates.
-      # That silently defeated this job's own stated design (see this job's
-      # top-level comment: "CAN still fail red... on a genuine crash").
-      # `shell: bash` below is the actual fix — not a manual `set -o
-      # pipefail` line, which would work too but only by accident of this
-      # being the first command in the step; `shell: bash` is what GitHub's
-      # own docs name as the supported way to opt into pipefail at all.
-      #
-      # `tests/deepeval` (2026-09-17) — a real, disclosed noise finding,
-      # not a style preference: without a path argument, `-m deepeval`
-      # still COLLECTS (imports) every file under `testpaths = ["tests"]`
-      # before filtering by marker, and `tests/adapters/inbound/api/test_api.py`/
-      # `test_health.py`/`test_rate_limit.py`/`tests/agent/graph/test_multimodal.py`
-      # import `app.adapters.inbound.api.main` at module level — which calls
-      # `configure_logging()` UNCONDITIONALLY at import time (unlike
-      # `app/adapters/inbound/workers/agent_worker.py`'s/`app/adapters/inbound/channels/telegram/bot.py`'s own
-      # `if __name__ == "__main__":`-gated calls, deliberately different
-      # since uvicorn imports `app.adapters.inbound.api.main:app` without ever hitting
-      # `__main__` — see that module's own comment). That installs a real
-      # INFO-level structlog JSON handler on the ROOT logger for the rest
-      # of this single, non-`-n auto` process — verified directly: `import
-      # app.adapters.inbound.api.main` alone in a fresh interpreter flips
-      # `logging.getLogger().handlers` from `[]` to a live handler and the
-      # level from WARNING to INFO, with zero such effect from importing
-      # only `app.agent.graph.build`/`app.adapters.outbound.crawl4ai.web_crawler`/
-      # `tests.conftest` (everything the deepeval tests themselves actually
-      # need). With `-s` disabling capture, every one of this app's own
-      # per-node `logger.info(...)` calls (and the `openai` SDK's own
-      # internal retry-logging, silent by default at the stdlib root
-      # logger's normal WARNING level) then floods stdout for all ~5+
-      # minutes of every real graph turn, in ten tests. Restricting
-      # collection to `tests/deepeval` — the package these three files
-      # actually live in since today's reorg — avoids ever importing the
-      # unrelated api/multimodal test modules in the first place; verified
-      # this still collects the identical 10 tests (`--collect-only -q -m
-      # deepeval tests/deepeval`).
-      #
-      # `--reruns 2 --reruns-delay 10 --only-rerun ...` (2026-09-18): added
-      # after run 35257765470 (PR #41, right after the `shell: bash` fix
-      # above started actually surfacing real failures) turned red on
-      # `google.genai.errors.ServerError: 503 UNAVAILABLE ... currently
-      # experiencing high demand` — transient free-tier overload, the same
-      # class of variability `.github/workflows/redteam.yml`'s own header
-      # comment already discloses for this exact model, not a code defect.
-      # `pytest-rerunfailures` was already installed (see the pip install
-      # above) but never actually invoked until now. Deliberately scoped
-      # with `--only-rerun` rather than a blanket "retry any failure" —
-      # blindly retrying would blur this job's own stated promise ("CAN
-      # still fail red... on a genuine crash"): a REAL crash (a broken
-      # `build_graph()`, an auth failure, the Gemini schema bug fixed
-      # above if it ever regressed) should still turn the job red on the
-      # first try, not get silently swallowed by burning through retries
-      # first. The regex only matches known-transient server/rate-limit
-      # signatures from either judge SDK: Gemini's own
-      # `google.genai.errors.ServerError`/`UNAVAILABLE`/
-      # `RESOURCE_EXHAUSTED`/`DEADLINE_EXCEEDED`, and the `openai` SDK
-      # Groq's `LocalModel` uses (`RateLimitError`/`APITimeoutError`/
-      # `APIConnectionError`/`InternalServerError`) — matched against each
-      # failure's own exception text, confirmed directly in
-      # pytest-rerunfailures==16.6's own `--help` output for what
-      # `--only-rerun` matches against.
-      - run: >
-          pytest -m deepeval -q -s -v --reruns 2 --reruns-delay 10
-          --only-rerun "(ServerError|UNAVAILABLE|RESOURCE_EXHAUSTED|DEADLINE_EXCEEDED|RateLimitError|APITimeoutError|APIConnectionError|InternalServerError)"
-          tests/deepeval 2>&1 | tee deepeval-results.log
-        shell: bash
-        env:
-          DEEPEVAL_MODEL: qwen2.5:3b
-          DEEPEVAL_TELEMETRY_OPT_OUT: "1"
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          # Optional — see tests/deepeval/conftest.py's `_with_fallbacks`
-          # and .env.example's own PLUGSKY_API_KEY comment. Empty/unset here
-          # (no repo secret configured) is a no-op: the plugsky backup is
-          # simply not part of the chain.
-          PLUGSKY_API_KEY: ${{ secrets.PLUGSKY_API_KEY }}
-          # Same shape, one more link after Plugsky: tests/deepeval/backup_providers.py.
-          # Each key enables its own provider alone; an unset secret is a no-op.
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          # Optional overrides of the other-models-on-the-same-provider chain
-          # each judge fails over to (tests/deepeval/fallback.py; comma-
-          # separated, `none` turns it off). Unset means the defaults in
-          # tests/deepeval/conftest.py, so no new variable or secret is needed.
-          DEEPEVAL_JUDGE_FALLBACK_MODELS: ${{ vars.DEEPEVAL_JUDGE_FALLBACK_MODELS }}
-          DEEPEVAL_CONVERSATION_JUDGE_FALLBACK_MODELS: ${{ vars.DEEPEVAL_CONVERSATION_JUDGE_FALLBACK_MODELS }}
-      # Not actions/cache's own post-job save: that one cannot read the root-owned files the Ollama
-      # container wrote (tar exit 2, so it has never saved) and is skipped when the job is red. See the action.
-      - if: ${{ !cancelled() }}
-        uses: ./.github/actions/save-ollama-cache
-        with:
-          key: ${{ steps.ollama-cache.outputs.cache-primary-key }}
-          cache-hit: ${{ steps.ollama-cache.outputs.cache-hit }}
-      - name: Upload deepeval results (score/reason fields, read by hand — same posture as redteam.yml's own artifact)
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: deepeval-results-${{ github.run_id }}
-          path: deepeval-results.log
-          retention-days: 30
-          if-no-files-found: warn
-
-  docker-build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: docker build -t graph-agent-core:ci .
-      # Building says nothing about whether the image can DO anything; scripts/checks/image_contents.py says why and checks it.
-      - run: docker run --rm --entrypoint python graph-agent-core:ci -m scripts.checks.image_contents
-
-  trivy:
-    # See this file's own header comment for the hard-gate-CRITICAL-only,
-    # report-the-rest policy this job implements. `scan-type: fs` over `.`
-    # already covers dependency vulns, leaked secrets, AND Dockerfile/
-    # docker-compose*.yml misconfiguration in one pass (Trivy's `misconfig`
-    # scanner walks the whole tree for IaC files, not just a named target)
-    # — a separate `scan-type: config` step would just repeat that same
-    # file walk.
-    #
-    # TRIVY_FILE_PATTERNS below points Trivy's pip analyzer at
-    # requirements-lock.txt specifically, overriding its own default
-    # (requirements.txt) — verified directly this matters:
-    # requirements.txt's version RANGES (`langgraph>=0.2.20,<0.3`) don't
-    # resolve to one installed version to check against the CVE database,
-    # so scanning it alone silently finds nothing. Scanning the
-    # exact-pinned lock file — what the Dockerfile/this repo's own CI jobs
-    # above actually install, per requirements-lock.txt's own header —
-    # surfaced 5 real HIGH-severity fixable CVEs the first time this job
-    # was run locally, including an RCE in langgraph-checkpoint
-    # (CVE-2025-64439). None hit CRITICAL, so this job's own hard gate
-    # (below) doesn't fail the build on them, but they DO land in the
-    # Security tab via the report step — see this repo's own disclosed
-    # pin-compatibility constraints (garak/requirements-garak.txt) before
-    # bumping any of these.
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # deploy/terraform excluded below: Checkov (the `checkov` job,
-      # .checkov.yaml) owns IaC misconfig scanning for that directory —
-      # verified directly this exclusion is needed, not preemptive: Trivy's
-      # own DigitalOcean firewall policies (DIG-0001/DIG-0003) flag ANY
-      # 0.0.0.0/0 rule as CRITICAL with no way to distinguish a public web
-      # app's necessary 80/443 ingress + broad egress (GHCR, apt, Let's
-      # Encrypt, the LLM API, ...) from an actually-dangerous open SSH/DB
-      # port, unlike Checkov which has no equivalent blanket check here
-      # (confirmed empirically: a real checkov run against this exact
-      # firewall resource passes clean).
-      - name: Trivy fs — hard gate (fixable CRITICAL vulns + secrets + IaC misconfig)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        env:
-          TRIVY_FILE_PATTERNS: 'pip:requirements-lock\.txt$'
-        with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,secret,misconfig
-          severity: CRITICAL
-          ignore-unfixed: true
-          # Dated, reasoned exceptions only (see the file); the report step below does not read it.
-          trivyignores: .trivyignore.yaml
-          exit-code: "1"
-          skip-dirs: .venv,**/node_modules,.mypy_cache,.ruff_cache,.pytest_cache,deploy/terraform
-
-      - name: Trivy fs — full report (HIGH+CRITICAL, incl. unfixed) → SARIF
-        if: always()
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        env:
-          TRIVY_FILE_PATTERNS: 'pip:requirements-lock\.txt$'
-        with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,secret,misconfig
-          severity: HIGH,CRITICAL
-          format: sarif
-          output: trivy-fs-results.sarif
-          exit-code: "0"
-          skip-dirs: .venv,**/node_modules,.mypy_cache,.ruff_cache,.pytest_cache,deploy/terraform
-          skip-setup-trivy: true
-
-      - name: Upload fs report to the Security tab
-        if: always()
-        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
-        with:
-          sarif_file: trivy-fs-results.sarif
-          category: trivy-fs
-        continue-on-error: true # code scanning may not be enabled on this repo/plan
-
-      # A separate image scan (not just fs above) because it's the only way
-      # to see vulnerabilities in the built image's actual OS layer
-      # (python:3.13-slim's own packages, libgomp1 — see Dockerfile) on top
-      # of the same Python dependencies fs already covers. `if: always()`
-      # from here down: the fs hard-gate step above can fail this job
-      # already, but the image scan/report should still run and get
-      # reported rather than being silently skipped (GitHub Actions' own
-      # default) just because an earlier, unrelated step failed.
-      - name: Build image
-        if: always()
-        run: docker build -t graph-agent-core:trivy .
-
-      - name: Trivy image — hard gate (fixable CRITICAL vulns)
-        if: always()
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: graph-agent-core:trivy
-          severity: CRITICAL
-          ignore-unfixed: true
-          trivyignores: .trivyignore.yaml
-          exit-code: "1"
-          skip-setup-trivy: true
-
-      - name: Trivy image — full report (HIGH+CRITICAL, incl. unfixed) → SARIF
-        if: always()
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: graph-agent-core:trivy
-          severity: HIGH,CRITICAL
-          format: sarif
-          output: trivy-image-results.sarif
-          exit-code: "0"
-          skip-setup-trivy: true
-
-      - name: Upload image report to the Security tab
-        if: always()
-        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
-        with:
-          sarif_file: trivy-image-results.sarif
-          category: trivy-image
-        continue-on-error: true
-
-  semgrep:
-    # See this file's own header comment for the "distinct, non-redundant
-    # with trivy" reasoning. Rulesets are Semgrep's free, no-login registry
-    # configs (`p/security-audit`, `p/secrets`, `p/python`, `p/dockerfile`)
-    # — verified directly these need no `semgrep login`/SEMGREP_APP_TOKEN.
-    # `--error` is what actually makes a blocking finding fail the step;
-    # verified directly semgrep's own default exit code is 0 even WITH
-    # findings otherwise. A second, always-run pass emits SARIF regardless
-    # of whether the gate step failed, same "gate + always-report" shape as
-    # the `trivy` job above.
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.13"
-      - run: pip install semgrep==1.177.0
-
-      - name: Semgrep — hard gate
-        run: >
-          semgrep scan --error --metrics=off
-          --config p/security-audit --config p/secrets --config p/python --config p/dockerfile
-          app/ scripts/ services/ml-service/ deploy/images/ Dockerfile
-
-      - name: Semgrep — SARIF report
-        if: always()
-        run: >
-          semgrep scan --metrics=off
-          --config p/security-audit --config p/secrets --config p/python --config p/dockerfile
-          --sarif --output semgrep-results.sarif
-          app/ scripts/ services/ml-service/ deploy/images/ Dockerfile
-
-      - name: Upload report to the Security tab
-        if: always()
-        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
-        with:
-          sarif_file: semgrep-results.sarif
-          category: semgrep
-        continue-on-error: true
-
-  checkov:
-    # Scoped to deploy/terraform only — see .checkov.yaml's own header on why
-    # this doesn't re-cover Dockerfile/docker-compose (trivy's job already
-    # does). .checkov.yaml's one skip-check (CKV_DIO_2) is a verified false
-    # positive, not a suppressed real finding — see that file's comment.
-    # Checkov's own default exit code already fails on any un-skipped
-    # failed check, so no extra `--hard-fail-on` flag is needed for the
-    # gate; SARIF still gets uploaded on failure via `if: always()`.
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.13"
-      - run: pip install checkov==3.3.17
-
-      - name: Checkov — hard gate
-        run: checkov --config-file .checkov.yaml
-
-      - name: Checkov — SARIF report
-        if: always()
-        run: checkov --config-file .checkov.yaml --output sarif --output-file-path . --soft-fail
-
-      - name: Upload report to the Security tab
-        if: always()
-        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
-        with:
-          sarif_file: results_sarif.sarif
-          category: checkov
-        continue-on-error: true
-
-  sonarqube:
-    # Self-hosted SonarQube Community Edition (not SonarCloud) — an
-    # EPHEMERAL server started as a job step, same explicit `docker run`
-    # sidecar shape this file's `test-live`/`promptfoo` jobs already use for
-    # Ollama (not GH Actions' `services:` block or testcontainers-python —
-    # this server needs to be healthy, and later have ingested the scan report, before the
-    # next step touches it, which a plain step-ordered `docker run`
-    # guarantees more simply than coordinating around `services:`' own
-    # start-before-any-step ordering). Ephemeral means no cross-run
-    # history/trend dashboards — a persistent server is a separate,
-    # deliberately out-of-scope deployment (see deploy/README.md) — but the
-    # static analysis and quality gate below are still fully real and still
-    # hard-gate the build.
-    #
-    # Every command below was verified directly against a real SonarQube
-    # 26.x Community Edition container before being wired up here, not
-    # assumed from docs: the default admin/admin credentials DO work for
-    # token generation + analysis submission with no forced password-reset
-    # blocking it (only the web UI nags about it); `-Dsonar.qualitygate.wait
-    # =true` makes the scanner's OWN process block on and fail on a failed
-    # gate (confirmed both a PASSED run's exit 0 and that the flag isn't a
-    # no-op) — no extra polling script or third-party Action needed.
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # the SCM Publisher sensor wants real git blame history, not a shallow clone
-
-      - run: docker run -d --name sonarqube -p 9000:9000 sonarqube:community # 26.x Community Edition — the version this job's whole recipe was verified against
-
-      - name: Wait for SonarQube to be ready
-        run: >
-          timeout 120 bash -c
-          'until curl -sf http://localhost:9000/api/system/status | grep -q "\"status\":\"UP\""; do sleep 5; done'
-
-      - name: Generate a scanner token
-        run: |
-          token=$(curl -sf -u admin:admin -X POST "http://localhost:9000/api/user_tokens/generate" -d "name=ci-${GITHUB_RUN_ID}" \
-            | python3 -c "import json,sys; print(json.load(sys.stdin)['token'])")
-          echo "::add-mask::$token"
-          echo "SONAR_TOKEN=$token" >> "$GITHUB_ENV"
-
-      - name: Scan and wait for the quality gate
-        env:
-          SONAR_HOST_URL: http://localhost:9000
-        run: >
-          docker run --rm --network host
-          -e SONAR_HOST_URL -e SONAR_TOKEN
-          -v ${{ github.workspace }}:/usr/src -w /usr/src
-          sonarsource/sonar-scanner-cli@sha256:23ca0f137965d9dff2198074043fd48d386280bc5d0ccac8c8349cea4cf096a9
-          -Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=300
+          key: ${{ steps.ollama.outputs.cache-primary-key }}
+          cache-hit: ${{ steps.ollama.outputs.cache-hit }}
 
   # One leg per image production runs: build it, show what a build cannot, scan it, and on main publish exactly that build as `:<sha>`
   # (the second build step reuses the first's layers from this runner's builder). `:latest` moves only in `promote`, below. The BuildKit
   # cache has one scope per image: with the shared default scope each image's export overwrote the others', so none was ever reused.
   image:
     name: image (${{ matrix.name }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
       packages: write # used by the two steps that run on a push to main only
+      security-events: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: app, context: ., repository: graph-agent-core }
-          - { name: ml-service, context: services/ml-service, repository: graph-agent-core-ml-service }
-          - { name: authlimit, context: services/authlimit, repository: graph-agent-core-authlimit }
+          - { name: app, context: ., repository: graph-agent-core, category: trivy-image }
+          - { name: ml-service, context: services/ml-service, repository: graph-agent-core-ml-service, category: trivy-image-ml-service }
+          - { name: authlimit, context: services/authlimit, repository: graph-agent-core-authlimit, category: trivy-image-authlimit }
     env:
       IMAGE: ${{ matrix.name }}:ci
     steps:
@@ -1091,7 +339,8 @@ jobs:
 
       # Main writes the cache and pull requests only read it. On main the runtime stage is rebuilt every time: it holds `apt-get upgrade`,
       # which a cached layer would freeze until the base image changed.
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ matrix.context }}
           # The stage that ships, named: a reordered Dockerfile must not publish the builder (pattern 76).
@@ -1125,7 +374,9 @@ jobs:
           out=$(docker run --rm -e AUTHLIMIT_REDIS_URL='http://:hunter2@redis:6379' "$IMAGE" 2>&1 || true)
           if echo "$out" | grep -q hunter2; then echo "::error::the service printed a configuration value"; exit 1; fi
 
-      - name: Trivy — hard gate (fixable CRITICAL vulns)
+      # Gate on fixable CRITICAL only (dated exceptions in .trivyignore.yaml): the CVE database moves on its own, and a gate nothing can
+      # satisfy teaches people to ignore it (pattern 72). HIGH and unfixed ones go to the Security tab, below.
+      - name: Trivy gate (fixable CRITICAL vulnerabilities)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.IMAGE }}
@@ -1133,6 +384,26 @@ jobs:
           ignore-unfixed: true
           trivyignores: .trivyignore.yaml
           exit-code: "1"
+
+      - name: Trivy report (HIGH and CRITICAL) as SARIF
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          severity: HIGH,CRITICAL
+          # Without it the action drops `severity` for SARIF, and every low finding lands in the Security tab.
+          limit-severities-for-sarif: true
+          format: sarif
+          output: trivy-image-results.sarif
+          exit-code: "0"
+          skip-setup-trivy: true
+
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        continue-on-error: true # code scanning may not be enabled, and a fork's token cannot upload
+        with:
+          sarif_file: trivy-image-results.sarif
+          category: ${{ matrix.category }}
 
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -1153,30 +424,50 @@ jobs:
           provenance: mode=max
           sbom: true
 
-  # `:latest` is the newest commit of main that passed every check. Every job is listed here by name (a test holds the list complete) and
-  # each result must be `success`: `failure()` alone would let a timed-out or skipped job through. `openapi` runs on pull requests only,
-  # and `deepeval` never gates on a score, so neither holds a release.
-  promote:
+  # SAST, dependency, IaC and Go vulnerability scans (security.yml), also run weekly on their own.
+  security:
+    permissions:
+      contents: read
+      security-events: write
+      packages: read
+    uses: ./.github/workflows/security.yml
+
+  # THE required check. A job added to this file is required by being listed here (a test holds the list complete), not by editing the
+  # branch ruleset. scripts/tools/ci_gate.py says which jobs may be skipped.
+  ci-ok:
     needs:
+      - changes
       - lint
-      - alertmanager-config
+      - config
       - typecheck
       - test
-      - web
       - billing-package
+      - web
       - authlimit
+      - openapi
       - test-integration
       - test-live
       - promptfoo
-      - docker-build
-      - trivy
-      - semgrep
-      - checkov
-      - sonarqube
       - image
-    if: >-
-      ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-      && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}
+      - security
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Every job succeeded, or was skipped on purpose
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
+        run: python3 scripts/tools/ci_gate.py verdict
+
+  # `:latest` is the newest commit of main that passed `ci-ok`. The condition names the result: a plain `needs` would skip this job
+  # on main, where `openapi` is skipped, and `failure()` alone would let a cancelled or timed-out run through.
+  promote:
+    needs: ci-ok
+    if: ${{ !cancelled() && needs.ci-ok.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:

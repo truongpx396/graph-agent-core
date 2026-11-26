@@ -25,7 +25,7 @@ Constitution Principle VII applies. The default suite must stay hermetic and fas
 - `tests/core/test_doc_references.py` fails when a repo doc (or a rules file) names a file, or a function in it, that is gone. Update the reference; if it is MEANT to point at something retired, add it to that test's `INTENTIONAL` set with the reason.
 - Don't write a test that only reads a Dockerfile, compose file, workflow, alert file or doc and compares strings (a pin, a
   hardening flag, a digest, an action SHA, a marker list): it fails on an edit, not on a regression. Trivy's misconfiguration
-  scan, `amtool`, CI's `docker-build` job, Dependabot and review already read those files. A check that an artifact agrees with
+  scan, zizmor and actionlint, `make compose-check` and `monitoring-check`, CI's `image` job, Dependabot and review already read those files. A check that an artifact agrees with
   CODE stays (an alert names a metric `app/core/metrics.py` defines, `.env.example` matches `Settings`, the route table matches
   the API's routes), and so does arithmetic across files that nothing else adds up (the pooler's connection budget).
 - Name tests as sentences describing the behavior, e.g.
@@ -46,9 +46,9 @@ Constitution Principle VII applies. The default suite must stay hermetic and fas
   `.setup()` per worker. Integration runs use `--dist=loadgroup`.
 - In CI, `e2e` (sync Playwright) runs as a separate pytest invocation from `llm`/`crawl`
   (async): under one `-n auto` run xdist can put both kinds on the same worker, and Playwright
-  then corrupts that worker's asyncio state. `make test-live` still runs them in one invocation,
-  so if unrelated async tests fail with `Runner.run() cannot be called from a running event
-  loop`, split the run the way `.github/workflows/ci.yml` does.
+  then corrupts that worker's asyncio state. `make test-live` (and CI) runs them as separate processes
+  (`make/test.mk`); keep it that way, or unrelated async tests fail with `Runner.run() cannot be
+  called from a running event loop`.
 
 ## What a passing test does and doesn't prove
 

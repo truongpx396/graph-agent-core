@@ -8,7 +8,7 @@
 #
 # Build context is services/authlimit/ (this directory): the module does not import the rest of the repository.
 
-FROM golang:1.26@sha256:37cfcca63222ec499bec5e8ad7aad52dbf7529db36d5812b8eae2f0621aa92d6 AS build
+FROM golang:1.26@sha256:6e59e17a20f13c102e49d82dffab66d41cffe6c266b225d82794328aea859ab5 AS build
 WORKDIR /src
 # Dependencies first, so a source-only change does not re-download them.
 COPY go.mod go.sum ./

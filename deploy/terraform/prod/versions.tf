@@ -19,7 +19,7 @@ terraform {
 
   # Local state by default — fine for the single-operator, run-deliberately
   # workflow this repo already uses for other impactful commands (`make
-  # eval`/`garak-full`/`strix`, see .github/workflows/ci.yml's own header).
+  # eval`/`garak-full`/`strix`).
   # `terraform apply` here is likewise a human, manual action (see
   # deploy/README.md) — CI never runs it, only `terraform plan` for
   # visibility on PRs touching deploy/terraform/**.

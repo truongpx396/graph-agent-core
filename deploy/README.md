@@ -25,8 +25,7 @@ Two separate, deliberately non-automatic-together pieces:
 - **Infra (Terraform)** — creating/resizing/destroying the droplet itself.
   Always a human running `terraform plan`/`apply` by hand (below), against
   the local state file `versions.tf`'s backend block defaults to. CI's
-  `terraform-validate` workflow checks `fmt`/`validate` (and Checkov, via
-  `ci.yml`'s own `checkov` job) on any PR touching `deploy/terraform/**` —
+  `config` job checks `fmt`/`validate` and `security.yml` runs Checkov —
   structural correctness only, not a real `plan` diff, since a real plan
   needs the actual state file, which a local backend deliberately keeps off
   CI's machine. If you switch to the commented-out DigitalOcean Spaces
@@ -692,7 +691,7 @@ one), as in production, because a droplet has no GPU and no native Ollama.
   `https://api.localhost:8443/` works as on a laptop. There is no reserved IP, VPC or domain, and no CI deploys to it.
 - **The files**: `deploy/dev/hosted-llm.yml` (the overlay: LiteLLM runs `deploy/prod/litellm-config.yaml`, so the aliases are production's) and `deploy/dev/droplet.env.example` (the `LLM_*` variables,
   with the names and order of `deploy/prod/prod.env.example`). The droplet's `.env` is separate from the laptop's `.env.example` on purpose: `LLM_API_KEY` and `LLM_API_BASE` mean something else for
-  the Strix job there, and a laptop's keys must not travel.
+  `make strix` there, and a laptop's keys must not travel.
 
 ```
 cd deploy/terraform/dev && cp terraform.tfvars.example terraform.tfvars   # do_token, ssh_key_fingerprints, deploy_ssh_public_key, admin_ip_cidrs
@@ -714,14 +713,15 @@ rendering is byte-identical to before (checked by rendering `user_data` and comp
 
 ## Security scanning in front of all this
 
-- **Checkov** (`.checkov.yaml`, CI's `checkov` job, `make checkov`) scans
+- **Checkov** (`.checkov.yaml`, `make checkov`) scans
   `deploy/terraform/**` for IaC misconfiguration before you ever `apply`.
-- **Semgrep** (CI's `semgrep` job, `make semgrep`) and **Trivy** (CI's
-  `trivy` job) scan the application source/Dockerfile/dependencies that end
-  up in the images this workflow ships.
-- **SonarQube** (CI's `sonarqube` job, `make sonar-up`/`sonar-scan`) is a
-  code-quality/security gate on the same source — see the root README's
-  "Static analysis & IaC scanning" section for how all four fit together.
+- **Semgrep** (`make semgrep`) and **Trivy** (`make trivy`) scan the source,
+  Dockerfiles and dependencies of what this workflow ships. CI also scans each
+  built image, and once a week the images production runs
+  ([`security.yml`](../.github/workflows/security.yml)).
+- **SonarQube** (`make sonar-up`/`sonar-scan`, local only) is a code-quality
+  gate on the same source — see the root README's "Security scanning and load
+  testing" section.
 
 None of these scan the LIVE droplet itself (no DAST here) — they gate what
 gets built and shipped to it, not the running instance.

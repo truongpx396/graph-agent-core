@@ -1,65 +1,48 @@
 name: OWASP ZAP DAST
 
-# Deliberately workflow_dispatch ONLY — never push/pull_request. Unlike
-# .github/workflows/strix.yml's own dynamic pass, ZAP costs no money and
-# needs no cloud LLM key, but it still needs a REACHABLE, RUNNING target —
-# this repo's own CI has no live deployment to point at by default (see
-# deploy/README.md; deploy/prod/docker-compose.yml's droplet is the one real
-# candidate once deployed) — and `mode: api-scan` below actively attacks
-# whatever URL you give it, the same "maintainer runs this deliberately"
-# framing every live-target job in this repo uses (`make strix-app`, `make
-# garak-full`, `make eval`/`make deepeval`).
+# Started by hand only. `baseline` spiders and scans passively; `api-scan` ATTACKS every endpoint in the target's OpenAPI document. Only ever run
+# this against a target you own or have written permission to test. It needs a running, reachable app, which CI does not have (deploy/README.md).
+# It runs the same make targets as a laptop (make/security.mk), so the ZAP version and report settings are pinned in one place.
 #
-# `mode: baseline` (default) never attacks — spider + PASSIVE scan only,
-# safe against anything you merely have read access to skim. `mode:
-# api-scan` drives ZAP's Active Scanner against every endpoint in the
-# target's own OpenAPI spec (`<target>/openapi.json`) — same rule
-# strix.yml states for itself: **only ever run this against a target you
-# own or have explicit, written permission to test.**
-#
-# If the DEFECTDOJO_URL + DEFECTDOJO_API_KEY repo secrets are configured,
-# the resulting XML report is also imported into that DefectDojo instance
-# (scripts/tools/defectdojo_import.py — see its own docstring for why the ZAP
-# parser specifically needs the XML report, not the JSON one this job also
-# produces) so findings land in the same triage dashboard `make
-# defectdojo-up` gives you locally. That step is SKIPPED, not failed, when
-# those secrets are unset — an inert extra like strix.yml without its own
-# secrets, not a broken job; the scan itself and its uploaded artifact
-# don't depend on DefectDojo existing at all.
+# With the DEFECTDOJO_URL variable and the DEFECTDOJO_API_KEY secret set, the XML report is also imported into that DefectDojo (its ZAP parser
+# needs the XML one: scripts/tools/defectdojo_import.py). Without them that step is skipped; the scan and its artifact do not depend on it.
 on:
   workflow_dispatch:
     inputs:
       target:
-        description: "Base URL of a RUNNING, reachable app you own or have explicit permission to test (e.g. https://your-deployed-app.example.com) — never a target you don't control"
+        description: "Base URL of a RUNNING app you own or have permission to test (https://...)"
         required: true
+        type: string
       mode:
-        description: "'baseline' (passive spider+scan, safe) or 'api-scan' (active scan driven by <target>/openapi.json)"
-        default: "baseline"
-        required: false
+        description: "baseline is passive; api-scan ATTACKS, driven by <target>/openapi.json"
+        required: true
+        default: baseline
+        type: choice
+        options: [baseline, api-scan]
+
+permissions:
+  contents: read
 
 jobs:
   zap:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Baseline scan (passive spider + scan, no attacks)
-        if: inputs.mode == 'baseline'
+      # Inputs reach the script through the environment, never pasted into it: an input is text somebody typed.
+      - name: Scan
+        env:
+          ZAP_TARGET: ${{ inputs.target }}
+          MODE: ${{ inputs.mode }}
         run: |
-          mkdir -p zap_reports
-          docker run --rm -v "$PWD/zap_reports:/zap/wrk:rw" -t zaproxy/zap-stable zap-baseline.py \
-            -t "${{ inputs.target }}" -x report.xml -r report.html -J report.json -I
+          [[ "$ZAP_TARGET" =~ ^https?://[^[:space:]]+$ ]] || { echo "::error::target must be an http(s) URL"; exit 1; }
+          make "zap-$MODE"
 
-      - name: API scan (active, OpenAPI-driven)
-        if: inputs.mode == 'api-scan'
-        run: |
-          mkdir -p zap_reports
-          docker run --rm -v "$PWD/zap_reports:/zap/wrk:rw" -t zaproxy/zap-stable zap-api-scan.py \
-            -t "${{ inputs.target }}/openapi.json" -f openapi -x report.xml -r report.html -J report.json -I
-
-      - name: Upload ZAP report (HTML + XML + JSON)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: zap-report
           path: zap_reports/
@@ -72,7 +55,4 @@ jobs:
           DEFECTDOJO_API_KEY: ${{ secrets.DEFECTDOJO_API_KEY }}
         run: |
           pip install httpx==0.28.1
-          python -m scripts.tools.defectdojo_import \
-            --file zap_reports/report.xml \
-            --scan-type "ZAP Scan" \
-            --engagement-name "ci-run-${{ github.run_id }}"
+          python3 -m scripts.tools.defectdojo_import --file zap_reports/*.xml --scan-type "ZAP Scan" --engagement-name "ci-run-$GITHUB_RUN_ID"

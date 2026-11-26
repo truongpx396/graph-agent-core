@@ -1,7 +1,7 @@
-"""Every job in CI and in the deploy it calls declares `timeout-minutes`.
+"""Every job in every workflow declares `timeout-minutes`.
 
 Without one, a stalled job runs to GitHub's 6-hour cap and holds the PR red-or-pending for that long: 28 of 300 runs between 2026-10-07 and
-2026-11-08 had a job past 45 minutes, 20 of them `test-integration` against a healthy 10 (the comment above `jobs:` in ci.yml has the numbers
+2026-11-08 had a job past 45 minutes, 20 of them `test-integration` against a healthy 10 (ENGINEERING_PATTERNS.md pattern 107 has the numbers
 and how each limit was chosen). A job added later with no limit would bring that back unseen. A job that only calls another workflow cannot
 declare one: the called workflow's own jobs are checked here instead.
 """
@@ -16,7 +16,7 @@ GITHUB_JOB_CAP_MINUTES = 360
 def _jobs() -> dict:
     return {
         f"{path.name}:{name}": job
-        for path in (WORKFLOWS / "ci.yml", WORKFLOWS / "deploy.yml")
+        for path in sorted(WORKFLOWS.glob("*.yml"))
         for name, job in yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"].items()
         if "uses" not in job
     }

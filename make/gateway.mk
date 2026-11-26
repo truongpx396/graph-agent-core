@@ -69,6 +69,11 @@ telegram-down: front-door-secrets  ## Stop and remove the Telegram bot container
 
 ##@ Front door: checks (manual)
 
+# govulncheck inside the image the Dockerfile builds with, so it reports on the standard library that ships, not on whatever Go is installed here.
+authlimit-vuln:  ## Known vulnerabilities reachable from authlimit's code, with the Go version its image is built with (needs Docker)
+	docker run --rm -v $(CURDIR):/src -w /src/services/authlimit $$(sed -nE 's/^FROM (golang:[^ ]+) AS build$$/\1/p' services/authlimit/Dockerfile) \
+		go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
+
 authlimit-test:  ## go vet and the authlimit service's tests with the race detector (specs/018; needs Go, no Docker)
 	cd services/authlimit && go vet ./... && go test -race ./...
 

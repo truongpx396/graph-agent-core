@@ -1,0 +1,5 @@
+# Installed with `pip install --no-deps`: each declares a cap the lock file's hard pins cannot satisfy, and the capped code is unused here.
+# deepeval wants click<8.4.0 and rich<15 (the lock has huggingface-hub, which needs click>=8.4.2, and rich 15); google-genai wants
+# websockets<17, used only by its Live API, which GeminiModel never calls. Verified with a clean import and `pytest -m deepeval --collect-only`.
+deepeval==4.2.0
+google-genai==2.24.0
