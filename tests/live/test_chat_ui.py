@@ -20,10 +20,10 @@ can infer intent.
 """
 import re
 import time
+from pathlib import Path
 
 import pytest
 
-from app.adapters.inbound.api import web_auth
 from tests.live.transcript import page_transcript
 
 # `pytest.importorskip`, not a plain top-level import: `playwright` is only
@@ -42,13 +42,15 @@ Page = playwright_sync_api.Page
 expect = playwright_sync_api.expect
 
 pytestmark = pytest.mark.e2e
+_BUILT_PAGE = Path(__file__).resolve().parents[2] / "web" / "dist" / "index.html"
 
 
 @pytest.fixture(autouse=True)
 def _the_web_client_is_built(request: pytest.FixtureRequest) -> None:
     """A test that loads the real page needs it built, or every selector just times out. A failure, not a skip: CI builds it."""
     uses_the_page = {"real_stack", "real_stack_with_retrieval"} & set(request.fixturenames)
-    if uses_the_page and not (web_auth.WEB_DIST / "index.html").is_file():
+    # The real directory the API subprocess serves, not `web_auth.WEB_DIST`: in this process every test sees a stand-in (tests/conftest.py).
+    if uses_the_page and not _BUILT_PAGE.is_file():
         pytest.fail("the web client is not built: run `make web-build` first (`make test-live` and CI's test-live job do)")
 
 RESPONSE_TIMEOUT_MS = 210_000
