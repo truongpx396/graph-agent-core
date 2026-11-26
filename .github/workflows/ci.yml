@@ -170,8 +170,8 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
-      - name: The generated API types are openapi.json's (regenerating changes nothing)
-        run: npm run gen:api && git diff --exit-code -- src/shared/api/schema.gen.ts
+      - name: The generated API types are openapi.json's (`make web-api` after `make openapi`)
+        run: npm run check:api
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test

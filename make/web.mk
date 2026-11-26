@@ -15,5 +15,5 @@ web-build:  ## Production build into web/dist, which `make serve` serves at / (i
 web-api:  ## Regenerate the web client's API types from openapi.json (CI fails while they are stale)
 	cd web && npm run gen:api
 
-web-check:  ## Everything CI's `web` job runs: lint, types, tests, build
+web-check:  ## Everything CI's `web` job runs: generated API types are fresh, lint, type check, tests, build
 	cd web && npm run check

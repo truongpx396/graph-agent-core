@@ -18,7 +18,7 @@ make web-dev            # http://localhost:5173, hot reload; proxies /chat, /ing
 `WEB_API_TARGET=http://host:port make web-dev` points at another API. An API in `identity` mode answers the dev server with 401: sign-in
 redirects to the front door's own address, so it can only be tried there.
 
-`make web-check` runs what CI runs: lint, types, tests, build.
+`make web-check` runs what CI runs: the generated API types are fresh, lint, type check, tests, build.
 
 ## Layout
 
@@ -52,7 +52,8 @@ src/
 
 ### The API's types
 
-`src/shared/api/schema.gen.ts` is generated from `../openapi.json`: after `make openapi`, run `make web-api` (CI fails while it is stale).
+`src/shared/api/schema.gen.ts` is generated from `../openapi.json`: after `make openapi`, run `make web-api` (CI fails while it is stale, a
+changed route description included, since the file carries them).
 `contract.test.ts` fails when a stream gains an event type the client does not handle.
 
 ### Names the browser tests use
