@@ -80,6 +80,7 @@ from app.agent.graph.routing import (
 )
 from app.agent.graph.skill_guards import SKILL_REQUIRED_TOOL_MARKERS
 from app.agent.graph.state import (
+    CONTEXT_GAP_REASON,
     HISTORY_TOKEN_CEILING,
     HISTORY_TOKEN_FLOOR,
     MAX_ITERATIONS,
@@ -88,6 +89,7 @@ from app.agent.graph.state import (
 )
 from app.agent.graph.stream_events import (
     announcing,
+    judged_the_answer,
     rejected_the_answer,
     replaced_the_answer,
     trimmed_the_history,
@@ -104,6 +106,7 @@ from app.agent.graph.utils import (
 from app.agent.tools import builtin
 from app.core.config import (
     CHAT_MODEL,
+    CONTEXT_GAP_REASK_ENABLED,
     FOLLOWUPS_ENABLED,
     MAX_COST_USD_PER_TURN,
     OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS,
@@ -311,6 +314,7 @@ def build_graph(
         skill_required_tools=skill_required_tools,
         # Validated here, at build, so a typo or a protected check stops the process at start-up instead of leaving a check running that the operator thinks is off.
         skip_on_routed_tiers=parse_checks_off_on_routed_tiers(OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS),
+        checks_off=frozenset() if CONTEXT_GAP_REASK_ENABLED else frozenset({CONTEXT_GAP_REASON}),
     )
     graph_node_tool_batch_guard_bound = functools.partial(graph_node_tool_batch_guard, valid_tool_names=valid_tool_names)
 
@@ -322,6 +326,7 @@ def build_graph(
         skill_required_tools=skill_required_tools,
         cannot_open_links=cannot_open_links(valid_tool_names),
         system_prompt=manifest.system_prompt,
+        hold_context_gap=CONTEXT_GAP_REASK_ENABLED,
     )
     graph_node_retrieve_context = make_graph_node_retrieve_context(deps.search_docs or default_search)
 
@@ -361,7 +366,7 @@ def build_graph(
     add("human_approval", make_graph_node_human_approval(deps.interrupt or interrupt))
     add("tool_batch_guard", graph_node_tool_batch_guard_bound)
     # These four announce what the client should see (`stream_events.py`) instead of the runtime recognising them by name.
-    add("check_output", announcing(graph_node_check_output_bound, replaced_the_answer))
+    add("check_output", announcing(graph_node_check_output_bound, judged_the_answer))
     add("retry_output", announcing(graph_node_retry_output, rejected_the_answer))
     add("retry_exhausted", announcing(make_graph_node_retry_exhausted(emit_message=emit_no_answer_message), replaced_the_answer))
     add(

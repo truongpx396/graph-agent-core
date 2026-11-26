@@ -53,6 +53,8 @@ x-app-env: &app-env
   MAX_COST_USD_PER_PRINCIPAL_PER_DAY: ${MAX_COST_USD_PER_PRINCIPAL_PER_DAY:-0}
   MAX_COST_USD_PER_PRINCIPAL_PER_MONTH: ${MAX_COST_USD_PER_PRINCIPAL_PER_MONTH:-0}
   UNPRICED_MODEL_POLICY: ${UNPRICED_MODEL_POLICY:-allow}
+  # An answer saying the pre-fetched documents lack it is asked again without them (GRAPH_PATTERNS.md pattern 105). "false" turns that off.
+  CONTEXT_GAP_REASK_ENABLED: ${CONTEXT_GAP_REASK_ENABLED:-true}
   # Unset (empty) unless you opt in; each degrades as app/core/config.py documents: no Langfuse tracing, no crawl4ai or OpenSandbox tools, no Slack, no Telegram.
   LANGFUSE_HOST: ${LANGFUSE_HOST:-}
   LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}

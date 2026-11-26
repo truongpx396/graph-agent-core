@@ -19,6 +19,7 @@ import re
 from typing import Any, TypeGuard
 
 from langchain_core.messages import (
+    AIMessage,
     BaseMessage,
     HumanMessage,
     ToolCall,
@@ -61,6 +62,11 @@ RETRY_ARTIFACT_KEY = "retry_artifact"
 # SystemMessages agent() synthesizes per-call and never persists. The agent
 # node passes it to the model. See GRAPH_PATTERNS.md pattern 41.
 COMPACTION_MARKER_KEY = "compaction_marker"
+
+
+# Marks the answer `context_gap` took back (docs/GRAPH_PATTERNS.md pattern 105): a retry artifact like any rejected answer, but also never shown to the
+# model again, and what `check_output` puts back when the second look looked nothing up.
+CONTEXT_GAP_KEY = "context_gap_original"
 
 
 def is_compaction_marker(message: BaseMessage) -> bool:
@@ -198,6 +204,15 @@ def current_turn_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
         None,
     )
     return messages[last_human_index:] if last_human_index is not None else messages
+
+
+def context_gap_original(messages: list[BaseMessage]) -> AIMessage | None:
+    """The answer this turn took back to look again, or None when it has not (so this is also "is this the second look")."""
+    return next((x for x in current_turn_messages(messages) if isinstance(x, AIMessage) and x.additional_kwargs.get(CONTEXT_GAP_KEY)), None)
+
+
+def tool_ran_this_turn(messages: list[BaseMessage]) -> bool:
+    return any(isinstance(x, ToolMessage) for x in current_turn_messages(messages))
 
 
 def reject_tool_calls(tool_calls: list[ToolCall], reason: str) -> list[ToolMessage]:

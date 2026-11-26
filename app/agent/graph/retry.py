@@ -7,9 +7,13 @@ their fallback text are the registry in `graph/output_checks.py`.
 from collections.abc import Callable
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
-from app.agent.graph.messages import RETRY_ARTIFACT_KEY, reject_tool_calls
+from app.agent.graph.messages import (
+    CONTEXT_GAP_KEY,
+    RETRY_ARTIFACT_KEY,
+    reject_tool_calls,
+)
 from app.agent.graph.output_checks import check_for, fallback_message, trusts_content
 from app.agent.graph.routing import graph_node_check_output
 from app.agent.graph.state import State
@@ -52,11 +56,11 @@ def graph_node_retry_output(state: State) -> dict[str, Any]:
         raise ValueError("retry_output is only reached when check_output recorded a reason")
     check = check_for(reason)
     if check.feedback is None:
-        # Nothing to tell the model: the pre-fetched block is what steered it (`context_gap`, pattern 105). The answer is removed, not tagged (a tagged one
-        # is shown to the model again for the rest of this turn), and the block with it, so the next call is the question asked as it was typed. Feedback
-        # was measured and was worse: it produced a document search, or a tool call written out as text.
-        removable = isinstance(last, AIMessage) and not last.tool_calls and last.id is not None
-        return {"messages": [RemoveMessage(id=str(last.id))] if last is not None and removable else [], "context": "", "citations": []}
+        # Nothing to tell the model: the pre-fetched block is what steered it (`context_gap`, pattern 105). The answer is taken back (tagged, and the agent
+        # node never sends one tagged this way) and the block with it, so the model looks again. Feedback was measured and was worse: it produced a document
+        # search for a staff question, or a tool call written out as text. The text is kept because check_output restores it if nothing gets looked up.
+        taken_back = [x.model_copy(update={"additional_kwargs": {**x.additional_kwargs, CONTEXT_GAP_KEY: True}}) for x in _as_retry_artifact(last)]
+        return {"messages": taken_back, "context": "", "citations": []}
     feedback = check.feedback((state.get("output_findings") or {}).get(reason))
     # Both messages are tagged so that nothing downstream mistakes them for conversation: the
     # feedback is not something the person said, and the rejected answer is not one they were

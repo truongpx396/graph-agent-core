@@ -267,6 +267,8 @@ class Bot:
                 if kind == "token":
                     out.text += event["content"]
                     await sink.push(out.text)
+                elif kind == "retry":
+                    out.text = ""  # rejected or replaced: what follows is the answer, and appending it showed both in one message
                 elif kind == "citations":
                     out.citations = event["items"]
                 elif kind == "error":
