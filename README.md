@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>🤖 Graph Agent Core</h1>
+<h1>🤖 Graph Agent Core 🕸️</h1>
 
 <h3>Production-Shaped RAG Agent</h3>
 
