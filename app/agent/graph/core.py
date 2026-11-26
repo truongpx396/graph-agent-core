@@ -27,7 +27,13 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.types import RetryPolicy, default_retry_on
+
+# 0.6 moved `default_retry_on` to a private module and re-exports it from `types` without declaring it; it is still RetryPolicy's own default.
+# (One difference from 0.2: a `requests` 5xx is now retried too. The model client uses httpx, so nothing here changes.)
+from langgraph.types import (  # type: ignore[attr-defined]  # default_retry_on: a re-export langgraph 0.6 does not declare
+    RetryPolicy,
+    default_retry_on,
+)
 
 from app.agent.graph.messages import (
     CANNOT_HELP_MESSAGE,

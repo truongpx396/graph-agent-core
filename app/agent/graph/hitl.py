@@ -12,11 +12,10 @@ from typing import Any, Literal, cast
 
 from langchain_core.messages import AIMessage, ToolCall
 from langchain_core.runnables import RunnableConfig
-from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import StateSnapshot
 
 from app.agent.graph.messages import reject_tool_calls
-from app.agent.graph.state import STATE_SCHEMA_VERSION, State
+from app.agent.graph.state import STATE_SCHEMA_VERSION, AgentGraph, State
 from app.core import metrics
 
 
@@ -57,7 +56,7 @@ def _resumability_error_from_state(state: StateSnapshot) -> str | None:
     return None
 
 
-async def resumability_error_async(graph: CompiledStateGraph, config: RunnableConfig) -> str | None:
+async def resumability_error_async(graph: AgentGraph, config: RunnableConfig) -> str | None:
     """Check before every Command(resume=...): never resume blindly. Returns None if safe, else a human-readable
     reason (and increments `agent_checkpoint_issue_total`).
 
@@ -77,7 +76,7 @@ async def resumability_error_async(graph: CompiledStateGraph, config: RunnableCo
     return _resumability_error_from_state(await graph.aget_state(config))
 
 
-async def paused_approval_async(graph: CompiledStateGraph, config: RunnableConfig) -> dict[str, Any] | None:
+async def paused_approval_async(graph: AgentGraph, config: RunnableConfig) -> dict[str, Any] | None:
     """Is `config`'s thread parked at a real human_approval interrupt? Returns `None` if not (the common case),
     else `{"tool_calls": [...], "resumable": bool}`.
 

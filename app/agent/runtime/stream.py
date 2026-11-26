@@ -22,7 +22,6 @@ from typing import Any, TypeAlias
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
 from app.agent.graph.hitl import (
@@ -34,6 +33,7 @@ from app.agent.graph.messages import (
     COMPACTION_MARKER_KEY,
     is_retry_artifact,
 )
+from app.agent.graph.state import AgentGraph
 from app.agent.graph.stream_events import STREAM_EVENT
 from app.agent.runtime import cancelled_turn
 from app.agent.runtime import core as runtime_module
@@ -94,7 +94,7 @@ async def _record_turn_metrics(
             metrics.agent_tokens_total.inc(total_tokens)
 
 
-async def _record_unfinished_turn(graph: CompiledStateGraph, cfg: RunnableConfig, start: float, outcome: str) -> None:
+async def _record_unfinished_turn(graph: AgentGraph, cfg: RunnableConfig, start: float, outcome: str) -> None:
     """Records a turn that ended by timeout, error or cancellation: the outcome and latency always, and the
     tokens it had already spent when its last checkpoint holds any (`agent_tokens_total`).
 
@@ -294,7 +294,7 @@ def _checkpoint_refusal_code(error: str) -> ErrorCode:
     return ErrorCode.CHECKPOINT_INCOMPATIBLE if error.startswith("checkpoint_incompatible") else ErrorCode.CHECKPOINT_LOST
 
 
-async def _run_graph_stream(graph: CompiledStateGraph, graph_input: dict[str, Any] | Command[Any] | None, cfg: RunnableConfig, trace: _TurnTrace, cancel_check: CancelCheck | None = None) -> AsyncGenerator[dict[str, Any], None]:
+async def _run_graph_stream(graph: AgentGraph, graph_input: dict[str, Any] | Command[Any] | None, cfg: RunnableConfig, trace: _TurnTrace, cancel_check: CancelCheck | None = None) -> AsyncGenerator[dict[str, Any], None]:
     """Shared core of astream_events_turn/astream_events_resume: drives one `graph.astream_events()` call,
     translates events into typed shapes, and yields exactly one terminal event.
 
@@ -759,7 +759,7 @@ class _BudgetHold:
 
 async def _run_turn(
     name: str,
-    graph: CompiledStateGraph,
+    graph: AgentGraph,
     thread_id: str,
     ctx: SecurityCtx,
     build_input: Callable[[], dict[str, Any] | Command[Any] | None],
@@ -963,11 +963,13 @@ async def astream_events_continue_turn(thread_id: str, ctx: SecurityCtx, cancel_
     Why it is safe even if the crashed attempt already ran a mutating/outward tool, with no per-tool
     capability check: passing `None` as input (not a fresh `{"messages": [...]}`) makes LangGraph's Pregel
     loop set `is_resuming=True` and proceed from where THIS checkpoint's unfinished superstep left off,
-    matching any already-recorded task write instead of re-executing it (verified against the installed
-    `langgraph==0.2.76`'s `pregel/loop.py::Loop._match_writes`, fed from `checkpoint_pending_writes`, which
+    matching any already-recorded task write instead of re-executing it (read in `langgraph==1.0.1`'s
+    `pregel/_loop.py::PregelLoop._match_writes`, fed from `checkpoint_pending_writes`, which
     `AsyncPostgresSaver` persists per task, not only at superstep boundaries). A completed tool call is never
     run twice. This is the mechanism that already makes `astream_events_resume` safe to retry, extended to an
-    ordinary crashed turn.
+    ordinary crashed turn. Writes are matched by task id, which a LangGraph upgrade can change: work that
+    finished but was not yet checkpointed would then run again, which is why a deploy drains the workers
+    (pattern 16) and why `idempotent()` keys on `tool_call_id`.
 
     Contrast with re-issuing `astream_events_turn` (what a naive crash retry does): REAL input hits
     `Loop._first`'s other branch, which discards the previous checkpoint's unfinished-task writes and starts a

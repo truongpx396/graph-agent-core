@@ -7,6 +7,7 @@ call and THEN the cache write's embedding and Redis round trip.
 import threading
 
 from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.graph import END
 
 from app.agent.graph.build import GraphDeps
 from tests.agent.fakes import cfg, scripted_llm
@@ -28,9 +29,11 @@ def test_neither_step_comes_before_the_other():
 
 
 def test_a_graph_without_the_optional_steps_ends_right_after_check_output():
-    edges = _edges(build_subagent_graph(GraphDeps(llm=scripted_llm(lambda _m: AIMessage(content="x")))))
-    assert ("check_output", "__end__") in edges
-    assert not {s for s, _ in edges} & {"suggest_followups", "write_semantic_cache"}
+    # Read from the builder: LangGraph 0.6's drawing stops at a router that declares no targets (`agent`'s), so it never reaches this node's edges.
+    graph = build_subagent_graph(GraphDeps(llm=scripted_llm(lambda _m: AIMessage(content="x"))))
+    (after_check,) = graph.builder.branches["check_output"].values()
+    assert END in after_check.ends.values()
+    assert not {"suggest_followups", "write_semantic_cache"} & set(graph.nodes)
 
 
 async def test_the_cache_write_begins_while_the_follow_ups_are_still_being_generated():

@@ -88,7 +88,9 @@ Every tool declares `read_only`, `mutating` or `outward` (`SHARED_TOOL_CAPABILIT
 ### 16. Durable checkpointing and cross-restart compatibility
 The runtime uses `AsyncPostgresSaver` (`MemorySaver` in tests), so a paused approval survives a restart and several processes share one store. Every process awaits `init_graph_async()` on its own loop, because the saver's lock binds to the loop that made it.
 - **`STATE_SCHEMA_VERSION` + `graph_version`:** `resumability_error_async` runs before every resume and separates `checkpoint_lost` from `checkpoint_incompatible`. A differing build SHA alone is not an error.
-- **A topology change can hide a mid-flight turn:** LangGraph names a conditional edge's channel after its router, so renaming a router left a checkpoint with `next == ()` and a resume ran nothing, silently. `build_graph` registers each router under `EDGE_CHANNEL_NAMES` (see Naming), so only changing that table is a topology change.
+- **A topology change can hide a mid-flight turn:** a checkpoint names what is pending after the TARGET node (`branch:to:<node>`, since LangGraph 0.3), so removing or renaming a pending node leaves `next == ()` and a resume runs nothing, silently. Renaming a router no longer matters (under 0.2 it did, which is why `build_graph` still registers each one under `EDGE_CHANNEL_NAMES`).
+- **A pause does not survive a LangGraph upgrade that changes task ids:** an approval paused under 0.2.76 reads back under 1.0.1 with its interrupt attached to no task, so `resumability_error_async` refuses it (`checkpoint_lost`) and the tool never runs. Crashed and finished turns carry over. The call left unanswered is closed in the COPY sent to the model (`messages.with_unanswered_calls_closed`): without that an OpenAI-style API rejects the whole thread, from this or any other lost call.
+- **Loading a checkpoint is not yet inert:** `langgraph-checkpoint` 3.0.1 closes the JSON payload of CVE-2025-64439, but a crafted msgpack row still runs what it names (see "Known gaps"; `tests/agent/runtime/test_checkpoint_payloads.py`).
 - **Deploying a graph change: stop the workers and let in-flight turns finish first.**
 
 ### 17. Multi-tenant isolation
@@ -180,7 +182,7 @@ Turns took 26-40 s for answers that took seconds to write. **Measured:** Ollama 
 ### 80. A stopped turn is taken out of the thread, because the model reads the thread and not the click
 After `POST /chat/cancel` and a new question, the model saw both and ran the script the person had stopped.
 - **Fix:** `runtime/cancelled_turn.discard_cancelled_turn`, on `TurnCancelledError` only, removes the turn's messages with `aupdate_state(as_node=START)`. A timeout or error keeps the question for a retry. If a TOOL already ran, the turn stays, closed with an assistant line (forgetting a filed ticket invites filing it again under a new id).
-- **Read in LangGraph 0.2.76:** `update_state` without `as_node` raises "Ambiguous update" after a run that stopped part-way. Re-verify with the upgrade.
+- **Read in LangGraph 0.2.76, still so in 1.0.1:** `update_state` without `as_node` raises "Ambiguous update" when it cannot tell which node wrote last.
 - **Gaps:** `cancel_run` (paused at approval) is unchanged; text already streamed stays on the page until reload.
 
 ### 81. A tool that failed is not a promise unkept, and a database error is not for the person to read
@@ -316,11 +318,14 @@ A **replay** sees the same `tool_call_id` twice; a **re-ask** arrives under a ne
 
 **Deliberately not built:** a business-key rule ("one open ticket per tenant + requester + subject") for two *different* ids for the same request. That is a product decision; `MutatingToolTimedOutError`'s steering is the general mitigation.
 
-### Next PR: the LangGraph upgrade (decided, not started; R19)
+### The LangGraph upgrade to 1.0.1 (done; the rest of R19 is open)
 
-`langgraph>=0.2.20,<0.3` is pinned (0.2.76). The next PR moves it to **1.0.1**, the highest this stack can use: 1.0.3+ needs `langchain-core` 1.x, but the Langfuse **v2** SDK imports `langchain.callbacks`, which langchain 1.x removed. Going further is a ladder (Langfuse server v3, then SDK v3, then langchain 1.x, then LangGraph 1.2.x), not a bump. It buys only the end of the import-time "incompatible versions of langgraph and checkpoint-postgres" warning.
-- **Verify, none assumed:** a thread **paused** under 0.2.76 resumes; `test_checkpoint_across_a_topology_change.py` passes; the `saver.lock = asyncio.Semaphore(...)` workaround in `runtime/core.py` is still needed; `interrupt`/`Command(resume=...)`, `add_messages` replacement by id and parallel fan-out behave as before; `aupdate_state(..., as_node=START)` in `runtime/cancelled_turn.py` (80) still works; `make test-integration` and `make test-live` pass.
-- **Deploy:** stop the workers and let in-flight turns finish first (16).
+`langgraph==1.0.1` with `langgraph-prebuilt==1.0.1` is the highest this stack can use: from 1.0.2 prebuilt needs `langchain-core` 1.x, and the Langfuse **v2** SDK imports `langchain.callbacks`, which langchain 1.x removed. Going further is a ladder (Langfuse server v3, then SDK v3, then langchain 1.x, then LangGraph 1.2.x). It was done for CVE-2025-64439 in `langgraph-checkpoint` 2.x, which closes that payload shape only: loading a checkpoint can still run code ("Known gaps"). What was verified, from the list decided before it:
+- **A thread paused under 0.2.76 does NOT resume.** Its interrupt reads back attached to no task, on SQLite and on Postgres; 0.6 behaves the same. The gate refuses it and the tool never runs (16). `STATE_SCHEMA_VERSION` is unchanged: the pause is refused anyway, and a bump would also refuse crashed turns that do carry over.
+- **Carries over** (old code and library wrote, new read, on a real Postgres whose tables the new saver migrated): a crashed turn continues without running its tool again; a finished conversation keeps its history.
+- The topology test now describes target-named channels; the `saver.lock` workaround is still needed (checkpoint-postgres 3.0.5 still takes one lock); `aupdate_state(as_node=START)` still works (`test_cancelled_turn.py`).
+- **Not verified by hand:** `make test-live` runs in CI.
+- **Deploy:** answer or cancel pending approvals first, then stop the workers and let in-flight turns finish (16).
 
 ### Not built
 
@@ -334,6 +339,7 @@ A **replay** sees the same `tool_call_id` twice; a **re-ask** arrives under a ne
 
 The system-wide list; a fix PR deletes its entry.
 
+- **Whoever can write to the checkpoint database can run code in the app.** Loading a crafted msgpack checkpoint imports and calls what it names on `langgraph-checkpoint` 3.0.1 (reproduced; CVE-2026-28277, CVE-2026-48775), as it did on 2.1.2. The upstream fixes need `langgraph` 1.0.10 and checkpoint 4.1.1, which need LangChain 1.x (R19). A deserializer restricted to the types the state really holds would close it sooner; not built. Until then the database's credentials are as sensitive as shell access.
 - **A pre-fetched block can still steer the small model away from the right tool** (qwen2.5:7b at temperature 0; patterns 104, 105). The case where the model SAYS the block lacks the answer is handled (105). Still open: the model that answers from the wrong block without saying so, or writes the tool call out as text. The cause is upstream, the pre-fetch deciding before anything knows what the question needs, and these remedies for it were measured and rejected:
   - *A stricter pre-fetch floor than `search_docs`'s -8.0.* On `retrieval-domains` v1 (151 labelled questions, 78 chunks, `ml-service` `/rerank`) a floor of +1 drops the roster questions (0.0 to -0.6) and also the context of 12% of dev and 7% of test questions, and without context only 5 of those 13 make the model call `search_docs`. The score ranges overlap (the gold chunks' 10th percentile is -2.6 on dev).
   - *A sentence after the citation reminder* ("if that content lacks the answer, call the tool that can look it up"): roster 0 to 1 of 4, and not the right tool.

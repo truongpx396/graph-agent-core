@@ -18,9 +18,9 @@ import logging
 from langchain_core.messages import AIMessage, BaseMessage, RemoveMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import START
-from langgraph.graph.state import CompiledStateGraph
 
 from app.agent.graph.messages import current_turn_messages, is_user_message
+from app.agent.graph.state import AgentGraph
 from app.core import metrics
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ STOPPED_TURN_MESSAGE = "[The person stopped this request before it finished.]"
 _STATE_TIMEOUT_SECONDS = 2.0
 
 
-async def discard_cancelled_turn(graph: CompiledStateGraph, cfg: RunnableConfig) -> str:
+async def discard_cancelled_turn(graph: AgentGraph, cfg: RunnableConfig) -> str:
     """Take the turn the person stopped out of the thread, or close it. Returns what was done:
     `dropped`, `closed` (a tool had run), `nothing` (no turn in the thread), or `failed`.
 
@@ -54,7 +54,7 @@ async def discard_cancelled_turn(graph: CompiledStateGraph, cfg: RunnableConfig)
             # `as_node=START`: LangGraph would otherwise infer the node that wrote last, which is
             # "ambiguous" after a run that stopped part-way. START has one outgoing edge (to
             # `validate_input`) and no routing function to run on the edited thread, and the next
-            # turn's input discards the tasks left pending (checked in the installed 0.2.76).
+            # turn's input discards the tasks left pending (held by tests/agent/runtime/test_cancelled_turn.py).
             await asyncio.wait_for(
                 graph.aupdate_state(cfg, {"messages": update}, as_node=START), timeout=_STATE_TIMEOUT_SECONDS
             )

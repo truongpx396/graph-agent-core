@@ -150,8 +150,9 @@ class TestPerTurnResetThroughTheGraph:
         cfg = {"configurable": {"thread_id": "reset-1", "ctx": TEST_CTX}, "recursion_limit": 35}
 
         await g.ainvoke({"messages": [HumanMessage(content="first question please")]}, config=cfg)
-        # What `run_subagent` does mid-turn: append one (tokens, cost) entry.
-        await g.aupdate_state(cfg, {"subagent_spend": [(3000, 0.25)]})
+        # What `run_subagent` does mid-turn: append one (tokens, cost) entry. `as_node` names a node that ends the turn: the two post-answer
+        # steps run together, so LangGraph cannot infer which of them an update comes from.
+        await g.aupdate_state(cfg, {"subagent_spend": [(3000, 0.25)]}, as_node="write_semantic_cache")
         assert await self._spend(g, cfg) == [(3000, 0.25)]
 
         await g.ainvoke({"messages": [HumanMessage(content="second question please")]}, config=cfg)
@@ -166,8 +167,8 @@ class TestPerTurnResetThroughTheGraph:
         cfg = {"configurable": {"thread_id": "reset-2", "ctx": TEST_CTX}, "recursion_limit": 35}
         await g.ainvoke({"messages": [HumanMessage(content="a question please")]}, config=cfg)
 
-        await g.aupdate_state(cfg, {"subagent_spend": [(100, 0.01)]})
-        await g.aupdate_state(cfg, {"subagent_spend": [(200, 0.02)]})
+        await g.aupdate_state(cfg, {"subagent_spend": [(100, 0.01)]}, as_node="write_semantic_cache")
+        await g.aupdate_state(cfg, {"subagent_spend": [(200, 0.02)]}, as_node="write_semantic_cache")
 
         assert await self._spend(g, cfg) == [(100, 0.01), (200, 0.02)]
 

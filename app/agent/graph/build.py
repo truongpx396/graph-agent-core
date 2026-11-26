@@ -36,7 +36,6 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 
@@ -85,6 +84,7 @@ from app.agent.graph.state import (
     HISTORY_TOKEN_FLOOR,
     MAX_ITERATIONS,
     MAX_TOKENS_PER_TURN,
+    AgentGraph,
     State,
 )
 from app.agent.graph.stream_events import (
@@ -227,12 +227,11 @@ SUBAGENT_PROFILE = GraphProfile(
 )
 
 
-# The name a checkpoint records for each node's conditional edge (source node -> name), which is what a turn a worker left mid-flight is
-# resumed through (GRAPH_PATTERNS.md 16). These are the names the graph had before routers became `graph_edge_route_after_<node>`, held
-# unchanged on purpose: `named_edge` registers each router under its entry, so renaming a router function cannot strand a turn. Three
-# edges are `route` because `then()` builds their router, and `agent`'s is `condition` because its router is a `functools.partial`.
-# A new conditional edge gets `graph_edge_route_after_<node>` here. `tests/agent/graph/test_edge_channel_names.py` holds the table
-# equal to the compiled graph; changing an entry is a topology change, so drain the workers first.
+# The name each node's conditional edge is registered under (source node -> name). Under LangGraph 0.2 a checkpoint stored it, so these keep
+# the names the graph had before routers became `graph_edge_route_after_<node>`; since 0.3 a checkpoint stores the target node instead
+# (GRAPH_PATTERNS.md 16), and the table only labels the edges. Three are `route` because `then()` builds their router, and `agent`'s is
+# `condition` because its router is a `functools.partial`. A new conditional edge gets `graph_edge_route_after_<node>` here.
+# `tests/agent/graph/test_edge_channel_names.py` holds the table equal to the compiled graph.
 EDGE_CHANNEL_NAMES: Mapping[str, str] = {
     "validate_input": "route_after_validation",
     "moderate_input": "route",
@@ -257,7 +256,7 @@ def build_graph(
     history_token_ceiling: int | None = None,
     history_token_floor: int | None = None,
     profile: GraphProfile = FULL_PROFILE,
-) -> CompiledStateGraph:
+) -> AgentGraph:
     """Compile the graph.
 
     `deps` bundles the swappable clients (LLM, search); tests inject fakes through a `GraphDeps` to run full
@@ -361,7 +360,7 @@ def build_graph(
     # see AGENT_RETRY_POLICY. Nothing else here gets one: `tools` recovers via handle_tool_errors
     # above, and every other node is a pure function of state where a retry would just repeat the
     # same bug (pattern 7).
-    add("agent", graph_node_agent, retry=AGENT_RETRY_POLICY)
+    add("agent", graph_node_agent, retry_policy=AGENT_RETRY_POLICY)
     add("tools", graph_node_tools)
     add("human_approval", make_graph_node_human_approval(deps.interrupt or interrupt))
     add("tool_batch_guard", graph_node_tool_batch_guard_bound)
@@ -448,7 +447,7 @@ def build_graph(
         return [*finish_steps] if finish_steps else END  # a list display: LangGraph's router type is list[Hashable]
 
     # The edge counterpart of `add`: a conditional edge is registered under its entry in EDGE_CHANNEL_NAMES, never under its router's
-    # Python name, so a checkpoint written before a rename still finds its pending node (`named_edge`).
+    # Python name (`named_edge`).
     def add_edges_after(source: str, router: RouterFn, path_map: dict[Hashable, str] | None = None) -> None:
         builder.add_conditional_edges(source, named_edge(router, EDGE_CHANNEL_NAMES[source]), path_map)
 
@@ -524,7 +523,7 @@ def build_subagent_graph(
     max_cost_usd_per_turn: float | None = None,
     *,
     emit_no_answer_message: bool = True,
-) -> CompiledStateGraph:
+) -> AgentGraph:
     """`build_graph` with `SUBAGENT_PROFILE`, for a NESTED subagent run
     (`app/agent/tools/run_subagent.py`, pattern 46). Parameters mirror `build_graph`'s, minus
     `history_token_ceiling`/`history_token_floor`: there is no `compact_history` to size."""
