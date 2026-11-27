@@ -165,8 +165,9 @@ class TestDurabilityAcrossRestart:
             ) as saver:
                 await saver.setup()
                 graph = build_graph(GraphDeps(llm=_fake_llm()), checkpointer=saver)
+                # Not "remember ...": that asks for the `remember` tool, and an answer without the call is sent back (pattern 115).
                 await graph.ainvoke(
-                    {"messages": [HumanMessage(content="remember this")]},
+                    {"messages": [HumanMessage(content="keep this")]},
                     config={"configurable": {"thread_id": thread_id, "ctx": TEST_CTX}},
                 )
 
@@ -182,7 +183,7 @@ class TestDurabilityAcrossRestart:
 
         await _write()
         contents = await _read()
-        assert "remember this" in contents
+        assert "keep this" in contents
 
 
 class TestAsyncEntryPoints:
