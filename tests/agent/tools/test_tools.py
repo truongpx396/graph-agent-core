@@ -45,6 +45,7 @@ from app.agent.tools.skill_catalog import SkillRecord
 from app.agent.tools.subagent_catalog import SubagentRecord
 from app.core import metrics, tool_runtime
 from app.core.config import RERANK_TOP_K, SKILLS_COLLECTION
+from app.core.untrusted import frame_untrusted
 from app.domains.ecorp import store as ecorp_store
 from app.domains.ecorp import usecases as ecorp_usecases
 from app.domains.ecorp.tools import (
@@ -1650,7 +1651,7 @@ class TestRunSubagentTool:
         assert isinstance(result, Command)
         messages = result.update["messages"]
         assert len(messages) == 1
-        assert messages[0].content == "42"
+        assert messages[0].content == frame_untrusted("42")
         assert messages[0].tool_call_id == "call-xyz"
         assert result.update["subagent_spend"] == [(123, 0.05)]
 

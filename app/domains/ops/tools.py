@@ -108,11 +108,10 @@ async def post_to_team_channel(
     channel: str, message: str, config: RunnableConfig, tool_call_id: Annotated[str, InjectedToolCallId]
 ) -> str:
     """Post a message to a team channel — e.g. a metrics digest or an
-    anomaly you found during an investigation. This reaches OUTSIDE this
-    app's own corpus (a real deployment would post to Slack), unlike the
-    read-only fetch_metrics_summary — declared "outward" in
-    TOOL_CAPABILITIES, so it is always gated behind human_approval before
-    it runs, same as any mutating tool. The message is what people will read:
+    anomaly you found during an investigation. This reaches people outside
+    this conversation, unlike the read-only fetch_metrics_summary, so it
+    always requires human approval before it runs. The message is what
+    people will read:
     fetch whatever numbers it reports FIRST, and never post a placeholder."""
     ctx = ctx_or_refuse(config, "post_to_channel")
     if ctx is None:
@@ -183,7 +182,8 @@ async def list_recent_incidents(config: RunnableConfig, status: str | None = Non
     ctx = ctx_or_refuse(config, "list_recent_incidents")
     if ctx is None:
         return NO_CTX_REFUSAL
-    return await arun_with_timeout(list_recent_incidents_impl, status)
+    # Framed here, not in the use case: the MCP server returns the same text to its own clients. A summary can quote a vendor's page.
+    return frame_untrusted(await arun_with_timeout(list_recent_incidents_impl, status))
 
 
 class ResolveIncidentArgs(BaseModel):
@@ -232,7 +232,7 @@ class CheckVendorStatusPageArgs(BaseModel):
 
 
 async def _check_vendor_status_page_impl(url: str) -> str:
-    # Page text is untrusted data (SYSTEM_PROMPT's promise about tool results).
+    # Page text is untrusted data (the promise app/core/prompt_rules.py makes about tool results).
     return frame_untrusted(await page_renderer.get().render(url))
 
 
@@ -253,15 +253,14 @@ async def check_vendor_status_page(
     in the sandbox, cross-reference our own incident history, decide
     whether to log a new incident), use_skill("vendor-incident-postmortem")
     has the whole thing — don't freehand it from scratch. Short version:
-    pass this page's own text into run_command_in_sandbox to compute real
+    pass this page's own text into run_python_in_sandbox to compute real
     stats from their own incident history (frequency, total downtime
     window); to check whether THIS SPECIFIC vendor has come up in OUR
     OWN incident log before, that's what the vendor-history-researcher
     subagent (run_subagent) is for — a different, more targeted question
     than metrics-researcher's own "what does current telemetry look
-    like." Reaches the open internet — declared "outward" in
-    TOOL_CAPABILITIES, so it always requires human approval before it
-    runs, same as post_to_team_channel."""
+    like." Reaches the open internet, so it always requires human approval
+    before it runs, same as post_to_team_channel."""
     ctx = ctx_or_refuse(config, "check_vendor_status")
     if ctx is None:
         return NO_CTX_REFUSAL
@@ -341,8 +340,7 @@ async def run_command_in_sandbox(
     `python -c '...'` is exactly the mistake run_python_in_sandbox
     exists to make impossible — any quote or apostrophe in your code
     (a dict literal, an f-string) collides with the shell's own
-    quoting and silently breaks the script, confirmed via repeated
-    real failures. For the full worked procedure that combines this
+    quoting and silently breaks the script. For the full worked procedure that combines this
     with a live crawl and a subagent lookup, call
     use_skill("vendor-incident-postmortem") BEFORE writing anything —
     it walks through the whole investigation end to end, don't
@@ -394,8 +392,7 @@ async def _run_python_in_sandbox_impl(script: str, thread_id: str, ctx: Security
 async def run_python_in_sandbox(
     script: str, config: RunnableConfig, tool_call_id: Annotated[str, InjectedToolCallId]
 ) -> str:
-    """Run real Python computation calculator's plain arithmetic can't
-    do (recomputing a statistic from raw readings, parsing a pasted log
+    """Run real Python computation (recomputing a statistic from raw readings, parsing a pasted log
     dump, diffing two configs) — use this, not run_command_in_sandbox,
     for anything beyond a single shell command. Pass your FULL Python
     source as `script`, exactly as you'd write it in a file — multi-line
@@ -454,9 +451,7 @@ async def read_sandbox_file(
     write_sandbox_file). Same auto-created, per-investigation sandbox
     as run_command_in_sandbox. If this returns an unexpected "file not
     found" for a file you know exists, use run_command_in_sandbox with
-    `cat <path>` instead — a disclosed, environment-specific gap in
-    this particular tool, not in write_sandbox_file or
-    run_command_in_sandbox. Reaches an external service — always
+    `cat <path>` instead. Reaches an external service — always
     requires human approval before it runs."""
     ctx = ctx_or_refuse(config, "read_sandbox_file")
     if ctx is None:

@@ -112,6 +112,7 @@ from app.core.config import (
     OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS,
     SEMANTIC_CACHE_ENABLED,
 )
+from app.core.prompt_rules import compose_system_prompt
 from app.core.security import SecurityCtx
 from app.ports.outbound.retrieval import answer_cache
 
@@ -294,6 +295,10 @@ def build_graph(
     llm_client = deps.llm or (deps.llm_factory or make_llm)(domain_tools)
     model_alias = deps.model_alias or CHAT_MODEL
 
+    # What the model is sent, and what the leak check compares an answer against: the domain's prompt plus the platform's rules. Composed
+    # here, the one builder, so a domain or a subagent cannot be built without them (pattern 114).
+    system_prompt = compose_system_prompt(manifest.system_prompt)
+
     # Plain module-level functions bound to THIS domain with functools.partial, not factories:
     # they stay directly callable from tests with just `state` (and the domain's values), and
     # each is checked against the capability mapping / tool set / prompt the graph was ACTUALLY
@@ -308,7 +313,7 @@ def build_graph(
     )
     graph_node_check_output_bound = functools.partial(
         graph_node_check_output,
-        system_prompt=manifest.system_prompt,
+        system_prompt=system_prompt,
         enforce_citations=profile.enforce_citations,
         skill_required_tools=skill_required_tools,
         tool_names=valid_tool_names,
@@ -325,7 +330,7 @@ def build_graph(
         citation_reminder=profile.enforce_citations,
         skill_required_tools=skill_required_tools,
         cannot_open_links=cannot_open_links(valid_tool_names),
-        system_prompt=manifest.system_prompt,
+        system_prompt=system_prompt,
         hold_context_gap=CONTEXT_GAP_REASK_ENABLED,
     )
     graph_node_retrieve_context = make_graph_node_retrieve_context(deps.search_docs or default_search)
@@ -373,7 +378,7 @@ def build_graph(
         "no_answer",
         make_graph_node_no_answer(
             emit_message=emit_no_answer_message,
-            system_prompt=manifest.system_prompt,
+            system_prompt=system_prompt,
             enforce_citations=profile.enforce_citations,
             skill_required_tools=skill_required_tools,
             tool_names=valid_tool_names,

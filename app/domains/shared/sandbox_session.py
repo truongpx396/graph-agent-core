@@ -46,6 +46,7 @@ from app.core.config import (
 )
 from app.core.output_limits import bound_output
 from app.core.scrubbing import scrub
+from app.core.untrusted import frame_untrusted
 from app.ports.outbound.sandbox import (
     REMOTE_ERROR_PREFIX,
     SANDBOX_DEPENDENCY,
@@ -212,7 +213,8 @@ async def run_command_in_sandbox_impl(command: str, thread_id: str, raw: dict[st
     execution = await _call_raw_tool(
         raw, "command_run", sandbox_id=sandbox_id, command=command, connect_if_missing=True
     )
-    return _format_execution(execution)
+    # A script prints what it was given (a pasted log, a crawled page), so its output is outside text too.
+    return frame_untrusted(_format_execution(execution))
 
 
 # Fixed path, overwritten fresh on every call — no unique name needed.
@@ -267,9 +269,10 @@ async def run_python_in_sandbox_impl(script: str, thread_id: str, raw: dict[str,
     result = _format_execution(execution)
     # A script whose last line is a bare expression prints nothing, and the answer then states a number no script produced. Real bug, found live:
     # `counts['db_timeout']` returned an empty stdout and the model said "appears 2 times" anyway.
-    if execution.get("exit_code") == 0 and result.endswith("stdout: (empty)"):
-        result += "\nThe script printed nothing, so there is no result to report: print() the value and run it again."
-    return result
+    printed_nothing = execution.get("exit_code") == 0 and result.endswith("stdout: (empty)")
+    # The advice is ours, so it goes outside the frame: inside it the model is told not to follow it.
+    advice = "\nThe script printed nothing, so there is no result to report: print() the value and run it again." if printed_nothing else ""
+    return frame_untrusted(result) + advice
 
 
 async def read_sandbox_file_impl(path: str, thread_id: str, raw: dict[str, BaseTool], *, tenant: str) -> str:
@@ -285,7 +288,7 @@ async def read_sandbox_file_impl(path: str, thread_id: str, raw: dict[str, BaseT
     # `make promptfoo` should judge first, not something to fold into a version bump.
     sandbox_id = await get_or_create_sandbox_id(raw, thread_id, tenant=tenant)
     result = await _call_raw_tool(raw, "file_read", sandbox_id=sandbox_id, path=path, connect_if_missing=True)
-    return _bounded(result.get("content", ""))
+    return frame_untrusted(_bounded(result.get("content", "")))
 
 
 async def write_sandbox_file_impl(

@@ -5,8 +5,8 @@ description: Compute real multi-year deal math a plain calculator can't do — e
 
 # Deal Economics
 
-`calculator` only evaluates a single arithmetic expression — it can't hold
-a loop or a multi-year schedule. For anything beyond one flat number, write
+A loop or a multi-year schedule cannot be done reliably in your head. For
+anything beyond one flat number, write
 a short script and run it with `run_python_in_sandbox` — pass the script
 text directly as the `script` argument, not as a shell command.
 
