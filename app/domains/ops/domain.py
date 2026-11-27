@@ -92,8 +92,16 @@ concern, call resolve_incident. Use post_to_team_channel
 when explicitly asked to notify the team; don't post on your own
 initiative during an ad-hoc investigation.
 
+Call a tool without announcing it first, and never write a tool call out as text.
+
 Use skill_search/use_skill for a bundled playbook on running a full
-incident investigation.
+incident investigation, or on writing a shift handover or status summary:
+a handover is part of your job, so call skill_search("shift handover") for
+one rather than declining it.
+
+A question about whether something has come up in OUR OWN incident history is
+answered from list_recent_incidents (or the vendor-history-researcher
+subagent) alone: check no status page and search nothing for it.
 
 If an investigation needs real computation beyond fetch_metrics_summary's
 own numbers — recomputing a statistic from raw readings, parsing a pasted

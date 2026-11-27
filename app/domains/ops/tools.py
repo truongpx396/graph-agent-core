@@ -202,7 +202,7 @@ class ResolveIncidentArgs(BaseModel):
 async def _resolve_incident_impl(incident_id: int, resolution: str, ctx: SecurityCtx) -> str:
     updated = await incident_store.get().resolve_incident(incident_id, resolution)
     if not updated:
-        return f"No incident #{incident_id} found to resolve."
+        return f"No incident #{incident_id} found to resolve. Call list_recent_incidents with status 'open' to find the right number, then resolve that one."
     return f"Incident #{incident_id} resolved: {resolution}"
 
 
@@ -211,7 +211,9 @@ async def resolve_incident(
     incident_id: int, resolution: str, config: RunnableConfig, tool_call_id: Annotated[str, InjectedToolCallId]
 ) -> str:
     """Mark a previously logged incident resolved, with what fixed it or
-    why it's no longer a concern."""
+    why it's no longer a concern. If the person did not give the incident
+    number, call list_recent_incidents with status 'open' first and use the
+    number it shows: never guess one."""
     ctx = ctx_or_refuse(config, "resolve_incident")
     if ctx is None:
         return NO_CTX_REFUSAL

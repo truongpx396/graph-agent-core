@@ -150,7 +150,8 @@ async def _check_ticket_status_impl(ticket_id: int, ctx: SecurityCtx) -> str:
 
 @tool(args_schema=CheckTicketStatusArgs)
 async def check_ticket_status(ticket_id: int, config: RunnableConfig) -> str:
-    """Look up an existing support ticket's current status by its number."""
+    """Look up an existing support ticket's current status by its number. If the customer did not give the number, call list_my_tickets first and use
+    the number it shows: never guess one or pass null."""
     ctx = ctx_or_refuse(config, "check_ticket_status")
     if ctx is None:
         return NO_CTX_REFUSAL
@@ -173,7 +174,7 @@ class EscalateToHumanArgs(BaseModel):
 async def _escalate_to_human_impl(ticket_id: int, reason: str, ctx: SecurityCtx) -> str:
     updated = await ticket_store.get().escalate_ticket(ctx["tenant"], ticket_id, reason)
     if not updated:
-        return f"No ticket #{ticket_id} found to escalate."
+        return f"No ticket #{ticket_id} found to escalate. Use the number create_ticket returned (list_my_tickets shows it), then escalate that one."
     await team_channel.get().post(
         "support-escalations",
         f"[{ctx['tenant']}] Ticket #{ticket_id} escalated by {ctx['principal']}: {reason}",
