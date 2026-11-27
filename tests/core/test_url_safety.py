@@ -21,6 +21,7 @@ from app.core.url_safety import (
     UnsafeURLError,
     assert_safe_url,
     assert_safe_url_async,
+    linkable_url,
     resolve_checked_async,
 )
 
@@ -244,3 +245,31 @@ async def test_an_unresolvable_or_non_https_host_has_no_addresses_to_return(monk
         await resolve_checked_async("https://nowhere.invalid/a")
     with pytest.raises(UnsafeURLError):
         await resolve_checked_async("http://example.com/a")
+
+
+@pytest.mark.parametrize("url", ["https://qdrant.tech/documentation/manage-data/payload/", "http://wiki.corp/page?id=7#part", "https://[2001:db8::1]/x"])
+def test_a_plain_web_address_is_linkable(url):
+    assert linkable_url(url) == url
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "javascript:alert(1)",
+        "data:text/html,<script>",
+        "file:///etc/passwd",
+        "ftp://example.com/x",
+        "/relative/path",
+        "https://",
+        "https://user:secret@example.com/doc",
+        "https://example.com/a b",
+        "https://example.com/\nSources:",
+        "https://[broken",
+        "https://example.com/" + "x" * 3000,
+        None,
+        42,
+    ],
+)
+def test_anything_else_is_not(value):
+    """A citation's address comes from whatever wrote the point, and it is shown to a person as a link."""
+    assert linkable_url(value) is None

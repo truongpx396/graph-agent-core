@@ -26,6 +26,8 @@ DEFAULT_PARENT_CHARS = 1200
 # instruction from its system prompt (pattern 20).
 DEFAULT_CHILD_CHARS = 600
 DEFAULT_CHILD_OVERLAP = 150
+# Stamped on every ingested chunk. Change the splitting rules (not only these sizes) and bump the leading number.
+CHUNKING_VERSION = f"1:parent={DEFAULT_PARENT_CHARS},child={DEFAULT_CHILD_CHARS},overlap={DEFAULT_CHILD_OVERLAP}"
 
 
 @dataclass

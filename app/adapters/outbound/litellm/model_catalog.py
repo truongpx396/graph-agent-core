@@ -12,6 +12,11 @@ Naming only aliases keeps the app portable (swapping providers is a config chang
 on output quality, a gateway remap, change with no recorded artifact. Resolving it here keeps model choice
 invisible to routing but visible to forensics (the usage events, `app/agent/cost/usage_events.py`).
 
+An answer is trusted for `MODEL_RESOLVE_TTL_SECONDS`, then asked for again. It used to be kept for the process life, so re-pointing the
+`embed` alias at the gateway (a restart of LiteLLM alone) left every app process believing the old model: the embedding identity never
+changed, and the new model's query vectors were searched against the old model's vectors (pattern 67). A refresh that fails keeps the last
+answer, so a flapping proxy does not flip the identity.
+
 Async, with a short negative cache. The first version was a synchronous `httpx.get` on the event loop at the
 end of every completed turn: a slow LiteLLM froze every other turn, stream and health check on that worker for
 the length of the lookup (measured: a 0.5 s answer stalled a concurrent heartbeat for 0.56 s), and while
@@ -27,12 +32,12 @@ from typing import Any, cast
 import httpx
 
 from app.core import metrics
-from app.core.config import OPENAI_API_BASE, OPENAI_API_KEY
+from app.core.config import MODEL_RESOLVE_TTL_SECONDS, OPENAI_API_BASE, OPENAI_API_KEY
 from app.ports.outbound.models import FAILED_LOOKUP_RETRY_SECONDS
 
 logger = logging.getLogger(__name__)
 
-_cache: dict[str, str] = {}
+_cache: dict[str, tuple[float, str]] = {}  # alias -> (when it was answered, the model)
 
 _failed_at: dict[str, float] = {}
 
@@ -45,16 +50,19 @@ def admin_base_url() -> str:
 
 
 async def resolve_model(alias: str) -> str | None:
-    """Best-effort, cached-per-process lookup. Returns `None` on any
-    failure (LiteLLM unreachable, alias not found, bad response shape) —
-    observability only, never something that blocks or fails a turn. A failure
-    is remembered for `FAILED_LOOKUP_RETRY_SECONDS` so a down proxy is asked
-    about once per interval, not once per turn."""
-    if alias in _cache:
-        return _cache[alias]
+    """Best-effort lookup, cached for `MODEL_RESOLVE_TTL_SECONDS`. Never blocks
+    or fails a turn: a failure (LiteLLM unreachable, alias not found, bad
+    response shape) returns the last known answer, or `None` if there never
+    was one. A failure is remembered for `FAILED_LOOKUP_RETRY_SECONDS` so a
+    down proxy is asked about once per interval, not once per turn."""
+    now = time.monotonic()
+    cached = _cache.get(alias)
+    last_known = cached[1] if cached is not None else None
+    if cached is not None and now - cached[0] < MODEL_RESOLVE_TTL_SECONDS:
+        return last_known
     failed_at = _failed_at.get(alias)
-    if failed_at is not None and time.monotonic() - failed_at < FAILED_LOOKUP_RETRY_SECONDS:
-        return None
+    if failed_at is not None and now - failed_at < FAILED_LOOKUP_RETRY_SECONDS:
+        return last_known
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             response = await client.get(
@@ -66,19 +74,19 @@ async def resolve_model(alias: str) -> str | None:
             if entry.get("model_name") == alias:
                 resolved = entry.get("litellm_params", {}).get("model")
                 if isinstance(resolved, str) and resolved:
-                    _cache[alias] = resolved
+                    _cache[alias] = (time.monotonic(), resolved)
                     _failed_at.pop(alias, None)
                     return resolved
         _failed_at[alias] = time.monotonic()
-        return None
+        return last_known
     except Exception as exc:  # noqa: BLE001 - observability only, never fails a turn; counted instead
         _failed_at[alias] = time.monotonic()
         metrics.agent_cost_governance_degraded_total.labels(path="model_resolve").inc()
         logger.warning(
-            "model resolution failed; continuing without it",
+            "model resolution failed; continuing with the last known model, if any",
             extra={"alias": alias, "error_class": type(exc).__name__},
         )
-        return None
+        return last_known
 
 
 async def model_info() -> list[Mapping[str, Any]]:

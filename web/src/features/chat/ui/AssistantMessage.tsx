@@ -1,5 +1,6 @@
 // The class names `msg`, `status`, `tool-activity-line`, `draft-text`, `answer-text`, `approval`, `approval-question`, `citations` and
 // `citation-item` are what the browser tests find things by (tests/live/): style with the utilities beside them, keep the names.
+import type { Citation } from "@/shared/api";
 import { button, chip, cx } from "@/shared/lib/classes";
 import type { AssistantEntry } from "../model/entry";
 import { Markdown } from "./Markdown";
@@ -15,6 +16,17 @@ function Choices({ options, onPick, className }: { options: string[]; onPick: (o
         </button>
       ))}
     </div>
+  );
+}
+
+/** A source's title, linked to the original document when there is one. The server only sends http(s); checked again because an `href` runs. */
+function SourceName({ citation }: { citation: Citation }) {
+  const url = citation.source_url;
+  if (!url || !/^https?:\/\//i.test(url)) return <span>{citation.title}</span>;
+  return (
+    <a href={url} target="_blank" rel="noopener noreferrer" title={url} className="underline underline-offset-2">
+      {citation.title}
+    </a>
   );
 }
 
@@ -72,7 +84,7 @@ export function AssistantMessage({ entry, onAsk, onDecide }: Props) {
           {citations.map((citation) => (
             <div key={`${citation.marker}${citation.doc_id}`} className="citation-item flex gap-1.5">
               <span className="shrink-0 opacity-70">{citation.marker}</span>
-              <span>{citation.title}</span>
+              <SourceName citation={citation} />
             </div>
           ))}
         </div>

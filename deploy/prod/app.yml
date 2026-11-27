@@ -25,7 +25,12 @@ x-app-env: &app-env
   # `python -m scripts.tools.litellm_key create` (deploy/README.md). The master-key fallback only keeps an existing deployment running until you do.
   OPENAI_API_KEY: ${LITELLM_APP_KEY:-${LITELLM_MASTER_KEY}}
   CHAT_MODEL: chat
-  EMBED_MODEL: embed
+  # The embedding identity (pattern 67). The alias was a literal and the other three were never passed, so a prefix or a revision set in `.env`
+  # changed nothing. Switching models: deploy/README.md, "Changing the embedding model".
+  EMBED_MODEL: ${EMBED_MODEL:-embed}
+  EMBED_QUERY_PREFIX: ${EMBED_QUERY_PREFIX:-}
+  EMBED_DOCUMENT_PREFIX: ${EMBED_DOCUMENT_PREFIX:-}
+  EMBED_MODEL_REVISION: ${EMBED_MODEL_REVISION:-}
   QDRANT_URL: http://qdrant:6333
   ML_SERVICE_URL: http://ml-service:80
   # Through PgBouncer, not Postgres: Postgres sees the pooler's pool size however many `--scale agent-worker=N` replicas run. LiteLLM connects directly (specs/022).

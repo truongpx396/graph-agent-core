@@ -6,8 +6,9 @@ Just `app/ingestion/ingestor.py::ingest_text` called once per sample doc —
 the same general-purpose pipeline (chunking, hybrid dense+sparse
 embedding, `qdrant_store.build_point`) any file/URL/pasted-text ingest
 goes through (GRAPH_PATTERNS.md pattern 24), not a separate write path.
-Each sample doc is short enough to become one parent chunk with one child
-— chunking is a no-op here, not a special case.
+The documentation entries split into several parents with several children
+each, so what a point holds looks like a real ingested document (see
+`sample_docs.py`).
 """
 import asyncio
 
@@ -42,6 +43,7 @@ async def main() -> None:
                 ctx=_INGEST_CTX,
                 source="sample_docs",
                 topic=doc["topic"],
+                source_url=doc.get("url"),
             )
     except Exception as exc:
         raise SystemExit(

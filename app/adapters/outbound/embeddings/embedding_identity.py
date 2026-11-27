@@ -12,11 +12,11 @@ cache's index name, so any process can read what a collection holds with no seco
 compares it with the configured identity on every read and write.
 
 "Resolved model" comes from LiteLLM's /model/info (app/adapters/outbound/litellm/model_catalog.py). Where that answers nothing
-(OPENAI_API_BASE straight at an OpenAI-compatible server, as in the live test tier, or LiteLLM briefly down)
+(OPENAI_API_BASE straight at an OpenAI-compatible server, as in the live test tier, or LiteLLM down since this process started)
 the identity falls back to the ALIAS NAME. That is weaker (re-pointing the alias at another model of the same
 size goes unnoticed, which `EMBED_MODEL_REVISION` is for) but stable per deployment, and counted as
-`unverified`; refusing would break such deployments. The resolver caches a success for the process life, so a
-flapping proxy doesn't flip the hash.
+`unverified`; refusing would break such deployments. The resolver asks again every `MODEL_RESOLVE_TTL_SECONDS`, so a
+re-pointed alias is noticed without a restart, and keeps its last answer when it cannot, so a flapping proxy doesn't flip the hash.
 """
 import hashlib
 import json
@@ -91,12 +91,23 @@ class EmbeddingIdentityMismatchError(Exception):
         )
 
 
+# The model the last identity was made with: the probed dimension and the remembered query vectors belong to it.
+_last_model: str | None = None
+
+
 async def current_identity() -> EmbeddingIdentity:
-    """The identity this process is configured for. Cheap after the first call: the resolver caches a success for the process life and
-    the dimension is probed once."""
+    """The identity this process is configured for. Cheap on all but the first call: the resolver caches its answer and the dimension is
+    probed once per model."""
+    global _last_model
+    resolved = await ports.model_catalog.get().resolve(EMBED_MODEL)
+    if resolved is not None:
+        if _last_model is not None and resolved != _last_model:
+            embeddings.reset_embedding_dim_cache()
+            embeddings.reset_embed_query_cache()
+        _last_model = resolved
     return EmbeddingIdentity(
         alias=EMBED_MODEL,
-        resolved_model=await ports.model_catalog.get().resolve(EMBED_MODEL),
+        resolved_model=resolved,
         dim=await embeddings.embedding_dim(),
         query_prefix=EMBED_QUERY_PREFIX,
         document_prefix=EMBED_DOCUMENT_PREFIX,

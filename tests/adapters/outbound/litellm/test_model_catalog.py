@@ -165,6 +165,44 @@ class TestAFailedLookupIsNotRepeatedOnEveryCall:
         assert await model_catalog.resolve_model("chat") == "ollama_chat/qwen2.5:3b"
 
 
+class TestAnAnswerIsNotKeptForever:
+    @staticmethod
+    def _gateway(monkeypatch):
+        gateway = {"model": "ollama/nomic-embed-text", "up": True, "t": 1_000.0}
+
+        def answer(_request):
+            if not gateway["up"]:
+                raise httpx.ConnectError("LiteLLM unreachable")
+            return httpx.Response(200, json={"data": [{"model_name": "embed", "litellm_params": {"model": gateway["model"]}}]})
+
+        gateway["seen"] = _serve(monkeypatch, answer)
+        monkeypatch.setattr(model_catalog.time, "monotonic", lambda: gateway["t"])
+        monkeypatch.setattr(model_catalog, "MODEL_RESOLVE_TTL_SECONDS", 60.0)
+        return gateway
+
+    async def test_a_re_pointed_alias_is_seen_once_the_answer_expires(self, monkeypatch):
+        gateway = self._gateway(monkeypatch)
+        assert await model_catalog.resolve_model("embed") == "ollama/nomic-embed-text"
+
+        gateway["model"] = "openai/another"
+        gateway["t"] += 59
+        assert await model_catalog.resolve_model("embed") == "ollama/nomic-embed-text"
+        assert len(gateway["seen"]) == 1
+
+        gateway["t"] += 2
+        assert await model_catalog.resolve_model("embed") == "openai/another"
+
+    async def test_a_refresh_that_fails_keeps_the_last_answer_and_asks_once_per_window(self, monkeypatch):
+        gateway = self._gateway(monkeypatch)
+        await model_catalog.resolve_model("embed")
+
+        gateway["up"] = False
+        gateway["t"] += 61
+        assert await model_catalog.resolve_model("embed") == "ollama/nomic-embed-text"
+        assert await model_catalog.resolve_model("embed") == "ollama/nomic-embed-text"
+        assert len(gateway["seen"]) == 2, "one failed refresh, then silence until the retry window passes"
+
+
 class _SlowModelInfo(BaseHTTPRequestHandler):
     delay_seconds = 0.5
 

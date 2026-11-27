@@ -77,6 +77,7 @@ async def test_every_point_is_copied_with_its_id_payload_and_sparse_vector_and_a
 
     target = world.collections[f"docs-{H}"]["points"]
     source = world.collections[old]["points"]
+    assert await qdrant_store.recorded_identity(f"docs-{H}") == TEST_EMBEDDING_IDENTITY.describe()
     assert report.swapped and report.copied == 5 and set(target) == set(source)
     for pid, point in target.items():
         assert point.payload == source[pid].payload  # byte-for-byte: the tenant and owner scoping fields included (Principle I)

@@ -118,6 +118,8 @@ async def close_client() -> None:
 
 
 LIVE_SUFFIX = "-live"
+# The collection-metadata key (Qdrant 1.16+) holding `EmbeddingIdentity.describe()`.
+IDENTITY_METADATA_KEY = "embedding"
 _HASH = re.compile(rf"^[0-9a-f]{{{HASH_LENGTH}}}$")
 
 
@@ -266,14 +268,31 @@ def _collection_config() -> dict[str, Any]:
     }
 
 
-async def create_physical(physical: str, dim: int) -> None:
+async def create_physical(physical: str, dim: int, identity: dict[str, Any] | None = None) -> None:
     """(Re)create one PHYSICAL collection with a named dense vector (cosine) and a named sparse vector (BM25), and the payload indexes
     every search filters by (`ensure_payload_indexes`). Destructive for a collection of that exact name, which is by construction one of the
-    same embedding identity."""
+    same embedding identity.
+
+    `identity` is `EmbeddingIdentity.describe()`, kept as the collection's metadata: the name's 8 hex digits say whether two collections
+    match, never WHICH model either one holds. Nothing decides by it (the name is what `check_identity` compares); it is for a person."""
     config = _collection_config()
     config["vectors_config"] = {DENSE_VECTOR_NAME: VectorParams(size=dim, distance=Distance.COSINE)}
+    if identity is not None:
+        config["metadata"] = {IDENTITY_METADATA_KEY: identity}
     await get_client().recreate_collection(collection_name=physical, **config)
     await ensure_payload_indexes(physical)
+
+
+async def recorded_identity(physical: str) -> dict[str, Any] | None:
+    """What a physical collection says its vectors were made with, or None (built before this was recorded)."""
+    config = (await get_client().get_collection(physical)).config
+    found = (config.metadata or {}).get(IDENTITY_METADATA_KEY)
+    return found if isinstance(found, dict) else None
+
+
+async def record_identity(physical: str, identity: dict[str, Any]) -> None:
+    """Writes the metadata onto a collection that has none. The caller must have PROVED the identity is the one in the collection's name."""
+    await get_client().update_collection(physical, metadata={IDENTITY_METADATA_KEY: identity})
 
 
 async def ensure_payload_indexes(physical: str) -> None:
@@ -310,8 +329,9 @@ async def ensure_collection(dim: int, collection: str | None = None) -> None:
     `collection` defaults to the main `COLLECTION` (docs) — pass e.g. `SKILLS_COLLECTION` to (re)create a SEPARATE collection with the
     same dense+sparse schema, as `scripts/tools/index_skills.py` does."""
     logical = collection or COLLECTION
-    physical = physical_name(logical, (await current_identity()).hash8())
-    await create_physical(physical, dim)
+    identity = await current_identity()
+    physical = physical_name(logical, identity.hash8())
+    await create_physical(physical, dim, identity.describe())
     await repoint_live(logical, physical)
 
 

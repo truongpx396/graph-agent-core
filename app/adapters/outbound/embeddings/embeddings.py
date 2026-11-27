@@ -63,7 +63,8 @@ embeddings = OpenAIEmbeddings(
 # So `embed_query` remembers what it embedded, briefly, and two concurrent calls for the same text share one request.
 #
 # Keyed by the exact text sent (the prefix included), so a different role or prefix is a different entry. The cached vector is only as valid as the
-# embedding identity (model, dimension, prefixes, revision), which changes only with configuration and so with a restart: no identity in the key. Bounded:
+# embedding identity (model, dimension, prefixes, revision): no identity in the key. The app's own settings change only with a restart, and a model
+# changed at the gateway clears this cache (embedding_identity.current_identity). Bounded:
 # 512 entries and 300 seconds (a vector is about 25 KB at 768 dimensions, so about 12 MB at the limit; a question repeated within a turn needs seconds).
 _QUERY_CACHE_MAX_ENTRIES = 512
 _QUERY_CACHE_TTL_SECONDS = 300.0
@@ -75,7 +76,7 @@ _in_flight: dict[tuple[int, str], "asyncio.Future[list[float] | None]"] = {}
 
 
 def reset_embed_query_cache() -> None:
-    """For tests (it is reset beside `reset_embedding_dim_cache`) and for a process that has just been told the model moved; production restarts instead."""
+    """For tests (it is reset beside `reset_embedding_dim_cache`) and for `current_identity` when it sees the model behind the alias has changed."""
     _query_cache.clear()
     _in_flight.clear()
 
@@ -147,7 +148,7 @@ async def embedding_dim() -> int:
 
 
 def reset_embedding_dim_cache() -> None:
-    """For tests and for a process that has just been told the alias moved; production restarts instead."""
+    """For tests and for `current_identity` when it sees the model behind the alias has changed."""
     global _embedding_dim
     _embedding_dim = None
 
