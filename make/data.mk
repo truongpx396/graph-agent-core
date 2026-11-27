@@ -16,6 +16,9 @@ ingest:  ## Embed sample docs and upsert them into Qdrant
 index-skills:  ## Embed the skills catalog (name+description) and upsert into its own Qdrant collection
 	python -m scripts.tools.index_skills
 
+vector-collections:  ## Which embedding model each vector collection holds, and which one is live [ARGS=--record]
+	python -m scripts.tools.vector_collections $(ARGS)
+
 qdrant-indexes:  ## Create the payload indexes on collections made before they existed (once per deployment, online): [COLLECTION_NAME=docs]
 	python -m scripts.tools.qdrant_indexes $(COLLECTION_NAME)
 

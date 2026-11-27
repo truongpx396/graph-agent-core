@@ -11,6 +11,7 @@ pause/resume cycle just to reach the implementation).
 """
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
@@ -43,7 +44,7 @@ from app.agent.tools.run_subagent_domain import make_domain_subagent_tool
 from app.agent.tools.skill_catalog import SkillRecord
 from app.agent.tools.subagent_catalog import SubagentRecord
 from app.core import metrics, tool_runtime
-from app.core.config import SKILLS_COLLECTION
+from app.core.config import RERANK_TOP_K, SKILLS_COLLECTION
 from app.domains.ecorp import store as ecorp_store
 from app.domains.ecorp import usecases as ecorp_usecases
 from app.domains.ecorp.tools import (
@@ -54,6 +55,7 @@ from app.domains.ecorp.tools import (
     remember,
 )
 from app.platform import sql_store
+from app.ports.outbound.retrieval import SearchHit
 from tests.conftest import TEST_CTX, metric_value
 from tests.ecorp import (
     ECORP_DOMAIN_PLUGIN,
@@ -473,6 +475,44 @@ class TestMemoryRecallIsScopedToTheOwner:
 
         owners = [scope.owner for scope in self._memory_scopes(seen_filters)]
         assert len(owners) == 2 and owners[0] != owners[1]
+
+
+class TestCitationRecords:
+    @staticmethod
+    def _hit(i, **payload):
+        return SearchHit(id=str(i), score=1.0, payload={"text": f"child {i}", "title": "Qdrant: Payload", **payload})
+
+    def test_a_citation_links_to_the_original_document_when_the_chunk_names_one(self):
+        (linked, plain, hostile) = tools._citation_records(
+            [self._hit(1, source_url="https://example.com/doc"), self._hit(2), self._hit(3, source_url="javascript:alert(1)")]
+        )
+
+        assert linked["source_url"] == "https://example.com/doc"
+        assert "source_url" not in plain and "source_url" not in hostile
+
+    def test_the_link_is_never_in_what_the_model_reads(self):
+        assert "example.com" not in tools._format_cited_context([self._hit(1, source_url="https://example.com/doc")])
+
+
+class TestSiblingChunksDoNotCrowdOutOtherPassages:
+    """The search was cut to `RERANK_TOP_K` BEFORE siblings were removed, so a long passage's overlapping children could fill every place
+    and leave the model one passage to answer from."""
+
+    async def test_five_passages_come_back_although_one_passage_holds_the_five_best_chunks(self, monkeypatch):
+        ranked = [("p0", n) for n in range(5)] + [(f"p{i}", 0) for i in range(1, 8)]
+
+        async def fake_hybrid_search(query_text, topic=None, k=None, scope=None, rerank_results=True, doc_ids=None, min_score=None):
+            points = [
+                SimpleNamespace(id=f"{parent}-{n}", score=1.0, payload={"text": f"{parent} child {n}", "parent_id": parent, "parent_text": parent})
+                for parent, n in ranked
+            ]
+            return points[: k or RERANK_TOP_K]
+
+        monkeypatch.setattr(qdrant_store, "hybrid_search", fake_hybrid_search)
+
+        hits = await tools._document_hits(TEST_CTX, "q")
+
+        assert [h.payload["parent_id"] for h in hits] == ["p0", "p1", "p2", "p3", "p4"]
 
 
 class TestQueryEmployees:

@@ -92,3 +92,29 @@ async def test_the_current_identity_is_assembled_from_the_alias_the_probe_and_th
 @pytest.mark.parametrize("bad", [None])
 def test_an_identity_with_no_resolved_model_still_hashes(bad):
     assert len(_identity(resolved_model=bad).hash8()) == 8
+
+
+async def test_a_changed_model_forgets_the_dimension_and_query_vectors_measured_with_the_old_one(monkeypatch):
+    answers = iter(["model/a", "model/a", None, "model/b"])
+    forgotten: list[str] = []
+
+    class Catalog:
+        async def resolve(self, alias):
+            return next(answers)
+
+    async def dim():
+        return 3
+
+    monkeypatch.setattr(ident, "_last_model", None)
+    monkeypatch.setattr(ident.embeddings, "embedding_dim", dim)
+    monkeypatch.setattr(ident.embeddings, "reset_embedding_dim_cache", lambda: forgotten.append("dim"))
+    monkeypatch.setattr(ident.embeddings, "reset_embed_query_cache", lambda: forgotten.append("queries"))
+
+    with model_ports.model_catalog.overriding(Catalog()):  # type: ignore[arg-type] - only `resolve` is asked of it here
+        await real_current_identity()
+        await real_current_identity()  # same model
+        await real_current_identity()  # not answered: not evidence of a change
+        assert forgotten == []
+        await real_current_identity()
+
+    assert forgotten == ["dim", "queries"]

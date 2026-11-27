@@ -7,6 +7,7 @@ the same claims are proved against a real Qdrant in tests/integration/test_embed
 """
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from qdrant_client.models import Filter, PointStruct
 
@@ -15,7 +16,12 @@ from app.adapters.outbound.embeddings.embedding_identity import (
     EmbeddingIdentity,
     EmbeddingIdentityMismatchError,
 )
+from app.adapters.outbound.embeddings.embedding_identity import (
+    current_identity as real_current_identity,  # captured before the autouse fixture replaces it
+)
+from app.adapters.outbound.litellm import model_catalog
 from app.adapters.outbound.qdrant import qdrant_store
+from app.ports.outbound import models as model_ports
 from tests.adapters.outbound.qdrant.fake_qdrant import FakeQdrant, NotFoundError
 from tests.conftest import TEST_EMBEDDING_IDENTITY
 
@@ -284,3 +290,51 @@ async def test_the_process_that_repoints_the_alias_sees_it_at_once(world):
 
     with pytest.raises(EmbeddingIdentityMismatchError):  # no waiting for the TTL: repointing clears this process's cache
         await qdrant_store.hybrid_search("hello")
+
+
+# ---- what a person can read off a collection ---------------------------------------------------------------------------------
+async def test_a_new_collection_says_which_model_filled_it(world):
+    await qdrant_store.ensure_collection(dim=3)
+
+    recorded = await qdrant_store.recorded_identity(qdrant_store.physical_name("docs", H))
+
+    assert recorded == TEST_EMBEDDING_IDENTITY.describe()
+
+
+async def test_a_collection_built_before_this_was_recorded_says_nothing(world):
+    physical = _live_collection(world, H)
+
+    assert await qdrant_store.recorded_identity(physical) is None
+
+
+# ---- a model re-pointed at the gateway, with the app left running --------------------------------------------------------------
+async def test_re_pointing_the_embed_alias_is_noticed_without_a_restart(world, monkeypatch):
+    """The resolver used to keep its first answer for the process life, so after LiteLLM alone was restarted with another model behind `embed`
+    the identity never changed: the new model's query vectors were searched against the old model's, with no error anywhere."""
+    monkeypatch.setattr(qdrant_store, "current_identity", real_current_identity)
+    monkeypatch.setattr(model_catalog, "MODEL_RESOLVE_TTL_SECONDS", 60.0)
+    behind_the_alias = {"model": "ollama/nomic-embed-text"}
+    now = {"t": 1_000.0}
+    real_client = httpx.AsyncClient
+
+    def gateway(_request):
+        return httpx.Response(200, json={"data": [{"model_name": "embed", "litellm_params": {"model": behind_the_alias["model"]}}]})
+
+    async def dim():
+        return 3
+
+    monkeypatch.setattr(model_catalog.httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(gateway), **kw))
+    monkeypatch.setattr(model_catalog.time, "monotonic", lambda: now["t"])
+    monkeypatch.setattr(embeddings, "embedding_dim", dim)
+    monkeypatch.setattr(model_catalog, "_cache", {})
+    monkeypatch.setattr(model_catalog, "_failed_at", {})
+    with model_ports.model_catalog.overriding(model_catalog.LiteLLMModelCatalog()):
+        await qdrant_store.ensure_collection(dim=3)
+        await qdrant_store.hybrid_search("q", rerank_results=False)  # the model that filled it: served
+
+        behind_the_alias["model"] = "openai/text-embedding-3-small"  # same dimension, another space
+        now["t"] += 61
+        qdrant_store.reset_identity_cache()
+
+        with pytest.raises(EmbeddingIdentityMismatchError):
+            await qdrant_store.hybrid_search("q", rerank_results=False)

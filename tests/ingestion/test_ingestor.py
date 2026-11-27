@@ -20,7 +20,7 @@ import pytest
 
 from app.adapters.outbound.embeddings import embeddings
 from app.adapters.outbound.qdrant import qdrant_store
-from app.ingestion import ingestor
+from app.ingestion import chunking, ingestor
 from app.ports.outbound.web import FetchedPage, PageFetchFailedError, page_fetcher
 from tests.conftest import TEST_CTX, metric_value
 
@@ -200,6 +200,30 @@ class TestIngestText:
         assert len(sparse_calls[0]) == count
 
 
+class TestWhatACitationNeeds:
+    async def test_every_chunk_says_where_to_read_the_original_and_how_it_was_cut(self, monkeypatch):
+        _mock_embeddings(monkeypatch)
+        captured = {}
+        _mock_upsert(monkeypatch, captured)
+
+        await ingestor.ingest_text("A passage. " * 200, title="T", ctx=TEST_CTX, source="sample_docs", source_url="https://example.com/doc")
+
+        assert len(captured["points"]) > 1
+        for point in captured["points"]:
+            assert point.payload["source_url"] == "https://example.com/doc"
+            assert point.payload["chunking"] == chunking.CHUNKING_VERSION
+
+    @pytest.mark.parametrize("url", [None, "javascript:alert(1)", "https://user:pw@example.com/doc"])
+    async def test_an_address_nobody_should_click_is_not_stored(self, monkeypatch, url):
+        _mock_embeddings(monkeypatch)
+        captured = {}
+        _mock_upsert(monkeypatch, captured)
+
+        await ingestor.ingest_text("A passage.", title="T", ctx=TEST_CTX, source_url=url)
+
+        assert "source_url" not in captured["points"][0].payload
+
+
 class TestIngestFile:
     async def test_refuses_unsupported_file_types(self, tmp_path):
         p = tmp_path / "doc.pdf"
@@ -359,11 +383,12 @@ class TestIngestUrl:
         html = "<html><body><script>evil()</script><p>Real content here.</p></body></html>"
         captured = {}
 
-        async def fake_ingest_text(text, title, ctx, source="text", topic=None, *, ingest_id=None):
+        async def fake_ingest_text(text, title, ctx, source="text", topic=None, *, ingest_id=None, source_url=None):
             captured["text"] = text
             captured["title"] = title
             captured["source"] = source
             captured["ingest_id"] = ingest_id
+            captured["source_url"] = source_url
             return 1
 
         monkeypatch.setattr(ingestor, "ingest_text", fake_ingest_text)
@@ -375,6 +400,33 @@ class TestIngestUrl:
         assert "evil()" not in captured["text"]
         assert captured["source"] == "url:https://example.com/page"
         assert captured["ingest_id"], "a page is one document: fetching it again replaces the earlier copy (R18)"
+        assert captured["source_url"] == "https://example.com/page"
+        assert captured["title"] == "https://example.com/page", "a page with no title of its own is cited by its address"
+
+    async def test_a_page_is_cited_by_its_own_title(self, monkeypatch):
+        monkeypatch.setattr(ingestor, "_assert_safe_url", _allow_any_url)
+        html = (
+            "<html><head><title>\n  Payload &amp; filtering\n</title></head>"
+            "<body><svg><title>icon</title></svg><p>Real content here.</p></body></html>"
+        )
+        captured = {}
+
+        async def fake_ingest_text(text, title, ctx, source="text", topic=None, *, ingest_id=None, source_url=None):
+            captured["title"] = title
+            return 1
+
+        monkeypatch.setattr(ingestor, "ingest_text", fake_ingest_text)
+
+        with page_fetcher.overriding(_Fetcher(FetchedPage(200, "text/html", html, len(html)))):
+            await ingestor.ingest_url("https://example.com/page", ctx=TEST_CTX)
+
+        assert captured["title"] == "Payload & filtering"
+
+    def test_an_icons_title_is_not_the_pages_title(self):
+        extractor = ingestor._TextExtractor()
+        extractor.feed("<body><svg><title>close icon</title></svg><p>Text.</p></body>")
+
+        assert extractor.title() == ""
 
     async def test_refuses_when_response_exceeds_size_limit(self, monkeypatch):
         monkeypatch.setattr(ingestor, "_assert_safe_url", _allow_any_url)

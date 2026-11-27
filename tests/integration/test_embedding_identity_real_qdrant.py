@@ -89,6 +89,23 @@ async def _stub_query_legs(monkeypatch):
     monkeypatch.setattr(embeddings, "embed_sparse", lambda _t: ([1, 100], [0.5, 0.25]))
 
 
+# ---- what a person can read off a collection ---------------------------------------------------------------------------------
+async def test_a_collection_keeps_its_embedding_identity_as_metadata(qdrant, logical, monkeypatch):
+    """`create_collection(metadata=...)` needs a Qdrant of 1.16 or later; the fake accepts anything, so the server has to say it."""
+    _use_identity(monkeypatch, OTHER)
+    await qdrant_store.ensure_collection(dim=3, collection=logical)
+    made = qdrant_store.physical_name(logical, OTHER.hash8())
+    before_metadata = f"{logical}-cccccccc"
+    await qdrant_store.create_physical(before_metadata, 3)
+
+    assert await qdrant_store.recorded_identity(made) == OTHER.describe()
+    assert await qdrant_store.recorded_identity(before_metadata) is None
+
+    await qdrant_store.record_identity(before_metadata, THIRD.describe())
+
+    assert await qdrant_store.recorded_identity(before_metadata) == THIRD.describe()
+
+
 # ---- the three research claims -----------------------------------------------------------------------------------------------
 async def test_swapping_the_alias_never_fails_a_search_running_at_the_same_time(qdrant, logical):
     a, b = f"{logical}-aaaaaaaa", f"{logical}-bbbbbbbb"

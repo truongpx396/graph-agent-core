@@ -129,7 +129,7 @@ async def reembed(
 
     # ---- copy -------------------------------------------------------------------------------------------------------------
     if not (resume and await client.collection_exists(target)):
-        await qdrant_store.create_physical(target, identity.dim)
+        await qdrant_store.create_physical(target, identity.dim, identity.describe())
     copied_ids: set[str] = set()
     batch: list[Any] = []
 

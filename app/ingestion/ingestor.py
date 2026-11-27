@@ -24,9 +24,9 @@ from pathlib import Path
 
 from app.core import metrics
 from app.core.security import SecurityCtx, valid_ctx
-from app.core.url_safety import UnsafeURLError
+from app.core.url_safety import UnsafeURLError, linkable_url
 from app.core.url_safety import assert_safe_url_async as _assert_safe_url_impl
-from app.ingestion.chunking import chunk_text
+from app.ingestion.chunking import CHUNKING_VERSION, chunk_text
 from app.ports.outbound.retrieval import (
     EMBED_BATCH_SIZE,
     DocumentPoint,
@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 _ALLOWED_FILE_SUFFIXES = {".txt", ".md"}
 _MAX_URL_BYTES = 2_000_000  # 2 MB — bounded fetch size, part of the SSRF/DoS guard
+_MAX_TITLE_CHARS = 200  # a page's own <title> is untrusted and shows under every answer that cites it
 
 # Fixed, arbitrary namespace for uuid5's content-addressed point ids below —
 # any constant works (uuid5 only needs SOME namespace to combine with the
@@ -127,6 +128,7 @@ async def ingest_text(
     *,
     ingest_id: str | None = None,
     queued_at: float | None = None,
+    source_url: str | None = None,
 ) -> int:
     """Chunk, embed and upsert `text` as one or more Qdrant points: the shared core every `ingest_*` entry point
     funnels through. Returns the number of child chunks written (0 for blank text).
@@ -143,6 +145,9 @@ async def ingest_text(
     `EMBED_BATCH_SIZE` chunks at a time, which gives a per-batch checkpoint for progress (~28 for 5700 chunks
     instead of one all-or-nothing wait). The ~10x wall-clock win (13min -> 75s on a real 5700-chunk doc) comes
     from batching itself (`embed_documents`), not from this splitting.
+
+    `source_url`, if given, is where a person can read the original: a citation of any of these chunks links to it. It is kept only if it is a
+    plain http(s) address (`linkable_url`). `source` stays the document's identity (what a re-upload replaces), whatever the link.
 
     `on_progress(chunks_embedded, chunks_total)`, if given, is awaited after each dense batch (the upload UI's
     progress bar, via `ingest_worker.py`) and never called for 0 chunks. It is a plain `async def`, awaited
@@ -173,6 +178,7 @@ async def ingest_text(
             await on_progress(len(dense_vectors), total)
 
     version = (queued_at if queued_at is not None else time.time()) if ingest_id is not None else None
+    link = linkable_url(source_url)
     points = []
     i = 0
     for parent in parents:
@@ -186,7 +192,12 @@ async def ingest_text(
                 "ingested_by": ctx["principal"],
                 "kind": "document",
                 "tenant": ctx["tenant"],
+                # How the text was cut. A re-embed keeps the chunks as they are, so after a chunking change this is what says which
+                # documents still need ingesting again; it cannot be added afterwards.
+                "chunking": CHUNKING_VERSION,
             }
+            if link:
+                payload["source_url"] = link
             if topic:
                 payload["topic"] = topic
             if ingest_id is not None:
@@ -242,29 +253,47 @@ async def ingest_file(path: str, ctx: SecurityCtx | None, topic: str | None = No
 
 class _TextExtractor(html.parser.HTMLParser):
     """Minimal, dependency-free HTML→text (stdlib only — no BeautifulSoup):
-    collects text nodes, skipping `<script>`/`<style>` content. Not a full
-    HTML-to-Markdown converter — just enough to strip markup before
-    chunking/embedding, which is all ingestion needs."""
+    collects text nodes, skipping `<script>`/`<style>` content, and keeps
+    the page's own `<title>` for its citations. Not a full HTML-to-Markdown
+    converter — just enough to strip markup before chunking/embedding."""
 
     def __init__(self) -> None:
         super().__init__()
         self._skip_depth = 0
         self._chunks: list[str] = []
+        self._title_parts: list[str] = []
+        self._in_title = False
+        self._title_seen = False
+        self._svg_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag in ("script", "style"):
             self._skip_depth += 1
+        elif tag == "svg":
+            self._svg_depth += 1
+        elif tag == "title" and not self._title_seen and not self._svg_depth:  # an inline SVG's <title> names an icon, not the page
+            self._in_title = True
 
     def handle_endtag(self, tag: str) -> None:
         if tag in ("script", "style") and self._skip_depth:
             self._skip_depth -= 1
+        elif tag == "svg" and self._svg_depth:
+            self._svg_depth -= 1
+        elif tag == "title" and self._in_title:
+            self._in_title = False
+            self._title_seen = True
 
     def handle_data(self, data: str) -> None:
+        if self._in_title:
+            self._title_parts.append(data)
         if not self._skip_depth and data.strip():
             self._chunks.append(data.strip())
 
     def text(self) -> str:
         return "\n\n".join(self._chunks)
+
+    def title(self) -> str:
+        return " ".join("".join(self._title_parts).split())[:_MAX_TITLE_CHARS]
 
 
 async def _assert_safe_url(url: str) -> None:
@@ -300,11 +329,13 @@ async def ingest_url(url: str, ctx: SecurityCtx | None, topic: str | None = None
         metrics.agent_ingest_refused_total.labels(reason="too_large").inc()
         raise IngestRefusedError(f"response exceeds the {_MAX_URL_BYTES}-byte fetch limit")
 
+    title = url
     if "html" in page.content_type:
         extractor = _TextExtractor()
         extractor.feed(page.text)
         text = extractor.text()
+        title = extractor.title() or url
     else:
         text = page.text
 
-    return await ingest_text(text, title=url, ctx=ctx, source=f"url:{url}", topic=topic, ingest_id=uuid.uuid4().hex)
+    return await ingest_text(text, title=title, ctx=ctx, source=f"url:{url}", topic=topic, ingest_id=uuid.uuid4().hex, source_url=url)

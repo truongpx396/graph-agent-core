@@ -389,6 +389,32 @@ built before the payload indexes existed has none, so its filtered search slows 
 for the one you already have, run `make qdrant-indexes` once (`ssh` in, then `dc run --rm api python -m scripts.tools.qdrant_indexes`, or from a checkout
 that reaches Qdrant). It is online, safe to repeat, and reads and writes no point.
 
+**Changing the embedding model**: the model, its size, either prefix and `EMBED_MODEL_REVISION` are one identity, and a collection is only read by an app
+configured for the identity it was built under (pattern 67). **Do not point the `embed` alias at another model**: the app notices within a minute and refuses
+retrieval until every collection has been rebuilt. Add a second alias and move to it:
+
+1. Judge the candidate first, on a development machine: `make model-eval KIND=embedding CANDIDATE=<name>` (`evals/README.md`).
+2. Add it to `deploy/prod/litellm-config.yaml` beside `embed` (a `model_name: embed-v2` entry of the same shape), release, restart the proxy
+   (`dc restart litellm`; `up` does not recreate it for an edited file) and let the app's key call it (LiteLLM's `/key/update`; a key lists the
+   aliases it may use).
+3. Stop ingestion (`dc stop ingest-worker`) and pick a quiet hour. Chat still writes memories and notes: a write during the rebuild stops it with exit 4 and
+   nothing swapped, so run it again.
+4. Rebuild beside the live collections, with the new settings given to this one command only, so the running app keeps answering from the old ones. Add a
+   `-e` for each prefix or revision that changes too. Each command swaps its collection when it finishes, and the app refuses that collection until step 5,
+   so go straight on:
+   ```bash
+   dc run --rm -e EMBED_MODEL=embed-v2 api python -m scripts.tools.reembed docs     # the long one
+   dc run --rm -e EMBED_MODEL=embed-v2 api python -m scripts.tools.reembed skills
+   ```
+5. Put the same settings in `.env` (`EMBED_MODEL=embed-v2`) and `dc up -d`, which also starts ingestion again.
+6. Check: `dc run --rm api python -m scripts.tools.vector_collections` shows each live collection `IN USE`, and `/health/ready` lists no identity warning.
+7. After a bake period, delete the collections it shows as `not in use`:
+   `dc run --rm api python -c "import httpx; httpx.delete('http://qdrant:6333/collections/<name>').raise_for_status()"`.
+
+To go back, run steps 3 to 6 with the old settings: it rebuilds from the live collection, so nothing written since is lost, and takes as long as the first run.
+What this does **not** give, and Qdrant's [migration tutorial](https://qdrant.tech/documentation/tutorials-operations/embedding-model-migration/) does: writes
+go to one collection only, retrieval is refused from the swap to the restart, and there is no instant way back.
+
 **A hung worker**: the agent and ingest workers bind no port, so each touches a heartbeat file from its read loop and its reclaim loop
 (`app/platform/worker_heartbeat.py`) and the compose health check fails when one is more than two minutes old (a stuck event loop, a
 deadlock). `dc ps` then shows the worker `unhealthy` and the alert `AgentWorkerLoopStalled` fires when no replica of that queue has
