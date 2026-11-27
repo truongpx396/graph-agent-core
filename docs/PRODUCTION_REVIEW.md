@@ -930,16 +930,17 @@ with the same source name.
 **Established:** the pins are read from `requirements.txt`; the upstream state is from the field (section 10) and must
 be re-checked on the day.
 
-**Where it stands.** `langgraph>=0.2.20,<0.3` (0.2.76 installed), `langchain-core` 0.3, `langfuse` 2.60. The reason is
-in `requirements.txt` and in "Next PR: the LangGraph upgrade" in `GRAPH_PATTERNS.md`: the Langfuse 2 SDK imports
+**Where it stands.** `langgraph` 1.0.1 (the highest on this LangChain; it was 0.2.76 until a checkpoint-library advisory forced the move; checkpoint loading can still run code, see "Known gaps" there),
+`langchain-core` 0.3, `langfuse` 2.60. The reason is in `requirements.txt` and in "The LangGraph upgrade to 1.0.1" in
+`GRAPH_PATTERNS.md`: the Langfuse 2 SDK imports
 modules that LangChain 1 removed. Upstream, LangGraph is on the 1.2 line, and Langfuse's current Python SDKs are built
 on OpenTelemetry, support LangChain 1, and need a Langfuse server of at least 3.63. The development stack runs
 `langfuse/langfuse:2`.
 
 **What staying costs.** A private attribute of the checkpointer is replaced at start-up to work around a lock
 (`app/adapters/outbound/postgres/checkpointing.py`); a custom reducer exists because the pinned version has no
-`Overwrite` (`app/agent/graph/state.py::concat_or_reset`); an import-time compatibility warning; and security fixes
-that land only on current lines.
+`Overwrite` (`app/agent/graph/state.py::concat_or_reset`; whether 1.0.1 offers one has not been checked); and security fixes
+that land only on current lines (`langchain-core` and `langgraph-sdk` each have one this app does not reach).
 
 **The ladder, one PR per rung, each with `make test-integration` and `make test-live`:**
 1. Development Langfuse server 2 to 3 (compose only; it adds ClickHouse and object storage). Nothing in `app/` changes.

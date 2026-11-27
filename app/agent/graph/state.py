@@ -17,6 +17,7 @@ from typing import Annotated, Any, Literal, TypedDict
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
+from langgraph.graph.state import CompiledStateGraph
 
 from app.core.config import (
     MAX_TOKENS_PER_TURN as MAX_TOKENS_PER_TURN,  # a safety budget, tuned in Settings and read from here like the others
@@ -196,3 +197,7 @@ class State(TypedDict):
     # semantic-cache hit that then fails check_output — can't put the
     # PREVIOUS turn's context on the previous turn's question. agent() falls
     # back to the last message the person sent when it is missing.
+
+
+# The compiled graph as every layer names it. LangGraph 0.6 made the class generic over state, context, input and output.
+AgentGraph = CompiledStateGraph[State, Any, Any, Any]

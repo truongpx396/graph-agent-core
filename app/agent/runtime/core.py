@@ -39,11 +39,12 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-from langgraph.graph.state import CompiledStateGraph
-
 from app.agent.cost import budget_holds, budgets, pricing
 from app.agent.graph.build import build_graph
 from app.agent.graph.state import MAX_ITERATIONS
+
+# Re-exported on purpose: a driving adapter may import the runtime, not the graph (tests/core/test_architecture_layers.py).
+from app.agent.graph.state import AgentGraph as AgentGraph
 from app.agent.runtime import sessions
 from app.core.config import (
     BUDGET_CHECK_FAILURE_POLICY,
@@ -61,7 +62,7 @@ from app.ports.outbound.domains import domain_catalog
 
 logger = logging.getLogger(__name__)
 
-_graphs: dict[str, CompiledStateGraph] = {}  # compiled graph per domain name
+_graphs: dict[str, AgentGraph] = {}  # compiled graph per domain name
 _saver = None  # the one checkpointer every domain's graph shares
 _graph_lock = asyncio.Lock()  # guards the two above while they are built: without it concurrent first
 # callers each open a checkpointer pool and overwrite the graph, leaking every loser's pool (the same guard
@@ -178,7 +179,7 @@ async def close_checkpointer_pool() -> None:
     await checkpointing.get().close()
 
 
-async def init_graph_async(domain: str | None = None) -> CompiledStateGraph:
+async def init_graph_async(domain: str | None = None) -> AgentGraph:
     """The compiled graph for `domain` (default: `current_domain()`), built on first use over the shared
     checkpointer, which this opens on the CALLING loop (see the module docstring). `agent_worker.py` primes
     every domain it serves at start, so no turn pays the build and an unknown name fails at boot; every

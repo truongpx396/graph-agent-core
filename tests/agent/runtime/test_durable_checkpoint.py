@@ -54,12 +54,19 @@ from tests.ecorp import build_graph
 pytestmark = pytest.mark.integration
 
 
+@pytest.fixture
+def checkpointer_database_url() -> str:
+    # Not async: on a cache miss `ensure_postgres` runs an event loop of its own, which it cannot do inside the test's.
+    return ensure_postgres()["checkpointer_database_url"]
+
+
 @pytest.fixture(autouse=True)
-def reset_agent_singleton(monkeypatch):
-    # The checkpointer is the `Checkpointing` port: the Postgres adapter reads the database URL, and owns the pool. A FRESH adapter per test, so a pool
-    # left behind by the last test (bound to a loop that is gone) is never the one this test closes.
-    monkeypatch.setattr(pg_checkpointing, "CHECKPOINTER_DATABASE_URL", ensure_postgres()["checkpointer_database_url"])
-    monkeypatch.setattr(checkpointing_port.checkpointing, "get", lambda adapter=pg_checkpointing.PgCheckpointing(): adapter)
+async def reset_agent_singleton(monkeypatch, checkpointer_database_url):
+    # The checkpointer is the `Checkpointing` port: the Postgres adapter reads the database URL, and owns the pool. A FRESH adapter per test, closed
+    # below on the loop that opened it.
+    adapter = pg_checkpointing.PgCheckpointing()
+    monkeypatch.setattr(pg_checkpointing, "CHECKPOINTER_DATABASE_URL", checkpointer_database_url)
+    monkeypatch.setattr(checkpointing_port.checkpointing, "get", lambda: adapter)
     agent_module._graphs = {}
     agent_module._saver = None
     # A FRESH Lock, not just left alone: _graph_lock is a process-lifetime
@@ -76,9 +83,14 @@ def reset_agent_singleton(monkeypatch):
     # already does for the state it guards.
     agent_module._graph_lock = asyncio.Lock()
     yield
+    # A pool left open hung CI for 30 minutes: psycopg_pool's worker catches CancelledError, so one cancelled while connecting never ends and the
+    # event loop's close waits for it forever. Only `close()` stops it. The assert fails every time; the hang happened only now and then.
+    await adapter.close()
+    left = [task.get_name() for task in asyncio.all_tasks() if task.get_name().startswith("checkpointer-")]
     agent_module._graphs = {}
     agent_module._saver = None
     agent_module._graph_lock = asyncio.Lock()
+    assert not left, f"a checkpointer pool is still running: {left}"
 
 
 def _fake_llm():

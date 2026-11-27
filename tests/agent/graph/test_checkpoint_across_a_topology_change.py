@@ -1,15 +1,11 @@
-"""What happens to a turn a worker left mid-flight when the graph's edges change under it. LangGraph names the
-channel triggering a node after the edge feeding it, and a conditional edge's channel carries the router
-function's name. A checkpoint records which channels changed; rename a router (as #171 did,
-`route_after_check` -> `route_after_check_bound`) or remove a node and a checkpoint written under the old name
-no longer shows the pending node: `next` is empty and a resume runs nothing, silently. A turn PAUSED at
-`human_approval` is unaffected while that node's edges don't change, which is why those are covered by
-`STATE_SCHEMA_VERSION` and these are not.
+"""What happens to a turn a worker left mid-flight when the graph changes under it. LangGraph records what triggers a node in a channel named
+after the TARGET node (`branch:to:<node>`, since 0.3; 0.2 also carried the source and the router function's name). So renaming a router no longer
+strands a turn, but removing or renaming the pending NODE still does: `next` is empty and a resume runs nothing, silently. A turn PAUSED at
+`human_approval` while that node's edges don't change is covered by `STATE_SCHEMA_VERSION` instead.
 
-The first test pins that LangGraph behaviour on a small graph, so an upgrade that changes it is noticed. The
-rest pin what the app does: the worker dead-letters such a turn instead of "continuing" it, and the stream
-reports an error instead of streaming the person's own question back as the answer. Deploying a graph change:
-drain the workers first (GRAPH_PATTERNS.md pattern 16).
+The first test pins that LangGraph behaviour on a small graph, so an upgrade that changes it is noticed. The rest pin what the app does: the
+worker dead-letters a turn whose pending node is gone instead of "continuing" it, and the stream reports an error instead of streaming the
+person's own question back as the answer. Deploying a graph change: drain the workers first (GRAPH_PATTERNS.md pattern 16).
 """
 import uuid
 from typing import Annotated, TypedDict
@@ -34,8 +30,8 @@ class _State(TypedDict):
     messages: Annotated[list, add_messages]
 
 
-def _graph(router_name: str, crash: dict, saver, ran: list | None = None):
-    """a -> (router) -> b -> c. `b` is where a worker dies when `crash["on"]`; `ran` records the nodes that ran."""
+def _graph(router_name: str, crash: dict, saver, ran: list | None = None, node: str = "b"):
+    """a -> (router) -> b -> c. `b` (registered as `node`) is where a worker dies when `crash["on"]`; `ran` records the nodes that ran."""
     ran = ran if ran is not None else []
     g = StateGraph(_State)
     g.add_node("a", lambda s: {})
@@ -50,16 +46,16 @@ def _graph(router_name: str, crash: dict, saver, ran: list | None = None):
         ran.append("c")
         return {}
 
-    g.add_node("b", b)
+    g.add_node(node, b)
     g.add_node("c", c)
     g.add_edge(START, "a")
 
     def router(s):
-        return "b"
+        return node
 
     router.__name__ = router_name
-    g.add_conditional_edges("a", router, {"b": "b"})
-    g.add_edge("b", "c")
+    g.add_conditional_edges("a", router, {node: node})
+    g.add_edge(node, "c")
     g.add_edge("c", END)
     return g.compile(checkpointer=saver)
 
@@ -76,32 +72,30 @@ async def _crashed_mid_flight(saver, thread):
 
 
 @pytest.mark.parametrize(
-    ("router_name", "pending", "ran_after_resume"),
-    [("route_old", ("b",), ["b", "c"]), ("route_new", (), [])],
-    ids=["the router keeps its name", "the router is renamed"],
+    ("router_name", "node", "pending", "ran_after_resume"),
+    [("route_old", "b", ("b",), ["b", "c"]), ("route_new", "b", ("b",), ["b", "c"]), ("route_old", "b_renamed", (), [])],
+    ids=["nothing changes", "the router is renamed", "the pending node is renamed"],
 )
-async def test_langgraph_resumes_a_pending_node_under_the_same_router_name_and_runs_nothing_under_a_new_one(
-    router_name, pending, ran_after_resume
-):
+async def test_langgraph_resumes_a_pending_node_by_its_own_name_and_runs_nothing_once_that_node_is_gone(router_name, node, pending, ran_after_resume):
     saver = MemorySaver()
     config, crash = await _crashed_mid_flight(saver, str(uuid.uuid4()))
     crash["on"] = False
     ran: list[str] = []
-    new = _graph(router_name, crash, saver, ran)
+    new = _graph(router_name, crash, saver, ran, node=node)
 
     assert (await new.aget_state(config)).next == pending
     await new.ainvoke(None, config)
 
-    assert ran == ran_after_resume, "a resume must run the rest of the turn, or (renamed) silently run nothing"
+    assert ran == ran_after_resume, "a resume must run the rest of the turn, or (node gone) silently run nothing"
     assert (await new.aget_state(config)).next == ()
 
 
-@pytest.mark.parametrize(("router_name", "expected"), [("route_old", "retry_continue"), ("route_new", "dead_letter")])
-async def test_the_worker_continues_a_resumable_turn_and_dead_letters_one_whose_pending_node_is_gone(router_name, expected):
+@pytest.mark.parametrize(("node", "expected"), [("b", "retry_continue"), ("b_renamed", "dead_letter")])
+async def test_the_worker_continues_a_resumable_turn_and_dead_letters_one_whose_pending_node_is_gone(node, expected):
     saver = MemorySaver()
     config, crash = await _crashed_mid_flight(saver, str(uuid.uuid4()))
     crash["on"] = False
-    new = _graph(router_name, crash, saver)
+    new = _graph("route_new", crash, saver, node=node)
 
     assert await agent_worker._classify_reclaimed_turn(new, config["configurable"]["thread_id"]) == expected
 

@@ -31,6 +31,7 @@ from app.agent.graph.messages import (
     last_human_message,
     tool_ran_this_turn,
     with_turn_notes,
+    with_unanswered_calls_closed,
 )
 from app.agent.graph.model_route import routed_unreachable, tier_alias
 from app.agent.graph.skill_guards import pending_skill_required_tool
@@ -282,6 +283,8 @@ def make_graph_node_agent(
 
         if system_prompt:
             messages.insert(0, SystemMessage(content=system_prompt))
+        # Last, so no index into the history (`anchor`, `asked`) is shifted before it has been used.
+        messages = with_unanswered_calls_closed(messages)
 
         # The one place a call is made, priced and recorded (app/agent/cost/metering.py): it tells the gateway
         # whose call this is (else its spend logs and Langfuse show one anonymous caller), prices the usage

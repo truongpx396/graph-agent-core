@@ -44,6 +44,9 @@ Constitution Principle VII applies. The default suite must stay hermetic and fas
 - Under `pytest -n auto` containers are shared across workers via a fixed cache dir, and
   `AsyncPostgresSaver.setup()` runs once under a lock before any test can race it. Don't call
   `.setup()` per worker. Integration runs use `--dist=loadgroup`.
+- A test that opens a real async pool closes it on the loop that opened it (an async fixture's teardown, as `tests/agent/runtime/test_durable_checkpoint.py` does).
+  `psycopg_pool`'s workers catch `CancelledError`, so a pool left open can hang the event loop's close, and under `-n auto` the CI job then sits until its
+  time limit. Call `ensure_*()` from a sync fixture: on a cache miss `ensure_postgres` runs an event loop of its own.
 - In CI, `e2e` (sync Playwright) runs as a separate pytest invocation from `llm`/`crawl`
   (async): under one `-n auto` run xdist can put both kinds on the same worker, and Playwright
   then corrupts that worker's asyncio state. `make test-live` (and CI) runs them as separate processes

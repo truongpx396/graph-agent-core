@@ -12,7 +12,7 @@ import logging
 
 from docx import Document
 from pypdf import PdfReader
-from pypdf.errors import PdfReadError
+from pypdf.errors import PyPdfError
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,8 @@ def extract_pdf_text(data: bytes) -> str:
         return "\n\n".join((page.extract_text() or "") for page in reader.pages)
     except ExtractionFailedError:
         raise
-    except (PdfReadError, ValueError) as exc:
+    # The base class, not just PdfReadError: pypdf 6 stops a decompression bomb with LimitReachedError, which is not one.
+    except (PyPdfError, ValueError) as exc:
         raise ExtractionFailedError(f"could not parse PDF: {exc}") from exc
 
 

@@ -38,10 +38,9 @@ RouterFn: TypeAlias = Callable[..., Any]
 def named_edge(router: RouterFn, name: str) -> RouterFn:
     """`router`, registered with LangGraph under `name` whatever the function is called.
 
-    A checkpoint records a conditional edge under its router's `__name__` (`path.name or "condition"`, langgraph 0.2.76), and a turn a worker
-    left mid-flight finds its pending node through that name: rename the function and a resume runs nothing, silently (GRAPH_PATTERNS.md 16,
-    `tests/agent/graph/test_checkpoint_across_a_topology_change.py`). `build_graph` registers every router through here under the name in
-    `EDGE_CHANNEL_NAMES`, so a router's Python name follows the `graph_edge_route_after_<node>` rule and the stored name never moves.
+    Under LangGraph 0.2 a checkpoint recorded a conditional edge under this name, so renaming the function stranded a turn left mid-flight.
+    Since 0.3 it records the target node instead (GRAPH_PATTERNS.md 16, `tests/agent/graph/test_checkpoint_across_a_topology_change.py`);
+    `build_graph` still registers every router through here under the name in `EDGE_CHANNEL_NAMES`, which labels the edge in the builder.
     `functools.wraps` carries the return annotation across: LangGraph reads a `Literal[...]` return as the edge's targets.
     """
 
