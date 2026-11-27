@@ -12,7 +12,7 @@ import re
 import sys
 from typing import Any
 
-# Documentation only. NOT every `*.md`: a domain's skills/<name>/SKILL.md and subagents/<name>/AGENT.md are what the agent runs.
+# Documentation only. NOT every `*.md`: a domain's prompt.md, skills/<name>/SKILL.md and subagents/<name>/AGENT.md are what the agent runs.
 DOCS = re.compile(r"^(docs|specs|\.specify|\.claude)/|^packages/[^/]+/(docs|specs)/|(^|/)(README|CLAUDE)\.md$")
 # The jobs a documentation-only pull request skips: the slow ones. The hermetic tests still run, since some read the documents.
 SLOW = frozenset({"test-integration", "test-live", "promptfoo", "image"})
