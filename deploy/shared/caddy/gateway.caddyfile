@@ -64,6 +64,7 @@
 	}
 	# The id the API put on its response, so the door's line and the app's lines are found by one search. Empty for a refused request.
 	log_append request_id {http.response.header.X-Request-Id}
+	log_append trace_id {http.response.header.X-Trace-Id}
 	log_append user_agent {http.request.header.User-Agent}
 }
 

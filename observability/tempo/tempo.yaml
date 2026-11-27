@@ -1,0 +1,27 @@
+# Tempo, single binary, local disk: where the app's spans are kept (app/core/spans.py, RUNTIME_PATTERNS.md 113). The same file in development
+# and production. Only the collector writes to it and only Grafana reads it, both inside the compose network: no port is published.
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        http:
+          endpoint: 0.0.0.0:4318
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+# Seven days, the logs' retention (observability/loki/loki-config.yaml): a line's trace_id opens something for as long as the line exists.
+backend_worker:
+  compaction:
+    block_retention: 168h
+
+usage_report:
+  reporting_enabled: false

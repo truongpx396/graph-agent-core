@@ -17,7 +17,7 @@ How a turn travels from the API to a worker and back, and how the processes stay
 ### 11. Custom metrics
 OpenTelemetry counters and histograms (`app/core/metrics.py`) give the "how often, across everyone" view that Langfuse's per-call traces cannot. Every process pushes OTLP to one collector, so one scrape target covers the API and all workers. Histogram buckets are explicit: the SDK default puts every 1-90 s turn in one bucket.
 - **Bug:** scheduled jobs exited before the 15 s export and exported nothing. Each now runs in `job_runtime.py::scheduled_job()`, which flushes in a `finally`.
-- **Bug:** a Langfuse client per turn leaked threads. One shared client per process (`app/core/tracing.py`); its exit flush is bounded by `LANGFUSE_SHUTDOWN_TIMEOUT_SECONDS` (it once hung ~90 s).
+- **Bug:** a Langfuse client per turn leaked threads. One shared client per process (`app/core/llm_tracing.py`); its exit flush is bounded by `LANGFUSE_SHUTDOWN_TIMEOUT_SECONDS` (it once hung ~90 s).
 - **Gap:** a SIGKILL loses unflushed metrics.
 
 ### 29. Built-in web UI
@@ -79,3 +79,11 @@ Every line is JSON. The ids of the request or job in progress are bound once (`a
 - **Bug:** the dashboard defaulted to `error|warn`: Python writes `warning`, so every warning was hidden, and the ids were on `info` lines.
 - **Principals are logged** as the identity provider names them, which may be an email: treat the log store as holding personal data.
 - **Gap:** the MCP gateway, the Telegram bot and `authlimit` bind no per-request id; the ML service logs plain text. Third-party containers keep their own formats.
+
+### 113. One trace id from the request to the model call, and Langfuse uses it too
+`app/core/spans.py` records where a turn's time went: the API request, the worker's job (the W3C context travels in the queued job), each node, each model and tool call. OTLP to the collector, then Tempo; Grafana links a line's `trace_id` to its trace and a span back to its lines.
+- **One id.** `trace_id` on a log line, `X-Trace-Id` on a response, the Tempo trace and the turn's **Langfuse trace id** are the same value. Tempo is the timings, Langfuse is what the model saw.
+- **`request_id` is not a trace id:** it names a job (`X-Request-Id`); `thread_id` names a conversation; a resume is a new request and a new trace.
+- **Never mixed:** a later run in the same request sends Langfuse no name or input (upsert on id); a job run again after a crash gets its own trace, linked; a client's `traceparent` is ignored; the LiteLLM proxy is never sent `trace_id` or `existing_trace_id`, which would merge its per-call records into ours and count each call twice. Its own records keep its own ids.
+- **Metadata only.** Names, counts, ids and an error's class: `record_exception` is off, and our `TracerProvider` is not the global one, so a library's spans are not exported.
+- **Gap:** the trace starts at the API (not Caddy or authlimit) and has no spans for outbound HTTP, Postgres or Redis; their time is inside the node that called them. [specs/024](../specs/024-distributed-tracing/spec.md) has the decisions.

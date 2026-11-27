@@ -78,6 +78,8 @@ x-app-env: &app-env
   TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
   # The local agent collector (`otel-collector-agent` below), which relays to the observability droplet over OTLP (observability/otel-collector/config.agent.yaml).
   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector-agent:4318
+  # The share of requests whose spans are exported (RUNTIME_PATTERNS.md 113). Lower it if the observability droplet's disk fills.
+  OTEL_TRACES_SAMPLE_RATIO: ${OTEL_TRACES_SAMPLE_RATIO:-1.0}
   # The Pyroscope server on the observability droplet, over the VPC (http://<observability_private_ipv4>:4040). Blank = no profiling, the default until
   # it has been tried there (deploy/prod/prod.env.example).
   PYROSCOPE_SERVER_ADDRESS: ${PYROSCOPE_SERVER_ADDRESS:-}

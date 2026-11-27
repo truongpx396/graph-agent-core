@@ -83,6 +83,8 @@ session; the pattern documents (`docs/README.md` maps each number to its file) h
 - An entry point opens `log_context.scope(...)` and code that learns an id later calls `log_context.add(...)` (RUNTIME_PATTERNS.md 112); never pass a request id down by hand. Ids and names only: no message content, no URL with a query or a token.
 - A new library that logs each outbound URL goes in `logging_config._QUIET_LOGGERS`. A new service goes in BOTH Promtail allowlists.
 
+- Spans go through `app/core/spans.py` (our own provider, never the global one), carry names, counts, ids and an error's class only (`record_exception` off), and a queued job carries its context (`queue.encode_job`). Never send the LiteLLM proxy `trace_id` metadata (RUNTIME_PATTERNS.md 113).
+
 ## Metrics and alerts
 
 - Add counters/histograms in `app/core/metrics.py` using its `.labels(...).inc()` surface;

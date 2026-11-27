@@ -14,7 +14,7 @@ from typing import Any
 
 import redis.asyncio as redis
 
-from app.adapters.outbound.redis.queue import read_events
+from app.adapters.outbound.redis.queue import encode_job, read_events
 from app.core import metrics
 from app.core.errors import ErrorCode, ErrorEnvelope
 from app.core.security import SecurityCtx
@@ -38,7 +38,7 @@ async def publish_ingest_request(
     already-uploaded file in MinIO (app/adapters/outbound/minio/object_store.py) — the job
     payload carries a pointer, never the file bytes themselves, keeping
     Redis Streams entries small regardless of document size."""
-    payload = json.dumps(
+    payload = encode_job(
         {
             "job_id": job_id,
             "object_key": object_key,

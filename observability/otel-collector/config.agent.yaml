@@ -64,13 +64,13 @@ processors:
     timeout: 5s
 
 exporters:
-  # otlphttp, not the gRPC `otlp` exporter — OBS_COLLECTOR_ENDPOINT is a
+  # otlp_http, not the gRPC `otlp` exporter — OBS_COLLECTOR_ENDPOINT is a
   # plain `http://<obs-private-ip>:4318` URL (this directory's own
   # `config.yaml` gateway only opens an HTTP OTLP receiver on 4318, no TLS:
   # the DO VPC's private network is the trust boundary here, never the
   # public internet — see deploy/terraform/prod/main.tf's
   # digitalocean_firewall.observability comment).
-  otlphttp/gateway:
+  otlp_http/gateway:
     endpoint: ${env:OBS_COLLECTOR_ENDPOINT}
 
 service:
@@ -81,4 +81,9 @@ service:
     metrics:
       receivers: [otlp, prometheus]
       processors: [batch]
-      exporters: [otlphttp/gateway]
+      exporters: [otlp_http/gateway]
+    # Spans relayed to the gateway (config.yaml), which sends them to Tempo.
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/gateway]

@@ -18,6 +18,7 @@ import logging
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import aclosing, contextmanager
+from contextvars import ContextVar
 from typing import Any, TypeAlias
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -38,7 +39,7 @@ from app.agent.graph.stream_events import STREAM_EVENT
 from app.agent.runtime import cancelled_turn
 from app.agent.runtime import core as runtime_module
 from app.agent.runtime.held_answer import HeldAnswer
-from app.core import gateway, log_context, metrics, tracing
+from app.core import gateway, llm_tracing, log_context, metrics, spans
 from app.core.config import (
     REQUEST_TIMEOUT_SECONDS,
     UNATTENDED_MAX_DECLINE_ROUNDS,
@@ -209,10 +210,28 @@ def _build_human_content(text: str, images: list[str] | None) -> str | list[str 
 # Events are serialised to a unified SSE-safe dict so FastAPI/CLI don't
 # need to know the LangGraph version.
 
+# The trace id whose Langfuse trace this task has already named (see `_open_trace`).
+_llm_trace_named: ContextVar[str | None] = ContextVar("llm_trace_named", default=None)
+
+
 def _trace_metadata() -> dict[str, str]:
     """The ids that match a Langfuse trace to this turn's log lines (RUNTIME_PATTERNS.md 112). `session_id` is already the thread."""
-    bound = log_context.current()
-    return {name: bound[name] for name in ("request_id", "domain", "tenant") if name in bound}
+    bound = {**log_context.current(), **spans.current_ids()}
+    return {name: bound[name] for name in ("request_id", "domain", "tenant", "trace_id") if name in bound}
+
+
+def _trace_fields(name: str, session_id: str, input_text: str) -> dict[str, Any]:
+    """What the Langfuse trace is created with. Its id IS the request's trace id, so one id opens the timings and the model's record
+    (RUNTIME_PATTERNS.md 113). Langfuse upserts on id: a second graph run in the same request (an unattended turn declining an approval)
+    adds its steps to the same trace and must not rename it or replace the person's text with `resume(...)`."""
+    fields: dict[str, Any] = {"session_id": session_id, "metadata": _trace_metadata()}
+    trace_id = spans.current_ids().get("trace_id")
+    if trace_id is None or _llm_trace_named.get() != trace_id:
+        fields.update(name=name, input=input_text)
+    if trace_id is not None:
+        fields["id"] = trace_id
+        _llm_trace_named.set(trace_id)
+    return fields
 
 
 def _open_trace(name: str, session_id: str, input_text: str) -> tuple[Any, list[Any]]:
@@ -224,15 +243,15 @@ def _open_trace(name: str, session_id: str, input_text: str) -> tuple[Any, list[
     traces the same way (each gets its OWN trace rather than reusing one
     across a pause — see astream_events_resume's docstring for why).
     """
-    callbacks = [metrics.MetricsCallbackHandler()]
+    callbacks = [metrics.MetricsCallbackHandler(), spans.SpanCallbackHandler()]
     trace = None
     if CallbackHandler is not None:
         try:
-            # The process-wide client (app/core/tracing.py), not a new one per
+            # The process-wide client (app/core/llm_tracing.py), not a new one per
             # turn: each construction starts three threads nothing stops.
-            lf = tracing.get_langfuse()
+            lf = llm_tracing.get_langfuse()
             if lf is not None:
-                trace = lf.trace(name=name, session_id=session_id, input=input_text, metadata=_trace_metadata())
+                trace = lf.trace(**_trace_fields(name, session_id, input_text))
                 # stateful_client (not trace_id) is CallbackHandler's actual
                 # parameter for this in langfuse==2.60.10 — passing trace_id
                 # raises TypeError, which used to be silently swallowed here,
@@ -617,7 +636,7 @@ async def _run_graph_stream(graph: AgentGraph, graph_input: dict[str, Any] | Com
                 yield {"type": "token", "content": synthetic_token}
             terminal_event = {"type": "done"}
     # No per-turn flush: the shared client's own background consumer sends
-    # events as they arrive and app/core/tracing.py flushes it at process exit.
+    # events as they arrive and app/core/llm_tracing.py flushes it at process exit.
     # The flush that used to live in a `finally` here built a NEW client, whose
     # queue was empty, so it neither flushed this trace nor was free — and a
     # real flush blocks until the queue drains, which would stall the event loop.

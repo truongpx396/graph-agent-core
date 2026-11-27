@@ -14,12 +14,14 @@ import functools
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractContextManager
 from typing import Any, TypeAlias, TypeVar, cast
 
 from langchain_core.runnables import RunnableBinding
 from langchain_core.tools import BaseTool
 from langgraph.errors import GraphBubbleUp
 
+from app.core import spans
 from app.core.config import CHAT_MODEL, OPENAI_API_BASE, OPENAI_API_KEY, settings
 from app.core.errors import is_store_error
 from app.core.tool_idempotency import MutatingToolTimedOutError
@@ -58,6 +60,12 @@ def _run_id_after(result: Any, before: str) -> str:
     return str(result.get("run_id", before)) if isinstance(result, dict) else before
 
 
+def _node_span(node_name: str) -> AbstractContextManager[Any]:
+    """The node's span (app/core/spans.py): its log lines carry its id, and its model and tool calls are its children. A pause
+    (`GraphBubbleUp`) is control flow, not an error."""
+    return spans.span(f"node {node_name}", attributes={"agent.node": node_name}, expected=(GraphBubbleUp,))
+
+
 def instrumented(node_name: str) -> Callable[[F], F]:
     """Wrap a node with structured start/complete/failed/paused lifecycle logs.
 
@@ -88,11 +96,48 @@ def instrumented(node_name: str) -> Callable[[F], F]:
 
             @functools.wraps(fn)
             async def async_wrapper(state: Any, *args: Any, **kwargs: Any) -> Any:
+                with _node_span(node_name):
+                    run_id = state.get("run_id", "-") if isinstance(state, dict) else "-"
+                    logger.debug("node_started", extra={"node": node_name, "run_id": run_id})
+                    start = time.monotonic()
+                    try:
+                        result = await fn(state, *args, **kwargs)
+                    except GraphBubbleUp:
+                        logger.info(
+                            "node_paused", extra={"node": node_name, "run_id": run_id}
+                        )
+                        raise
+                    except Exception as exc:
+                        logger.warning(
+                            "node_failed",
+                            extra={
+                                "node": node_name,
+                                "run_id": run_id,
+                                "duration_ms": int((time.monotonic() - start) * 1000),
+                                "error_class": type(exc).__name__,
+                            },
+                        )
+                        raise
+                    logger.info(
+                        "node_completed",
+                        extra={
+                            "node": node_name,
+                            "run_id": _run_id_after(result, run_id),
+                            "duration_ms": int((time.monotonic() - start) * 1000),
+                        },
+                    )
+                    return result
+
+            return cast(F, async_wrapper)
+
+        @functools.wraps(fn)
+        def wrapper(state: Any, *args: Any, **kwargs: Any) -> Any:
+            with _node_span(node_name):
                 run_id = state.get("run_id", "-") if isinstance(state, dict) else "-"
                 logger.debug("node_started", extra={"node": node_name, "run_id": run_id})
                 start = time.monotonic()
                 try:
-                    result = await fn(state, *args, **kwargs)
+                    result = fn(state, *args, **kwargs)
                 except GraphBubbleUp:
                     logger.info(
                         "node_paused", extra={"node": node_name, "run_id": run_id}
@@ -118,41 +163,6 @@ def instrumented(node_name: str) -> Callable[[F], F]:
                     },
                 )
                 return result
-
-            return cast(F, async_wrapper)
-
-        @functools.wraps(fn)
-        def wrapper(state: Any, *args: Any, **kwargs: Any) -> Any:
-            run_id = state.get("run_id", "-") if isinstance(state, dict) else "-"
-            logger.debug("node_started", extra={"node": node_name, "run_id": run_id})
-            start = time.monotonic()
-            try:
-                result = fn(state, *args, **kwargs)
-            except GraphBubbleUp:
-                logger.info(
-                    "node_paused", extra={"node": node_name, "run_id": run_id}
-                )
-                raise
-            except Exception as exc:
-                logger.warning(
-                    "node_failed",
-                    extra={
-                        "node": node_name,
-                        "run_id": run_id,
-                        "duration_ms": int((time.monotonic() - start) * 1000),
-                        "error_class": type(exc).__name__,
-                    },
-                )
-                raise
-            logger.info(
-                "node_completed",
-                extra={
-                    "node": node_name,
-                    "run_id": _run_id_after(result, run_id),
-                    "duration_ms": int((time.monotonic() - start) * 1000),
-                },
-            )
-            return result
 
         return cast(F, wrapper)
 

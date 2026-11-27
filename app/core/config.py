@@ -87,7 +87,7 @@ class Settings(BillingSettings):
     langfuse_host: str = "http://localhost:3000"
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
-    # How long process exit waits for the tracing client to flush its queue (app/core/tracing.py). The flush joins the
+    # How long process exit waits for the tracing client to flush its queue (app/core/llm_tracing.py). The flush joins the
     # queue, which retries a batch it cannot deliver, so with Langfuse unreachable it took about 90 seconds: longer than
     # a container is given to stop, so the worker was killed instead of exiting. Past this the flush is abandoned.
     langfuse_shutdown_timeout_seconds: float = 5.0
@@ -823,6 +823,9 @@ class Settings(BillingSettings):
     # itself CPU-only — see that module's own REQUEST_TIMEOUT_SECONDS
     # comment).
     otel_exporter_otlp_endpoint: str = "http://localhost:4318"
+    # The share of requests whose spans are exported (app/core/spans.py, RUNTIME_PATTERNS.md 113), decided once at the request and carried to the
+    # worker. Every request has a `trace_id` on its log lines whatever this says. Lower it under heavy traffic; 0 exports none.
+    otel_traces_sample_ratio: float = Field(default=1.0, ge=0, le=1)
 
     # Continuous profiling (app/platform/profiling.py): the base URL of a Pyroscope server, e.g. http://localhost:4040. Blank (the default) is off
     # and the SDK is never imported, so a process without a profiler behaves exactly as before.
@@ -945,3 +948,4 @@ CRAWL4AI_API_TOKEN = settings.crawl4ai_api_token
 SERPER_API_KEY = settings.serper_api_key
 WEB_SEARCH_MAX_RESULTS = settings.web_search_max_results
 OTEL_EXPORTER_OTLP_ENDPOINT = settings.otel_exporter_otlp_endpoint
+OTEL_TRACES_SAMPLE_RATIO = settings.otel_traces_sample_ratio

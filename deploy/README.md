@@ -13,7 +13,7 @@ Provisions TWO droplets (via `deploy/terraform/prod/`; the dev environment on on
   `deploy/prod/docker-compose.yml`'s header comment for the tradeoffs and how to add any of them
   back.
 - The **observability droplet**, a separate, smaller box running
-  Prometheus/Loki/Grafana/Alertmanager/otel-collector
+  Prometheus/Loki/Tempo/Grafana/Alertmanager/otel-collector
   (`deploy/prod/observability.yml`), fed by the app droplet's
   sidecars above over the DO VPC's private network — never the public
   internet. Kept off the app droplet so a metrics/logs spike can't compete
@@ -49,7 +49,7 @@ deploy/
     app.yml                    what this repo builds: the API, the workers, the ML service, the MCP gateway (prod adds the Telegram bot)
     gateway.yml                the front door: Caddy, authlimit, Casdoor
     collectors.yml             exporters and agents that feed the observability backends (a part of the project in prod; in dev an overlay of the three database exporters)
-    observability.yml          a project of its own: Prometheus, Loki, Grafana, Alertmanager, Pyroscope (dev also holds the OTel collector, Promtail, node-exporter, cAdvisor and SonarQube, profile `quality`)
+    observability.yml          a project of its own: Prometheus, Loki, Tempo, Grafana, Alertmanager, Pyroscope (dev also holds the OTel collector, Promtail, node-exporter, cAdvisor and SonarQube, profile `quality`)
     litellm-config.yaml        the gateway's model list
     caddy/Caddyfile            how each site is addressed and certified (prod also has Caddyfile.observability)
     tools.yml                  what the agent's tools run on: the crawler (dev: part of the project, with the OpenSandbox server; prod: an opt-in overlay, see The crawler's network)

@@ -124,9 +124,9 @@
       },
       {
         "name": "request_id",
-        "label": "Request / job id",
+        "label": "Request / job / trace id",
         "type": "textbox",
-        "description": "The X-Request-Id response header, or an ingest job id.",
+        "description": "The X-Request-Id or X-Trace-Id response header, or an ingest job id.",
         "query": "",
         "current": {
           "text": "",

@@ -23,7 +23,9 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from opentelemetry import trace
 
+from app.core import spans
 from app.platform import job_runtime, telemetry
 from scripts.jobs import followup_sweep, ops_digest, tool_call_dedup_sweep
 from scripts.tools import ops_investigate
@@ -186,3 +188,30 @@ def test_shutdown_telemetry_delivers_a_jobs_counter_before_exit(collector, monke
     telemetry.shutdown_telemetry()
 
     assert collector.received.count("/v1/metrics") >= 1
+
+
+def test_a_jobs_spans_are_delivered_by_the_same_shutdown(collector, monkeypatch):
+    provider = telemetry._build_tracer_provider("agent-core-test-job")
+    provider.get_tracer("test").start_span("a span").end()
+    monkeypatch.setattr(telemetry, "_tracer_provider", provider)
+
+    telemetry.shutdown_telemetry()
+
+    assert collector.received == ["/v1/traces"]
+
+
+def test_configuring_telemetry_installs_our_tracer_and_leaves_the_global_one_alone(collector, monkeypatch):
+    """On the global provider, `mcp`, `langsmith` and `litellm` would export spans whose contents are theirs to choose."""
+    for name, value in (("_configured", False), ("_provider", None), ("_tracer_provider", None)):
+        monkeypatch.setattr(telemetry, name, value)
+    monkeypatch.setattr(telemetry.metrics_api, "set_meter_provider", lambda provider: None)
+    monkeypatch.setattr(spans, "_tracer", spans._tracer)
+    before = trace.get_tracer_provider()
+
+    telemetry.configure_telemetry("agent-core-test-job")
+    try:
+        with spans.span("ours"):
+            assert spans.current_ids()
+        assert trace.get_tracer_provider() is before
+    finally:
+        telemetry.shutdown_telemetry()

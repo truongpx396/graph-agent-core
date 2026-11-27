@@ -58,6 +58,8 @@ x-app-env: &app-env
   # The collector is observability.yml's, reached through its published port so the app never depends on it: a failed push is
   # dropped (app/platform/telemetry.py).
   OTEL_EXPORTER_OTLP_ENDPOINT: http://host.docker.internal:4318
+  # The share of requests whose spans are exported (RUNTIME_PATTERNS.md 113); the collector sends them to Tempo.
+  OTEL_TRACES_SAMPLE_RATIO: ${OTEL_TRACES_SAMPLE_RATIO:-1.0}
   # Pyroscope is in the observability stack; a push to a server that is not there is dropped without a delay (specs/022). Blank turns profiling off.
   PYROSCOPE_SERVER_ADDRESS: ${PYROSCOPE_SERVER_ADDRESS-http://host.docker.internal:4040}
 
