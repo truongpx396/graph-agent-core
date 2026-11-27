@@ -28,12 +28,21 @@ fi
 
 deploy/prod/compose.sh up -d --remove-orphans
 printf '%s\n' "$tag" > .image-tag
-# `up -d` recreates a container when its definition changes, never when only a file mounted into it does: without this Caddy keeps its old
-# routing and log format, and the collectors their old pipelines. A reload is graceful, and with an invalid config Caddy keeps the old one
-# (the release then stops here).
-deploy/prod/compose.sh restart promtail otel-collector-agent
-if ! timeout 60 bash -c 'until deploy/prod/compose.sh exec -T caddy caddy reload --config /deploy/prod/caddy/Caddyfile --adapter caddyfile; do sleep 3; done'; then
-  echo "Caddy kept its previous configuration: fix deploy/prod/caddy or deploy/shared/caddy and release again" >&2
+
+# `up -d` recreates a container when its definition changes, never when only a file mounted into it does: without what follows Caddy keeps its old
+# routing and log format, and the collectors their old pipelines. A collector that will not restart is a warning, not a failed release.
+deploy/prod/compose.sh restart promtail otel-collector-agent || echo "warning: promtail or otel-collector-agent did not restart and may be running an old config" >&2
+# A reload is graceful, and with an invalid config Caddy keeps the old one. Retried: a container `up` has just recreated may not be listening yet.
+reloaded=
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if deploy/prod/compose.sh exec -T caddy caddy reload --config /deploy/prod/caddy/Caddyfile --adapter caddyfile; then
+    reloaded=1
+    break
+  fi
+  sleep 3
+done
+if [[ -z $reloaded ]]; then
+  echo "release $tag is up, but Caddy kept its previous configuration: fix deploy/prod/caddy or deploy/shared/caddy and release again" >&2
   exit 1
 fi
 

@@ -10,9 +10,14 @@ REPO = Path(__file__).resolve().parents[3]
 OLD, NEW = "a" * 40, "b" * 40
 PLAIN = "compose --project-directory . -f deploy/prod/docker-compose.yml"
 FAKES = {
-    # Logs the tag compose would interpolate with each call; `run` (the billing check) answers FAKE_MIGRATE.
-    "docker": 'printf "%s | %s\\n" "$IMAGE_TAG" "$*" >> "$FAKE_LOG"\ncase "$*" in *" run "*) exit "${FAKE_MIGRATE:-0}";; esac\n',
+    # Logs the tag compose would interpolate with each call; `run` (the billing check) answers FAKE_MIGRATE, `restart` (the collectors)
+    # FAKE_RESTART and `exec` (Caddy's reload) FAKE_RELOAD.
+    "docker": (
+        'printf "%s | %s\\n" "$IMAGE_TAG" "$*" >> "$FAKE_LOG"\n'
+        'case "$*" in *" run "*) exit "${FAKE_MIGRATE:-0}";; *" restart "*) exit "${FAKE_RESTART:-0}";; *" exec "*) exit "${FAKE_RELOAD:-0}";; esac\n'
+    ),
     "curl": "exit 0\n",
+    "sleep": "exit 0\n",  # between the reload's retries
     # `timeout N cmd...`: the front door answers (run the command) or never does (exit as coreutils does).
     "timeout": '[ "${FAKE_READY:-1}" = 1 ] || exit 124\nshift\nexec "$@"\n',
 }
@@ -48,8 +53,27 @@ def release(droplet, tag: str, **env: str):
 def test_a_release_pulls_starts_records_the_tag_and_prunes_only_once_ready(droplet):
     result, calls, recorded = release(droplet, NEW)
     assert result.returncode == 0, result.stderr
-    assert calls == [f"{NEW} | {PLAIN} pull", f"{NEW} | {PLAIN} up -d --remove-orphans", f"{NEW} | image prune -af --filter until=168h"]
+    assert calls == [
+        f"{NEW} | {PLAIN} pull",
+        f"{NEW} | {PLAIN} up -d --remove-orphans",
+        f"{NEW} | {PLAIN} restart promtail otel-collector-agent",
+        f"{NEW} | {PLAIN} exec -T caddy caddy reload --config /deploy/prod/caddy/Caddyfile --adapter caddyfile",
+        f"{NEW} | image prune -af --filter until=168h",
+    ]
     assert recorded == NEW
+
+
+def test_a_caddy_that_refuses_the_new_config_fails_the_release_and_keeps_the_old_images(droplet):
+    result, calls, recorded = release(droplet, NEW, FAKE_RELOAD="1")
+    assert result.returncode == 1 and "Caddy kept its previous configuration" in result.stderr
+    assert sum(" exec " in call for call in calls) == 10, "retried: a container just recreated may not be listening yet"
+    assert not any("prune" in call for call in calls) and recorded == NEW
+
+
+def test_a_collector_that_does_not_restart_is_a_warning_not_a_failed_release(droplet):
+    result, calls, _ = release(droplet, NEW, FAKE_RESTART="1")
+    assert result.returncode == 0 and "did not restart" in result.stderr
+    assert any("prune" in call for call in calls)
 
 
 @pytest.mark.parametrize("tag", ["", "latest", "b" * 39, "B" * 40, f"{NEW};reboot"])
