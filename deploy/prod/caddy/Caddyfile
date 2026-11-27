@@ -13,6 +13,10 @@
 # Behind a CDN (Cloudflare) later: `trusted_proxies` and `client_ip_headers` in a global `servers` block make `{client_ip}` the address behind it,
 # which is what authlimit charges the address limits to; authlimit itself changes not at all.
 {
+	# The server's own lines, a failed upstream's request among them, are redacted like the access lines.
+	log default {
+		import ../../shared/caddy/redacted-format.caddyfile
+	}
 }
 
 # The API's replicas. `dynamic a` re-resolves the `api` service name every `refresh` and treats every A record Docker Compose's embedded DNS returns
@@ -49,24 +53,12 @@ import ../../shared/caddy/gateway.caddyfile
 {$API_DOMAIN} {
 	import api_site
 	encode gzip
-	log {
-		output stdout
-		format json
-	}
 }
 
 {$AUTH_DOMAIN} {
 	import auth_site
-	log {
-		output stdout
-		format json
-	}
 }
 
 {$MCP_DOMAIN} {
 	import mcp_site
-	log {
-		output stdout
-		format json
-	}
 }

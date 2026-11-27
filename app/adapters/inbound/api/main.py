@@ -33,6 +33,7 @@ announces the mode.
 """
 import asyncio
 import contextlib
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -49,6 +50,7 @@ from app.adapters.inbound.api.openapi import (
     TAGS,
 )
 from app.adapters.inbound.api.rate_limit import WebhookRateLimitMiddleware
+from app.adapters.inbound.api.request_log import RequestLogMiddleware
 from app.adapters.inbound.api.routers import chat, ingest, system, usage
 from app.agent.runtime.core import close_checkpointer_pool, init_graph_async
 from app.billing_integration import http as billing_http
@@ -66,7 +68,9 @@ from app.platform.telemetry import configure_telemetry
 # Called at import time, before uvicorn logs anything — without this, the
 # service had no logging handler at all, so every `logger.info(...)` call
 # was silently discarded under `make serve` (see logging_config.py).
-configure_logging()
+configure_logging(service="agent-core-api")
+# `RequestLogMiddleware` writes the access line, with the id, the route and the duration.
+logging.getLogger("uvicorn.access").disabled = True
 # Every port gets its production adapter (app/bootstrap.py), at import like the logging above; the lifespan then refuses to start with one missing.
 wire()
 
@@ -138,6 +142,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Added last, so outermost: a refused webhook and a CORS preflight are logged and carry an id too.
+app.add_middleware(RequestLogMiddleware)
 
 app.include_router(system.router)
 app.include_router(chat.router)

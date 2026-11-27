@@ -56,6 +56,17 @@
 	}
 }
 
+# One redacted JSON access line per request, in development and production alike.
+(access_log) {
+	log {
+		output stdout
+		import redacted-format.caddyfile
+	}
+	# The id the API put on its response, so the door's line and the app's lines are found by one search. Empty for a refused request.
+	log_append request_id {http.response.header.X-Request-Id}
+	log_append user_agent {http.request.header.User-Agent}
+}
+
 # The MCP gateway's replicas (the same shape as above).
 (mcp_gateway_pool) {
 	# Every replica Docker's DNS returns is a live upstream, so `--scale mcp-gateway=N` load-balances with no sticky routing: the
@@ -80,6 +91,7 @@
 # The MCP servers and the metadata documents a client finds them by (RFC 9728 puts those at the host root). Nothing else of
 # mcp-gateway is routed: /healthz and /readyz are for the load balancer, inside the network.
 (mcp_site) {
+	import access_log
 	# The MCP routes ask authlimit first, in LIMIT-ONLY mode: it identifies the caller from the token to charge the tenant's and the
 	# person's buckets and to honour revocation, but it never decides authentication here. The MCP gateway verifies the token itself (the
 	# MCP authorization specification requires the server to), so a request with no token, or a bad one, is passed straight through and
@@ -120,6 +132,7 @@
 # how `make authlimit-smoke` sees exactly what a real API would have been given) or the API itself (`make authlimit-up-app`, with the API in
 # identity mode so it trusts only the identity this door adds) in development, and the API's replicas in production.
 (api_site) {
+	import access_log
 	# Body ceilings, the outer bound (the API's own field limits, ChatRequest, say which field was too large). A request body was parsed whole, copied into
 	# a Redis stream entry and then into the checkpoint, with no limit at the door. `/ingest/upload` takes up to 5 files of 25 MB each, so the site as a
 	# whole stops at 140 MB; a chat request is text and a few images, so `/chat/*` stops at 32 MB. Both apply to a chat request and the smaller one
@@ -204,6 +217,7 @@
 # The authorization server. Its issuer is this origin (`origin` in the casdoor service), so a token's `iss` and the metadata a client
 # discovers agree.
 (auth_site) {
+	import access_log
 	# Credentials and tokens are charged to the caller's address: `/api/login` takes a password (the page's and the channels' headless
 	# sign-in) and `/api/login/oauth/access_token` turns a code or a refresh token into an access token. There is no token to check yet, so
 	# the address is all there is. This bounds how fast one address can try passwords or spray accounts; it does not stop an attacker from

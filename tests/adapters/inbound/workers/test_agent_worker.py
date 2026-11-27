@@ -31,6 +31,7 @@ from app.ports.outbound.jobs import (
 )
 from tests.adapters.outbound.redis.test_queue import FakeRedis
 from tests.conftest import metric_value as _count
+from tests.fakes.json_logs import json_logs
 
 REQUESTS_STREAM = requests_stream_key("ecorp")  # most of this module runs jobs as the "ecorp" domain
 
@@ -1959,3 +1960,32 @@ class TestReclaimSweepsEveryDomain:
         await asyncio.wait_for(task, timeout=1)
 
         assert requests_stream_key("ops") in swept
+
+
+class TestJobLogLines:
+    async def test_every_line_of_a_job_carries_its_ids_and_the_job_is_timed(self, monkeypatch):
+        async def fake_turn(text, thread_id, ctx, require_approval=False, images=None, cancel_check=None):
+            logging.getLogger("app.somewhere.deep").info("inside_the_turn")
+            yield {"type": "done"}
+
+        monkeypatch.setattr(agent_worker, "astream_events_turn", fake_turn)
+        entry_id, fields = _entry(request_id="r1", thread_id="t1")
+
+        with json_logs() as lines:
+            await _process(FakeRedis(), entry_id, fields)
+
+        by_message = {line["message"]: line for line in lines()}
+        for message in ("agent_job_started", "inside_the_turn", "agent_job_finished"):
+            line = by_message[message]
+            assert (line["request_id"], line["thread_id"], line["tenant"], line["principal"], line["domain"]) == ("r1", "t1", "ecorp", "p1", "ecorp")
+        assert by_message["agent_job_finished"]["duration_ms"] >= 0
+
+    async def test_a_payload_with_no_usable_ctx_is_still_acked(self, monkeypatch):
+        """The ids are read before the `try` that acks: a malformed payload must not raise there and be redelivered for ever."""
+        client = FakeRedis()
+        entry_id, fields = _entry(request_id="r1")
+        fields["payload"] = json.dumps({"request_id": "r1", "kind": "turn", "ctx": "not-a-dict"})
+
+        await _process(client, entry_id, fields)
+
+        assert client.acked == [entry_id]

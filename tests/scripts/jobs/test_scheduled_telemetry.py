@@ -33,7 +33,7 @@ from scripts.tools import ops_investigate
 def events(monkeypatch):
     """Record the order in which a job's setup, work and flush happen."""
     log: list[str] = []
-    monkeypatch.setattr(job_runtime, "configure_logging", lambda: log.append("logging"))
+    monkeypatch.setattr(job_runtime, "configure_logging", lambda **_: log.append("logging"))
     monkeypatch.setattr(job_runtime, "configure_telemetry", lambda name: log.append(f"telemetry:{name}"))
     monkeypatch.setattr(job_runtime, "shutdown_telemetry", lambda: log.append("flush"))
     return log

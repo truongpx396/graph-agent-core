@@ -20,7 +20,7 @@ scrape_configs:
         refresh_interval: 5s
     relabel_configs:
       - source_labels: [__meta_docker_container_label_com_docker_compose_service]
-        regex: "^(api|agent-worker|ingest-worker|litellm|postgres|redis|qdrant|minio|langfuse-web|open-webui|postgres-exporter|redis-exporter)$"
+        regex: "^(api|agent-worker|ingest-worker|ml-service|mcp-gateway|telegram-bot|caddy-gateway|authlimit|casdoor|litellm|postgres|redis|qdrant|minio|langfuse-web|open-webui|postgres-exporter|redis-exporter)$"
         action: keep
       - source_labels: [__meta_docker_container_name]
         regex: "/(.*)"
@@ -30,12 +30,21 @@ scrape_configs:
       - source_labels: [__meta_docker_container_label_com_docker_compose_service]
         target_label: compose_service
     pipeline_stages:
-      # The app roles (api, agent-worker, ingest-worker) log one JSON object per line: parse it so `level` and `logger` are Loki labels
-      # a dashboard can filter on. Containers that log plain text skip these stages (the json stage no-ops on non-JSON).
+      # The app roles, authlimit and Caddy log one JSON object per line: parse it so `level` and `logger` are Loki labels a dashboard can
+      # filter on. Containers that log plain text skip these stages (the json stage no-ops on non-JSON). Ids (request_id, thread_id) stay
+      # IN the line, never labels: every value would be its own stream.
+      # Health probes come every few seconds, all day, and are worth a line only when they fail.
+      - drop:
+          expression: '"GET /(health(/[a-z]+)?|healthz|readyz|metrics) HTTP/[0-9.]+" 200'
+          drop_counter_reason: health_probe
       - json:
           expressions:
             level: level
             logger: logger
+      # One spelling per level: Python writes `warning`, authlimit `WARN`, others `warn`. The dashboard filters on this label.
+      - template:
+          source: level
+          template: '{{ if .Value }}{{ if eq (ToLower .Value) "warn" }}warning{{ else }}{{ ToLower .Value }}{{ end }}{{ end }}'
       - labels:
           level:
           logger:

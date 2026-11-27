@@ -67,3 +67,15 @@ The queue is correct only while the turn's limit (`REQUEST_TIMEOUT_SECONDS`), th
 - **Bug:** the lock was never renewed, so a second job could take it mid-turn. The worker renews it every third of its 60 s lifetime with a compare-and-extend script; a lost lock is counted (`AgentThreadLockLost`).
 - **Bug:** a worker claimed jobs it could not start, so "idle" measured the queue. It now takes free slots first (`claim_free_slots`).
 - **Rule:** write a timeout relation as a check that fails at start-up, and make its test name the variables.
+
+### 112. One request, findable in every service's logs, and no secret in any of them
+Every line is JSON. The ids of the request or job in progress are bound once (`app/core/log_context.py`: `request_id`, `thread_id`, `tenant`, `principal`, `domain`, `job_id`) and the formatter stamps them on every line below, with the `service` name.
+- **`request_id` is what the client was given** in `X-Request-Id`. A queued chat route answers with the job's id, so the API, the worker and the front door's access line share it; every other response gets one minted. An approval resume is a new request: `thread_id` joins the two. An upload logs `ingest_job_queued`, which joins its request to the job ids.
+- **One access line per request** (`api/request_log.py`): method, route, path, status, duration; written when an SSE stream ends. Probes and static files only when they fail. uvicorn's own access log is off.
+- **Collected and followed:** Promtail ships the app and the front door and normalises level names; the `Agent Core Logs` dashboard has boxes for a request id, a thread id and text (in Explore's Table view, `request_id` is also a link). Ids are never Loki labels (each value would be a stream).
+- **Langfuse** traces carry `request_id`, `domain` and `tenant` as metadata; their session is the thread.
+- **Bug:** `httpx` logged every URL at INFO and the Telegram Bot API carries the token in the path. `httpx` is held at WARNING and every string value is scrubbed (a traceback quotes the URL too).
+- **Bug:** the front door's access and error lines held a sign-in's `code` and Telegram's webhook secret header. They now hold no query and no header (`deploy/shared/caddy/redacted-format.caddyfile`).
+- **Bug:** the dashboard defaulted to `error|warn`: Python writes `warning`, so every warning was hidden, and the ids were on `info` lines.
+- **Principals are logged** as the identity provider names them, which may be an email: treat the log store as holding personal data.
+- **Gap:** the MCP gateway, the Telegram bot and `authlimit` bind no per-request id; the ML service logs plain text. Third-party containers keep their own formats.

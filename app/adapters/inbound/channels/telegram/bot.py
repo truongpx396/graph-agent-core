@@ -496,6 +496,6 @@ async def run() -> None:
 
 
 if __name__ == "__main__":
-    configure_logging()
+    configure_logging(service="agent-core-telegram")
     configure_telemetry("agent-core-telegram")
     asyncio.run(run())

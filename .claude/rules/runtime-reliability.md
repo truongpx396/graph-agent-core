@@ -78,6 +78,11 @@ session; the pattern documents (`docs/README.md` maps each number to its file) h
   "never landed". Don't wrap a raw sandbox command or any non-idempotent write in it. Half-open
   admits exactly one trial under the lock.
 
+## Logs
+
+- An entry point opens `log_context.scope(...)` and code that learns an id later calls `log_context.add(...)` (RUNTIME_PATTERNS.md 112); never pass a request id down by hand. Ids and names only: no message content, no URL with a query or a token.
+- A new library that logs each outbound URL goes in `logging_config._QUIET_LOGGERS`. A new service goes in BOTH Promtail allowlists.
+
 ## Metrics and alerts
 
 - Add counters/histograms in `app/core/metrics.py` using its `.labels(...).inc()` surface;

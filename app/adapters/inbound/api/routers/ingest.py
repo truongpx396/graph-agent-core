@@ -178,6 +178,8 @@ async def ingest_upload(
             )
             continue
 
+        # The line that joins this request's id to the id the ingest worker logs under.
+        logger.info("ingest_job_queued", extra={"job_id": job_id, "upload_filename": filename})
         results.append(IngestUploadResult(filename=filename, job_id=job_id, error=None))
     return results
 

@@ -21,6 +21,13 @@ datasources:
     access: proxy
     url: http://loki:3100
     editable: true
+    jsonData:
+      # Makes `request_id` a link to every line of that request (seen in Explore's Table view; Grafana 13's line details do not show it). `$$` is provisioning's escape for a literal dollar sign.
+      derivedFields:
+        - name: request_id
+          matcherRegex: '"request_id":\s*"([^"]+)"'
+          url: '/d/agent-core-logs?var-request_id=$${__value.raw}&var-service=$$__all&from=now-7d&to=now'
+          urlDisplayLabel: All lines of this request
 
   # Flame graphs (specs/022): Explore -> Pyroscope, application `agent-core-api` / `agent-core-agent-worker` / `agent-core-ingest-worker`,
   # profile type process_cpu, filtered by the `domain` and `replica` tags. Nothing else in this stack depends on it being up.

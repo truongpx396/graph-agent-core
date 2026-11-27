@@ -18,7 +18,7 @@ import time
 import pytest
 
 from app.agent.runtime import stream as runtime_stream
-from app.core import tracing
+from app.core import log_context, tracing
 
 
 class _FakeLangfuse:
@@ -194,3 +194,15 @@ def test_a_flush_that_finishes_in_time_is_followed_by_the_shutdown(fake_sdk):
 
     assert (client.flushes, client.shutdowns) == (1, 1)
 
+
+
+def test_a_trace_carries_the_ids_the_log_lines_carry(fake_sdk, monkeypatch):
+    """Without them a log line and its Langfuse trace could only be matched by time."""
+    opened = []
+    monkeypatch.setattr(_FakeLangfuse, "trace", lambda self, **kwargs: opened.append(kwargs) or _FakeTrace())
+
+    with log_context.scope(request_id="req-1", domain="support", tenant="acme", principal="ada@example.com", thread_id="t-1"):
+        runtime_stream._open_trace("chat-turn-stream", "t-1", "hello")
+
+    # The principal is not repeated here, and the thread is the session already.
+    assert opened[0]["metadata"] == {"request_id": "req-1", "domain": "support", "tenant": "acme"}

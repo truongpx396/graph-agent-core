@@ -76,6 +76,7 @@ import json
 import logging
 import signal
 import socket
+import time
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import aclosing
@@ -121,7 +122,7 @@ from app.agent.runtime.stream import (
     cancel_run,
 )
 from app.bootstrap import close_adapters, verify_wired, wire
-from app.core import metrics
+from app.core import log_context, metrics
 from app.core.config import (
     AGENT_WORKER_DOMAINS,
     AGENT_WORKER_MAX_CONCURRENCY,
@@ -137,7 +138,7 @@ from app.core.errors import (
     internal_error_envelope,
 )
 from app.platform import sql_store
-from app.platform.logging_config import bind_request_id, configure_logging
+from app.platform.logging_config import configure_logging
 from app.platform.profiling import start_profiling
 from app.platform.redis_client import UNAVAILABLE_ERRORS, StreamReadResponse, get_client
 from app.platform.telemetry import configure_telemetry
@@ -201,6 +202,13 @@ async def _keep_lock_alive(client: redis.Redis, thread_id: str, token: str) -> N
             metrics.agent_thread_lock_lost_total.inc()
             logger.warning("agent_worker_thread_lock_lost", extra={"thread_id": thread_id})
             return
+
+
+def _log_ids(payload: dict[str, Any]) -> dict[str, str | None]:
+    """The ids a job's log lines carry. Defensive: this runs before the `try` that acks, so a malformed payload must not raise here."""
+    ctx = payload.get("ctx")
+    ctx = ctx if isinstance(ctx, dict) else {}
+    return {"thread_id": payload.get("thread_id"), "tenant": ctx.get("tenant"), "principal": ctx.get("principal")}
 
 
 async def _publish_events(client: redis.Redis, request_id: str, events: AsyncGenerator[dict[str, Any], None], release_lock: ReleaseLock) -> None:
@@ -384,7 +392,9 @@ async def process_request(client: redis.Redis, entry_id: str, fields: dict[str, 
             renewal.cancel()
         await release_thread_lock(client, thread_id, lock_token)
 
-    with bind_request_id(request_id), bind_domain(domain):
+    with log_context.scope(request_id=request_id, domain=domain, **_log_ids(payload)), bind_domain(domain):
+        started = time.monotonic()
+        logger.info("agent_job_started", extra={"kind": kind})
         try:
             thread_id = payload["thread_id"]
             if handler is None:
@@ -425,6 +435,7 @@ async def process_request(client: redis.Redis, entry_id: str, fields: dict[str, 
             )
         finally:
             await ack_and_delete(client, requests_stream_key(domain), CONSUMER_GROUP, entry_id)
+            logger.info("agent_job_finished", extra={"kind": kind, "duration_ms": int((time.monotonic() - started) * 1000)})
 
 
 async def _process_with_limit(
@@ -723,7 +734,7 @@ async def run() -> None:
 
 
 if __name__ == "__main__":
-    configure_logging()
+    configure_logging(service="agent-core-agent-worker")
     configure_telemetry("agent-core-agent-worker")
     # One tag value: a comma would read as a separator in a Pyroscope query.
     start_profiling("agent-core-agent-worker", domain="+".join(d.strip() for d in AGENT_WORKER_DOMAINS.split(",") if d.strip()))

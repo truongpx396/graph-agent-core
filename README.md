@@ -716,7 +716,7 @@ hand, in order (`psql -U langfuse -d appdata -f postgres-init/NN-….sql`).
 
 ## 📊 Observability
 
-- 📝 **Logs:** structlog JSON from every service, with `request_id`/`thread_id` on each line (pattern 14).
+- 📝 **Logs:** JSON from the API and the workers, each line carrying `request_id` (the response's `X-Request-Id`), `thread_id`, tenant, principal and domain, with one access line per request; no secret in a line. The `Agent Core Logs` dashboard follows one request or conversation by id ([RUNTIME_PATTERNS.md](docs/RUNTIME_PATTERNS.md) 112).
 - 📈 **Metrics:** 70+ OpenTelemetry counters and histograms (`app/core/metrics.py`), **pushed** over OTLP by the API and every worker replica to one otel-collector (pattern 11).
 - 🔭 **Traces:** Langfuse, grouped by `thread_id`.
 - 💵 **Cost:** one usage event per model call (tenant- and principal-scoped, with the concrete model behind each alias) is what the dollar caps sum ([COST_GOVERNANCE.md](docs/COST_GOVERNANCE.md), patterns 38, 51).

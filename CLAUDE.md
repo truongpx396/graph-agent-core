@@ -104,7 +104,7 @@ they delete volumes or kill running processes.
   `app/bootstrap.py::adapters()` is the one table of port to adapter; every entrypoint calls `wire()` first. In `app/agent` and
   `app/domains` import no infrastructure client (psycopg, redis, qdrant_client, openai, httpx, ...) and no adapter:
   `tests/core/test_architecture_layers.py` fails the build. Tests bind a fake with `Slot.overriding` (`tests/fakes/`).
-- `app/core/` — what every package may use and that depends on none of them: config, security (`SecurityCtx`, `AccessScope`),
+- `app/core/` — what every package may use and that depends on none of them: config, `log_context.py` (the ids every log line carries), security (`SecurityCtx`, `AccessScope`),
   metrics, errors, scrubbing, resilience, `gateway.py` (the identity the gateway is told) and `moderation.py`, and what every
   tool runs through: `tool_runtime.py` (timeout, scrub, fail-closed ctx) and `tool_idempotency.py` (the exactly-once guard). A
   module belongs here when it imports nothing from `agent`, `domains`, `api` or an adapter, and no infrastructure client. The

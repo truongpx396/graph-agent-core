@@ -33,6 +33,7 @@ from app.adapters.inbound.api.schemas import (
 )
 from app.agent.runtime import feedback, sessions
 from app.agent.runtime.stream import get_pending_approval, get_session_messages
+from app.core import log_context
 from app.core.config import (
     CHAT_FIRST_RESPONSE_DEADLINE_SECONDS,
     CHAT_SUBMIT_DEDUP_TTL_SECONDS,
@@ -146,6 +147,7 @@ async def _require_conversation_owner(
     sends): another caller can never squat a Telegram chat's conversation before
     its owner writes — see `sessions.TELEGRAM_THREAD_PREFIX`.
     """
+    log_context.add(thread_id=thread_id)  # every send, resume, cancel and re-read comes through here, refused or not
     prefix = sessions.TELEGRAM_THREAD_PREFIX
     claimable = not thread_id.startswith(prefix) or thread_id.startswith(f"{prefix}{ctx['principal']}:")
     if claim_with is not None and claimable:
@@ -205,6 +207,7 @@ async def chat_stream_queued(
         request_id=candidate_request_id,
         ttl_seconds=claim_ttl,
     )
+    log_context.add(request_id=request_id)  # from here on, the job's id: what the worker logs and the client is given
     if is_new:
         try:
             await turn_queue.get().publish_request(
@@ -278,6 +281,7 @@ async def chat_resume(
     """
     await _require_conversation_owner(ctx, req.thread_id, domain)
     request_id = uuid.uuid4().hex
+    log_context.add(request_id=request_id)
     await turn_queue.get().publish_resume_request(
         request_id=request_id,
         thread_id=req.thread_id,
@@ -315,6 +319,7 @@ async def chat_cancel(
     await _require_conversation_owner(ctx, req.thread_id, domain)
     await turn_queue.get().set_cancel_flag(req.thread_id)
     request_id = uuid.uuid4().hex
+    log_context.add(request_id=request_id)
     await turn_queue.get().publish_cancel_request(
         request_id=request_id, thread_id=req.thread_id, ctx=ctx, domain=domain
     )

@@ -38,7 +38,7 @@ from app.agent.graph.stream_events import STREAM_EVENT
 from app.agent.runtime import cancelled_turn
 from app.agent.runtime import core as runtime_module
 from app.agent.runtime.held_answer import HeldAnswer
-from app.core import gateway, metrics, tracing
+from app.core import gateway, log_context, metrics, tracing
 from app.core.config import (
     REQUEST_TIMEOUT_SECONDS,
     UNATTENDED_MAX_DECLINE_ROUNDS,
@@ -209,6 +209,12 @@ def _build_human_content(text: str, images: list[str] | None) -> str | list[str 
 # Events are serialised to a unified SSE-safe dict so FastAPI/CLI don't
 # need to know the LangGraph version.
 
+def _trace_metadata() -> dict[str, str]:
+    """The ids that match a Langfuse trace to this turn's log lines (RUNTIME_PATTERNS.md 112). `session_id` is already the thread."""
+    bound = log_context.current()
+    return {name: bound[name] for name in ("request_id", "domain", "tenant") if name in bound}
+
+
 def _open_trace(name: str, session_id: str, input_text: str) -> tuple[Any, list[Any]]:
     """Best-effort: open a Langfuse trace and a CallbackHandler scoped to it.
 
@@ -226,7 +232,7 @@ def _open_trace(name: str, session_id: str, input_text: str) -> tuple[Any, list[
             # turn: each construction starts three threads nothing stops.
             lf = tracing.get_langfuse()
             if lf is not None:
-                trace = lf.trace(name=name, session_id=session_id, input=input_text)
+                trace = lf.trace(name=name, session_id=session_id, input=input_text, metadata=_trace_metadata())
                 # stateful_client (not trace_id) is CallbackHandler's actual
                 # parameter for this in langfuse==2.60.10 — passing trace_id
                 # raises TypeError, which used to be silently swallowed here,

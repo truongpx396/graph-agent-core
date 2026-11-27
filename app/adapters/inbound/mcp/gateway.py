@@ -253,7 +253,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args(argv)
     wire()
-    configure_logging()
+    configure_logging(service="agent-core-mcp-gateway")
     configure_telemetry("agent-core-mcp-gateway")  # metrics are PUSHED (OTLP), like the workers': nothing scrapes this process
     try:
         app = create_app()

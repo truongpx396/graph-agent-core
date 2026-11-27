@@ -25,7 +25,7 @@ def scheduled_job(service_name: str) -> Iterator[None]:
     their production adapters first (`app/bootstrap.py`): a job is a process
     entrypoint like any other."""
     wire()
-    configure_logging()
+    configure_logging(service=service_name)
     configure_telemetry(service_name)
     try:
         yield
