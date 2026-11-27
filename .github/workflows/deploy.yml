@@ -121,7 +121,7 @@ jobs:
             deploy/prod/docker-compose.yml deploy/prod/infra.yml deploy/prod/app.yml \
             deploy/prod/gateway.yml deploy/prod/collectors.yml deploy/prod/tools.yml \
             deploy/prod/compose.sh deploy/prod/release.sh deploy/prod/crawler-firewall.sh \
-            deploy/prod/caddy/Caddyfile deploy/shared/caddy/gateway.caddyfile \
+            deploy/prod/caddy/Caddyfile deploy/shared/caddy/gateway.caddyfile deploy/shared/caddy/redacted-format.caddyfile \
             deploy/prod/litellm-config.yaml \
             "$DROPLET_HOST":/opt/graph-agent-core/
           rsync -az --delete postgres-init/ "$DROPLET_HOST":/opt/graph-agent-core/postgres-init/
@@ -165,9 +165,11 @@ jobs:
           rsync -azR deploy/prod/observability.yml deploy/prod/caddy/Caddyfile.observability "$OBS_DROPLET_HOST":/opt/agent-core-observability/
           rsync -az --delete observability/ "$OBS_DROPLET_HOST":/opt/agent-core-observability/observability/
 
+      # The restart: `up -d` does not recreate a container whose mounted config file alone changed (alert rules, datasources, pipelines).
       - name: Pull new images and restart
         run: |
           ssh "$OBS_DROPLET_HOST" "cd /opt/agent-core-observability && \
             docker compose --project-directory . -f deploy/prod/observability.yml pull && \
             docker compose --project-directory . -f deploy/prod/observability.yml up -d --remove-orphans && \
+            docker compose --project-directory . -f deploy/prod/observability.yml restart && \
             docker image prune -af --filter until=168h"

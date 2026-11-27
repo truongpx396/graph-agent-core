@@ -970,7 +970,7 @@ agent_profiling_start_failures_total = Counter(
 class MetricsCallbackHandler(BaseCallbackHandler):
     """Records tool-call/tool-error counts AND a structured per-call audit
     line (pattern 37) — tool name, a fingerprint of args/result (never raw
-    content), and LangChain's `run_id` correlating start to outcome. Pass an
+    content), and LangChain's run id as `tool_run_id` (`run_id` is the TURN's, on node lines) correlating start to outcome. Pass an
     instance in `config["callbacks"]` — fires for every tool run in the
     graph's ToolNode.
 
@@ -986,7 +986,7 @@ class MetricsCallbackHandler(BaseCallbackHandler):
             "tool_called",
             extra={
                 "tool": name,
-                "run_id": str(run_id),
+                "tool_run_id": str(run_id),
                 "args_fingerprint": _fingerprint(input_str),
             },
         )
@@ -996,7 +996,7 @@ class MetricsCallbackHandler(BaseCallbackHandler):
         logger.info(
             "tool_succeeded",
             extra={
-                "run_id": str(run_id),
+                "tool_run_id": str(run_id),
                 "result_fingerprint": _fingerprint(str(result_text)),
             },
         )
@@ -1005,5 +1005,5 @@ class MetricsCallbackHandler(BaseCallbackHandler):
         agent_tool_errors_total.inc()
         logger.warning(
             "tool_failed",
-            extra={"run_id": str(run_id), "error_class": type(error).__name__},
+            extra={"tool_run_id": str(run_id), "error_class": type(error).__name__},
         )

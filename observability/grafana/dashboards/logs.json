@@ -1,9 +1,9 @@
 {
   "title": "Agent Core Logs",
   "uid": "agent-core-logs",
-  "description": "Cross-service Loki log view (api, agent-worker × domain, ingest-worker, and every other container Promtail scrapes), filterable by service and level.",
+  "description": "Loki log view of the app and its front door: filter by service and level, or follow one request or conversation by id (RUNTIME_PATTERNS.md 112).",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "editable": true,
   "tags": [
     "agent-core-demo"
@@ -86,8 +86,8 @@
         "includeAll": true,
         "allValue": ".+",
         "current": {
-          "text": "All",
-          "value": "$__all"
+          "text": ["api", "agent-worker", "ingest-worker", "mcp-gateway", "telegram-bot", "ml-service", "caddy-gateway", "caddy", "authlimit"],
+          "value": ["api", "agent-worker", "ingest-worker", "mcp-gateway", "telegram-bot", "ml-service", "caddy-gateway", "caddy", "authlimit"]
         },
         "options": [],
         "hide": 0,
@@ -112,42 +112,65 @@
         "sort": 1,
         "multi": true,
         "includeAll": true,
-        "allValue": ".+",
+        "allValue": ".*",
         "current": {
-          "text": [
-            "error",
-            "warn"
-          ],
-          "value": [
-            "error",
-            "warn"
-          ]
+          "text": "All",
+          "value": "$__all"
         },
         "options": [],
         "hide": 0,
         "skipUrlSync": false,
         "regex": ""
+      },
+      {
+        "name": "request_id",
+        "label": "Request / job id",
+        "type": "textbox",
+        "description": "The X-Request-Id response header, or an ingest job id.",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "options": [{"text": "", "value": "", "selected": true}],
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "thread_id",
+        "label": "Conversation (thread_id)",
+        "type": "textbox",
+        "description": "Joins a turn with its approval, which has a request id of its own.",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "options": [{"text": "", "value": "", "selected": true}],
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "search",
+        "label": "Contains text",
+        "type": "textbox",
+        "description": "Case-sensitive substring of the whole line.",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "options": [{"text": "", "value": "", "selected": true}],
+        "hide": 0,
+        "skipUrlSync": false
       }
     ]
   },
   "panels": [
     {
-      "id": 1,
-      "type": "row",
-      "title": "Logs (Loki)",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      },
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "type": "logs",
-      "title": "Logs — filter by $service / $level",
-      "description": "Every container's stdout, parsed as JSON where possible (app/platform/logging_config.py's structlog output) — see ../promtail/promtail-config.yaml. Use the Service/Level dropdowns above to filter; defaults to error+warn across all services.",
+      "id": 3,
+      "type": "timeseries",
+      "title": "Errors and warnings by service",
       "datasource": {
         "type": "loki",
         "uid": "loki"
@@ -158,23 +181,71 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{compose_service=~\"$service\"} | json | level=~\"$level\"",
+          "refId": "A",
+          "legendFormat": "{{compose_service}}",
+          "expr": "sum by (compose_service) (count_over_time({compose_service=~\"$service\", level=~\"error|warning|critical|fatal\"} |= `$request_id` |= `$thread_id` |= `$search` [$__auto]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "stacking": {
+              "mode": "normal"
+            }
+          },
+          "decimals": 0,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "right"
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 2,
+      "type": "logs",
+      "title": "Logs",
+      "description": "Fill a box above to follow one request or conversation. In Explore's Table view, the request_id column also links to all of that request's lines.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{compose_service=~\"$service\", level=~\"$level\"} |= `$request_id` |= `$thread_id` |= `$search`",
           "refId": "A"
         }
       ],
       "options": {
         "showTime": true,
-        "showLabels": true,
-        "wrapLogMessage": false,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "enableLogDetails": true,
         "sortOrder": "Descending"
       },
       "gridPos": {
-        "h": 18,
+        "h": 22,
         "w": 24,
         "x": 0,
-        "y": 1
-      },
-      "id": 2
+        "y": 6
+      }
     }
   ]
 }

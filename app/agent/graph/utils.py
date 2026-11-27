@@ -52,6 +52,12 @@ def named_edge(router: RouterFn, name: str) -> RouterFn:
     return named
 
 
+def _run_id_after(result: Any, before: str) -> str:
+    """The node that STARTS a turn (`validate_input`) returns the turn's `run_id`; the state it was given still holds the previous turn's, so
+    its own line was filed under the wrong turn."""
+    return str(result.get("run_id", before)) if isinstance(result, dict) else before
+
+
 def instrumented(node_name: str) -> Callable[[F], F]:
     """Wrap a node with structured start/complete/failed/paused lifecycle logs.
 
@@ -107,7 +113,7 @@ def instrumented(node_name: str) -> Callable[[F], F]:
                     "node_completed",
                     extra={
                         "node": node_name,
-                        "run_id": run_id,
+                        "run_id": _run_id_after(result, run_id),
                         "duration_ms": int((time.monotonic() - start) * 1000),
                     },
                 )
@@ -142,7 +148,7 @@ def instrumented(node_name: str) -> Callable[[F], F]:
                 "node_completed",
                 extra={
                     "node": node_name,
-                    "run_id": run_id,
+                    "run_id": _run_id_after(result, run_id),
                     "duration_ms": int((time.monotonic() - start) * 1000),
                 },
             )

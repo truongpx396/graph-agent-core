@@ -78,7 +78,7 @@ def test_operator_tenants_are_a_trimmed_comma_list_and_empty_means_nobody():
 
 
 def test_starting_without_an_issuer_exits_with_the_reason(monkeypatch):
-    monkeypatch.setattr(gateway, "configure_logging", lambda: None)  # force=True would drop pytest's own log handler
+    monkeypatch.setattr(gateway, "configure_logging", lambda **_: None)  # force=True would drop pytest's own log handler
     monkeypatch.setattr(gateway, "configure_telemetry", lambda _name: None)
     monkeypatch.setattr(gateway.app_settings, "mcp_gateway_issuer", "")
 

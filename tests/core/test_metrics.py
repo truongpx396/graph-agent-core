@@ -231,7 +231,7 @@ class TestToolCallAuditLog:
         assert len(called) == 1
         assert len(succeeded) == 1
         assert called[0].tool == "calculator"
-        assert called[0].run_id == succeeded[0].run_id  # correlated by the same run_id
+        assert called[0].tool_run_id == succeeded[0].tool_run_id  # correlated by the same tool run
         assert called[0].args_fingerprint  # a fingerprint, not raw args
         assert succeeded[0].result_fingerprint  # a fingerprint, not the raw result
 
@@ -254,7 +254,7 @@ class TestToolCallAuditLog:
         failed = [r for r in caplog.records if r.message == "tool_failed"]
         assert len(called) == 1
         assert len(failed) == 1
-        assert called[0].run_id == failed[0].run_id
+        assert called[0].tool_run_id == failed[0].tool_run_id
         assert failed[0].error_class
 
     async def test_audit_log_never_carries_raw_tool_args_or_result(self, caplog):

@@ -30,6 +30,8 @@ _STATIC_PATTERNS = [
         r"(?i)\b(password|passwd|token|secret|api[_-]?key)\s*[:=]\s*\S+",
         r"://[^:\s/@]+:[^@\s/]+@",  # scheme://user:PASSWORD@host in a URL
         r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",  # JWT-shaped
+        r"(?<=/bot)\d+:[A-Za-z0-9_-]+",  # a Telegram bot token in a Bot API URL
+        r"\b\d{8,12}:[A-Za-z0-9_-]{35}\b",  # the same token on its own
     ]
 ]
 
@@ -55,6 +57,14 @@ def _bound_secret_values() -> list[str]:
     return [c for c in candidates if c]
 
 
+def scrub_patterns(text: str) -> str:
+    """The credential SHAPES only. For the log formatter, which must not log from inside itself and must not cut this
+    deployment's short development passwords out of every line."""
+    for pattern in _STATIC_PATTERNS:
+        text = pattern.sub(_REDACTED, text)
+    return text
+
+
 def scrub(text: str) -> str:
     """Returns `text` with every credential-shaped or bound secret value
     replaced by `[REDACTED]`. Never raises — on unexpected failure this
@@ -63,9 +73,7 @@ def scrub(text: str) -> str:
     if not text:
         return text
     try:
-        scrubbed = text
-        for pattern in _STATIC_PATTERNS:
-            scrubbed = pattern.sub(_REDACTED, scrubbed)
+        scrubbed = scrub_patterns(text)
         for secret in _bound_secret_values():
             if secret in scrubbed:
                 scrubbed = scrubbed.replace(secret, _REDACTED)

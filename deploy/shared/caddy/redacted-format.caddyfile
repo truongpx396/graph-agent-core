@@ -1,0 +1,13 @@
+# What a line of the front door's log may hold (RUNTIME_PATTERNS.md 112). Imported inside every `log` block: the access log (gateway.caddyfile) and each entry file's
+# `log default`, because the ERROR line of a failed upstream (`http.log.error`) carries the same request object and goes to the default logger.
+#
+# Caddy's default JSON wrote the query string (a sign-in's `code` and `state`) and every request header it does not know to be a credential,
+# Telegram's webhook secret among them (both measured on the pinned image). So: no query, no headers.
+format filter {
+	wrap json
+	fields {
+		request>uri regexp \?.* ?REDACTED
+		request>headers delete
+		resp_headers delete
+	}
+}

@@ -6,6 +6,10 @@
 # The routing is deploy/shared/caddy/gateway.caddyfile's, the same file production's Caddyfile imports: this file says how each site is addressed and certified and what
 # sits behind it, and nothing else.
 {
+	# The server's own lines, a failed upstream's request among them, are redacted like the access lines.
+	log default {
+		import ../../shared/caddy/redacted-format.caddyfile
+	}
 	# Nothing listens on 80, so there is nothing to redirect from.
 	auto_https disable_redirects
 }

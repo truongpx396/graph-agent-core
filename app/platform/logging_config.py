@@ -5,64 +5,62 @@ scripts, which print for a human and would get JSON noise interleaved.
 Built on structlog, but no log call site changed: every call already goes through stdlib `logging` (`logger =
 logging.getLogger(__name__)`) with per-call `extra={...}` correlation data. `configure_logging()` wires
 structlog's `ProcessorFormatter` onto the ROOT logger's handler (the standard "structlog processes stdlib
-logging" recipe), so every call site gets JSON rendering, request_id injection and exception formatting for
-free.
+logging" recipe), so every call site gets JSON rendering, the ids of the request or job in progress
+(app/core/log_context.py), secret scrubbing and exception formatting for free.
 
 Three problems this fixes without changing what's logged:
 1. Plain `logging.basicConfig` silently drops every `extra` field.
 2. app/adapters/inbound/api/main.py had no logging handler at all under `make serve`: Python discarded every `logger.info(...)`
    (only WARNING+ reached stderr, without `extra`).
 3. `request_id`/`thread_id` was attached only at a turn's failure boundary, so every other log line of that
-   turn had no correlation id. `bind_request_id`/`request_id_var` fix it: a contextvar set once at the entry
-   point (it propagates through every `await` in that task) plus a structlog processor that reads it onto
-   every event.
+   turn had no correlation id. `log_context.scope` at the entry point plus a processor here fix it.
 
-Output JSON keys match the old formatter (`timestamp`, `level`, `logger`, `message`, `request_id` when bound,
-`extra=` fields, `exc_info` as a formatted traceback) except `level` is now lowercase (structlog convention),
-which the Promtail/Loki pipeline also expects.
+Output JSON keys: `timestamp`, `level` (lowercase, structlog convention, which Promtail/Loki expect), `logger`,
+`message`, `service` when named, the bound ids, `extra=` fields, `exc_info` as a formatted traceback.
+
+No secret in a line (RUNTIME_PATTERNS.md 112): `httpx` logged every URL at INFO, and the Telegram Bot API
+carries the bot's token in the path, so the token was written to the logs on every poll. `httpx` is held at
+WARNING and every string value is scrubbed, because an exception's own text can quote the same URL.
 """
 import logging
 import sys
 import traceback
-from collections.abc import Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar
 from typing import TextIO
 
 import structlog
 from structlog.typing import EventDict, Processor, WrappedLogger
 
-request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
+from app.core import log_context
+from app.core.scrubbing import scrub_patterns
+
+# Libraries whose INFO lines are one per outbound call, URL included: noise at best, a leaked token at worst (see the module docstring).
+_QUIET_LOGGERS = ("httpx", "httpcore")
+# Loggers uvicorn gives their own plain-text handlers before it imports the app; their lines belong on the root's JSON handler.
+_UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
+
+_service: str | None = None
 
 
-@contextmanager
-def bind_request_id(request_id: str) -> Iterator[None]:
-    """Wrap one turn/job's processing (agent_worker.py::process_request,
-    ingest_worker.py::process_job, app/adapters/inbound/api/main.py's in-process endpoints —
-    `thread_id` doubles as the id for non-queued turns). Every log line
-    emitted anywhere during the wrapped block — including deep inside
-    app/agent/graph/core.py/tools.py, which have no idea this id exists — carries it, via
-    `_add_request_id` below. Reset on exit so a worker's next turn on the
-    same asyncio task doesn't inherit a stale id.
-    """
-    token = request_id_var.set(request_id)
-    try:
-        yield
-    finally:
-        request_id_var.reset(token)
-
-
-def _add_request_id(
+def _add_context(
     logger: WrappedLogger, method_name: str, event_dict: EventDict
 ) -> EventDict:
-    """structlog processor: stamps the ambient `bind_request_id` value onto
-    every event, unless a call site already supplied one via
-    `extra={"request_id": ...}`. Must run AFTER
-    `structlog.stdlib.ExtraAdder` so an explicit value is already in
-    `event_dict` by the time this checks it."""
-    request_id = request_id_var.get()
-    if request_id is not None and "request_id" not in event_dict:
-        event_dict["request_id"] = request_id
+    """structlog processor: stamps the service name and the ids bound in `log_context` onto every event. A call site's own
+    `extra={...}` wins, so this must run AFTER `structlog.stdlib.ExtraAdder`."""
+    if _service is not None:
+        event_dict.setdefault("service", _service)
+    for name, value in log_context.current().items():
+        event_dict.setdefault(name, value)
+    return event_dict
+
+
+def _scrub_secrets(
+    logger: WrappedLogger, method_name: str, event_dict: EventDict
+) -> EventDict:
+    """Patterns only, not the bound-secret values `scrub` also replaces: a short development password (`agent`, `postgres`)
+    would be cut out of logger names and node names."""
+    for name, value in event_dict.items():
+        if isinstance(value, str):
+            event_dict[name] = scrub_patterns(value)
     return event_dict
 
 
@@ -98,7 +96,7 @@ _SHARED_PROCESSORS: list[Processor] = [
     structlog.stdlib.add_log_level,
     structlog.processors.TimeStamper(fmt="iso", key="timestamp"),
     structlog.stdlib.ExtraAdder(),
-    _add_request_id,
+    _add_context,
     _rename_event_to_message,
 ]
 
@@ -111,6 +109,7 @@ def build_formatter() -> structlog.stdlib.ProcessorFormatter:
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
             _format_exc_info,
+            _scrub_secrets,
             # default=str: an extra field is sometimes non-JSON-native (Enum,
             # UUID, ...) — stringify rather than crash the whole log line.
             structlog.processors.JSONRenderer(default=str),
@@ -132,8 +131,9 @@ class _DynamicStreamHandler(logging.StreamHandler[TextIO]):
         super().emit(record)
 
 
-def configure_logging(level: int = logging.INFO) -> None:
-    """Call once, at process startup, before anything logs. `force=True`
+def configure_logging(level: int = logging.INFO, *, service: str | None = None) -> None:
+    """Call once, at process startup, before anything logs. `service` is stamped on every line (the same name the process
+    gives its telemetry), so a line read outside Loki still says who wrote it. `force=True`
     replaces any handler a prior import already attached to the root logger
     (e.g. a third-party `basicConfig` call) so this app's JSON formatting
     wins regardless of import order. Freely re-callable (unlike
@@ -147,6 +147,16 @@ def configure_logging(level: int = logging.INFO) -> None:
         cache_logger_on_first_use=True,
     )
 
+    global _service
+    _service = service
+
     handler = _DynamicStreamHandler()
     handler.setFormatter(build_formatter())
     logging.basicConfig(level=level, handlers=[handler], force=True)
+    logging.captureWarnings(capture=True)  # a `warnings.warn` was several plain-text lines
+    for name in _UVICORN_LOGGERS:
+        uvicorn_logger = logging.getLogger(name)
+        uvicorn_logger.handlers.clear()
+        uvicorn_logger.propagate = True
+    for name in _QUIET_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)

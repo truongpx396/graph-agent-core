@@ -30,6 +30,7 @@ from fastapi import Header, HTTPException
 from fastapi.exceptions import RequestValidationError
 
 from app.adapters.inbound.api import identity
+from app.core import log_context
 from app.core.config import settings
 from app.core.security import SecurityCtx
 from app.domains.registry import DOMAINS
@@ -49,6 +50,12 @@ async def get_ctx(
     ] = None,
 ) -> SecurityCtx:
     """The caller, by the mode in force. The mode is read per request, so a test (or nothing else) can change it."""
+    ctx = await _verified_ctx(x_tenant_id, x_principal_id, x_internal_identity)
+    log_context.add(tenant=ctx["tenant"], principal=ctx["principal"])
+    return ctx
+
+
+async def _verified_ctx(x_tenant_id: str | None, x_principal_id: str | None, x_internal_identity: str | None) -> SecurityCtx:
     if settings.auth_mode == "headers":
         # Required in this mode, and FastAPI cannot know that when the other mode does not need them, so the check it would have made is made here
         # and reported in its own words: a request missing either never reaches an endpoint, naming exactly the headers it lacked.
@@ -82,4 +89,5 @@ async def get_domain(
         raise HTTPException(
             422, f"Unknown X-Domain {x_domain!r} — must be one of: {', '.join(sorted(DOMAINS))}"
         )
+    log_context.add(domain=x_domain)
     return x_domain

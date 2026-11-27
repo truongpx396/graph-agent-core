@@ -123,3 +123,22 @@ def test_at_the_default_info_level_a_successful_node_writes_one_line_not_two(cap
         node({"run_id": "r"})
 
     assert [r.message for r in caplog.records] == ["node_completed"]
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_the_node_that_starts_a_turn_is_logged_under_the_new_turns_run_id(caplog, asynchronous):
+    """`validate_input` is given the PREVIOUS turn's state, so its line was filed under that turn."""
+
+    def starts_a_turn(state):
+        return {"run_id": "new-turn"}
+
+    async def starts_a_turn_async(state):
+        return {"run_id": "new-turn"}
+
+    node = instrumented("validate_input")(starts_a_turn_async if asynchronous else starts_a_turn)
+    with caplog.at_level(logging.INFO, logger="app.agent.graph.utils"):
+        result = node({"run_id": "previous-turn"})
+        if asynchronous:
+            await result
+
+    assert next(r for r in caplog.records if r.message == "node_completed").run_id == "new-turn"

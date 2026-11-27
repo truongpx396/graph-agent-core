@@ -32,6 +32,7 @@ import json
 import logging
 import signal
 import socket
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -59,7 +60,7 @@ from app.adapters.inbound.workers.streams import (
     trim_stale_entries,
 )
 from app.bootstrap import close_adapters, verify_wired, wire
-from app.core import metrics
+from app.core import log_context, metrics
 from app.core.config import (
     INGEST_WORKER_MAX_CONCURRENCY,
     INGEST_WORKER_RECLAIM_IDLE_SECONDS,
@@ -69,7 +70,7 @@ from app.core.config import (
 )
 from app.ingestion import ingestor
 from app.ingestion.extractors import EXTRACTORS_BY_SUFFIX, ExtractionFailedError
-from app.platform.logging_config import bind_request_id, configure_logging
+from app.platform.logging_config import configure_logging
 from app.platform.profiling import start_profiling
 from app.platform.redis_client import UNAVAILABLE_ERRORS, StreamReadResponse, get_client
 from app.platform.telemetry import configure_telemetry
@@ -122,7 +123,11 @@ async def process_job(client: redis.Redis, entry_id: str, fields: dict[str, Any]
     payload = json.loads(fields["payload"])
     job_id = payload["job_id"]
     observe_queue_wait("ingest", payload)  # how long this job waited for a worker (R17)
-    with bind_request_id(job_id):
+    ctx = payload.get("ctx")
+    ctx = ctx if isinstance(ctx, dict) else {}
+    with log_context.scope(request_id=job_id, job_id=job_id, tenant=ctx.get("tenant"), principal=ctx.get("principal")):
+        started = time.monotonic()
+        logger.info("ingest_job_started")
         try:
             await publish_result(client, job_id, {"type": "started"})
             filename = payload["filename"]
@@ -168,6 +173,7 @@ async def process_job(client: redis.Redis, entry_id: str, fields: dict[str, Any]
             await publish_result(client, job_id, {"type": "error", "content": str(exc)})
         finally:
             await ack_and_delete(client, INGEST_REQUESTS_STREAM, INGEST_CONSUMER_GROUP, entry_id)
+            logger.info("ingest_job_finished", extra={"duration_ms": int((time.monotonic() - started) * 1000)})
 
 
 async def _process_with_limit(
@@ -375,7 +381,7 @@ async def run() -> None:
 
 
 if __name__ == "__main__":
-    configure_logging()
+    configure_logging(service="agent-core-ingest-worker")
     configure_telemetry("agent-core-ingest-worker")
     start_profiling("agent-core-ingest-worker")
     asyncio.run(run())

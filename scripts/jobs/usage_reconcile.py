@@ -132,7 +132,7 @@ def main() -> None:
     args = parser.parse_args()
     if not 1 <= args.days <= 35:
         parser.error("--days must be between 1 and 35")
-    configure_logging()
+    configure_logging(service="agent-core-usage-reconcile")
     configure_telemetry("agent-core-usage-reconcile")
     try:
         raise SystemExit(asyncio.run(run(loop=args.loop, days=args.days, as_json=args.as_json, no_gateway=args.no_gateway)))
