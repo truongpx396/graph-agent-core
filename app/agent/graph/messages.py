@@ -228,6 +228,25 @@ def reject_tool_calls(tool_calls: list[ToolCall], reason: str) -> list[ToolMessa
     return [ToolMessage(content=reason, tool_call_id=tc["id"], name=tc["name"]) for tc in tool_calls]
 
 
+# What a model is told about a call with no result on record. Not "it did not run": a crash between a tool's side effect and the checkpoint
+# leaves the same history, and a model told it never ran would repeat it under a new call id (constitution Principle IV).
+UNRECORDED_CALL_MESSAGE = "[No result was recorded for this call. It may or may not have run: check before repeating it.]"
+
+
+def with_unanswered_calls_closed(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """`messages` with a result after every tool call that has none, for the COPY sent to the model: an OpenAI-style API rejects the whole
+    history otherwise, so one lost call would leave the conversation unusable. An approval paused under LangGraph 0.2 is such a call: 0.6
+    cannot resume it (GRAPH_PATTERNS.md pattern 16). Nothing is run and the saved thread is not changed."""
+    answered = {m.tool_call_id for m in messages if isinstance(m, ToolMessage)}
+    closed: list[BaseMessage] = []
+    for message in messages:
+        closed.append(message)
+        if isinstance(message, AIMessage):
+            lost = [tc for tc in message.tool_calls if tc["id"] not in answered]
+            closed.extend(reject_tool_calls(lost, UNRECORDED_CALL_MESSAGE))
+    return closed
+
+
 # A small, deliberately crude stopword list — good enough to stop common
 # words from inflating an overlap ratio, without pulling in an NLP
 # dependency for what's fundamentally a coarse, directional heuristic.

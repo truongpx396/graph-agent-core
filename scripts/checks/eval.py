@@ -44,10 +44,10 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
 from app.agent.graph.build import build_graph
+from app.agent.graph.state import AgentGraph
 from app.agent.runtime.core import DEFAULT_DOMAIN
 from app.bootstrap import wire
 from app.core.config import DEFAULT_TENANT
@@ -150,7 +150,7 @@ class CaseResult:
     ungrounded_claims_count: int  # SUMMED across repetitions
 
 
-async def _run_case_once(graph: CompiledStateGraph, case: GoldenCase) -> _Attempt:
+async def _run_case_once(graph: AgentGraph, case: GoldenCase) -> _Attempt:
     thread_id = f"eval-{case.id}-{uuid.uuid4()}"
     config: RunnableConfig = {
         "configurable": {
@@ -234,7 +234,7 @@ async def _run_case_once(graph: CompiledStateGraph, case: GoldenCase) -> _Attemp
     )
 
 
-async def run_case(graph: CompiledStateGraph, case: GoldenCase, repetitions: int = EVAL_REPETITIONS) -> CaseResult:
+async def run_case(graph: AgentGraph, case: GoldenCase, repetitions: int = EVAL_REPETITIONS) -> CaseResult:
     """Runs `case` `repetitions` times and aggregates — see module
     docstring for why this is a rate, not a single pass/fail."""
     attempts = [await _run_case_once(graph, case) for _ in range(repetitions)]

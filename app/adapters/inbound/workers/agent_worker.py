@@ -82,7 +82,6 @@ from contextlib import aclosing
 from typing import Any, TypeAlias, cast
 
 import redis.asyncio as redis
-from langgraph.graph.state import CompiledStateGraph
 
 from app.adapters.inbound.workers.streams import (
     READ_BACKOFF_START_SECONDS,
@@ -108,6 +107,7 @@ from app.adapters.inbound.workers.streams import (
 )
 from app.agent.runtime import reclaimed_turn
 from app.agent.runtime.core import (
+    AgentGraph,
     bind_domain,
     close_checkpointer_pool,
     init_graph_async,
@@ -439,7 +439,7 @@ async def _process_with_limit(
         semaphore.release()
 
 
-async def _classify_reclaimed_turn(graph: CompiledStateGraph, thread_id: str) -> str:
+async def _classify_reclaimed_turn(graph: AgentGraph, thread_id: str) -> str:
     """Returns `"dead_letter"`, `"retry_fresh"` or `"retry_continue"` for a reclaimed `"turn"`/`"turn_continue"`
     job, from the thread's checkpointed state. Read-only (`graph.aget_state`, as `get_session_messages` and
     `resumability_error_async` use); it never re-runs anything.
@@ -500,7 +500,7 @@ async def _classify_reclaimed_turn(graph: CompiledStateGraph, thread_id: str) ->
     return "retry_continue"
 
 
-async def _handle_reclaimed_job(client: redis.Redis, entry_id: str, fields: dict[str, Any], *, graph: CompiledStateGraph, domain: str) -> None:
+async def _handle_reclaimed_job(client: redis.Redis, entry_id: str, fields: dict[str, Any], *, graph: AgentGraph, domain: str) -> None:
     """One entry `_reclaim_loop` found idle past
     `AGENT_WORKER_RECLAIM_IDLE_SECONDS` — its original consumer almost
     certainly died before ever reaching `process_request`'s own ack (a live
@@ -583,7 +583,7 @@ async def _dead_letter_reclaimed(client: redis.Redis, entry_id: str, payload: di
     await ack_and_delete(client, stream, CONSUMER_GROUP, entry_id)
 
 
-async def _reclaim_loop(client: redis.Redis, stop_event: asyncio.Event, *, graphs: dict[str, CompiledStateGraph]) -> None:
+async def _reclaim_loop(client: redis.Redis, stop_event: asyncio.Event, *, graphs: dict[str, AgentGraph]) -> None:
     """Runs for this whole process's life, alongside `run()`'s own read
     loop: every `WORKER_RECLAIM_INTERVAL_SECONDS`, sweeps each served
     domain's requests stream (`graphs` is domain name -> its graph) for

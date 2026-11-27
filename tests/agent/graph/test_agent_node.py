@@ -136,6 +136,7 @@ async def test_agent_keeps_the_context_on_the_question_across_a_turns_own_tool_l
     question = HumanMessage(content=_QUESTION, id="q")
     later_messages = [
         AIMessage(content="", tool_calls=[{"name": "search_docs", "args": {}, "id": "1"}]),
+        ToolMessage(content="a search result", tool_call_id="1"),
         HumanMessage(content="That answer was too short — please give a fuller answer."),
     ]
     state = {
@@ -146,7 +147,7 @@ async def test_agent_keeps_the_context_on_the_question_across_a_turns_own_tool_l
     await agent(state)
 
     seen = fake_llm.seen_messages
-    assert len(seen) == 3
+    assert len(seen) == 4
     assert seen[0].id == "q"
     assert "checkpointers persist" in seen[0].content
     assert seen[0].content.endswith(CITATION_REMINDER)
@@ -215,6 +216,7 @@ async def test_agent_keeps_the_history_summary_on_the_question_across_a_turns_ow
     question = HumanMessage(content="what did we discuss earlier?", id="q")
     later_messages = [
         AIMessage(content="", tool_calls=[{"name": "search_docs", "args": {}, "id": "1"}]),
+        ToolMessage(content="a search result", tool_call_id="1"),
         HumanMessage(content="That answer was too short — please give a fuller answer."),
     ]
     state = {"messages": [question, *later_messages], "history_summary": _SUMMARY, "context_anchor_index": 0}

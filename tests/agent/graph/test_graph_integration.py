@@ -852,7 +852,7 @@ class TestReliabilityPolicy:
         RetryPolicy's backoff, which isn't worth the flakiness/runtime for
         what's otherwise a one-line wiring fact."""
         g = build_graph(GraphDeps(llm=_fake_llm(AIMessage(content="anything"))))
-        assert g.nodes["agent"].retry_policy == AGENT_RETRY_POLICY
+        assert list(g.nodes["agent"].retry_policy) == [AGENT_RETRY_POLICY]
 
     def test_retrieve_context_and_deterministic_nodes_have_no_retry_policy(self):
         """`retrieve_context` degrades internally instead (see its

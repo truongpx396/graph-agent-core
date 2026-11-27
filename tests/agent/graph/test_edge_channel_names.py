@@ -1,9 +1,8 @@
-"""A conditional edge is stored in a checkpoint under a name, and a turn a worker left mid-flight is resumed through it: change the name and
-the resume runs nothing, silently (GRAPH_PATTERNS.md pattern 16, `test_checkpoint_across_a_topology_change.py`). Routers are now called
-`graph_edge_route_after_<node>`, so the stored name comes from `build.EDGE_CHANNEL_NAMES` through `named_edge`, not from the function.
+"""Each conditional edge is registered under a fixed name (`build.EDGE_CHANNEL_NAMES`, through `named_edge`), not its router's Python name.
 
-`STORED` below is a literal copy of what checkpoints written before that rename carry. It is not derived from `build.py` on purpose: it is
-the one list the table cannot be allowed to move away from without someone reading why (a change is a topology change: drain the workers).
+Under LangGraph 0.2 that name was part of what a checkpoint stored, so changing it stranded a turn left mid-flight. Since 0.3 a checkpoint
+stores the TARGET node (`branch:to:<node>`) and converts older rows on read, so the names no longer decide what a resume runs
+(`test_checkpoint_across_a_topology_change.py`); they still label the edges, and the table stays complete and stable.
 """
 import dataclasses
 
@@ -44,18 +43,19 @@ def _graphs():
     }
 
 
-def test_the_table_holds_the_names_checkpoints_already_carry():
+def test_the_table_holds_the_registered_edge_names():
     assert dict(build.EDGE_CHANNEL_NAMES) == STORED
 
 
 @pytest.mark.parametrize("graph_name", ["the conversation", "a nested subagent run", "a domain without pre-fetch"])
-def test_each_conditional_edge_is_stored_under_its_table_entry_in_every_graph_shape(graph_name):
+def test_each_conditional_edge_has_its_table_entry_in_every_graph_shape(graph_name):
     graph = _graphs()[graph_name]
     stored = {source: set(by_name) for source, by_name in graph.builder.branches.items()}
     assert stored, "the graph has no conditional edges, so there is nothing to check"
     assert stored == {source: {STORED[source]} for source in stored}
-    for source, name in ((s, STORED[s]) for s in stored):
-        assert any(c.startswith(f"branch:{source}:{name}:") for c in graph.channels), f"no checkpoint channel for the edge after {source}"
+    # What a checkpoint stores: a channel per target node, so a node's name is what must not move.
+    targets = {c.removeprefix("branch:to:") for c in graph.channels if c.startswith("branch:to:")}
+    assert targets and targets <= set(graph.nodes), "every stored trigger channel must name a node of this graph"
 
 
 def test_the_conversation_has_a_conditional_edge_after_every_node_in_the_table():
