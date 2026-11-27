@@ -8,6 +8,9 @@ description: Compose a new-hire onboarding brief for an Ecorp employee. Use when
 Produce a short onboarding brief for a named new hire (or a named
 department, if no specific person is given).
 
+Write nothing yet. You know nothing about this person until a tool tells you,
+so your next action is the call in step 1.
+
 1. Call `query_employees` to look up the person (or the department's
    roster if no name was given). If the name doesn't match anyone, say so
    plainly instead of guessing who was meant.
@@ -18,7 +21,9 @@ department, if no specific person is given).
    - **Role**: title, department, start context (hired date from
      query_employees).
    - **Team & background**: 1-2 sentences drawn from whatever `search_docs`
-     returned, cited normally (`[n]`) per the usual citation rules.
+     returned, cited normally (`[n]`) per the usual citation rules. If it
+     returned nothing, write "No team notes on record" and describe nothing
+     from your own knowledge.
    - **First-week checklist**: 3-5 concrete, generic onboarding items (e.g.
      "meet your manager", "set up your workstation") — these are
      boilerplate, not sourced from a document, so they are never cited.

@@ -70,7 +70,7 @@ def ctx_or_refuse(config: RunnableConfig | None, action: str) -> SecurityCtx | N
 
 
 class LogLeadInteractionArgs(BaseModel):
-    name: str = Field(..., description="The lead's name.")
+    name: str = Field(..., description="The lead's name, always: as written, a first name is enough ('Sam' in 'Sam (sam@example.org)').")
     contact: str = Field(..., description="Email, phone, or channel handle — the lead's stable identifier.")
     notes: str = Field(..., description="What was said/asked in this interaction.")
     # Injected by ToolNode, never shown to the LLM — see app/agent/tools/builtin.py's
@@ -103,9 +103,10 @@ async def log_lead_interaction(
     config: RunnableConfig,
     tool_call_id: Annotated[str, InjectedToolCallId],
 ) -> str:
-    """Record an inbound interaction with a lead — finds the existing lead
-    by contact or creates a new one. Call this for every meaningful inbound
-    message before deciding what to do next."""
+    """Record something a lead said or did — finds the existing lead by
+    contact or creates a new one. Call this first for every such message.
+    Not for a rep's question about a lead (a brief, a draft): that is a
+    read, with package_lead_brief."""
     ctx = ctx_or_refuse(config, "log_lead_interaction")
     if ctx is None:
         return NO_CTX_REFUSAL
@@ -331,7 +332,8 @@ async def mark_lead_lost(
     """Close out a lead that has clearly decided not to buy or gone
     unresponsive — cancels its pending follow-ups so it stops surfacing in
     the sweep. Use this instead of leaving a dead lead's follow-ups
-    dangling; never use it just because a lead hasn't replied yet."""
+    dangling; never use it just because a lead hasn't replied yet. Requires an existing lead: if it is new, call log_lead_interaction alone and
+    wait for its result, never in the same step."""
     ctx = ctx_or_refuse(config, "mark_lead_lost")
     if ctx is None:
         return NO_CTX_REFUSAL
@@ -360,7 +362,7 @@ async def _enrich_lead_from_website_impl(
         return f"No lead found for contact {contact!r} — log an interaction with them first."
 
     page_text = await page_renderer.get().render(url)
-    note = f"Website research ({url}):\n{page_text}"
+    note = f"Website research ({url}). The company's own site, nothing the lead said:\n{page_text}"
     await lead_store.get().append_lead_note(ctx["tenant"], contact, note, tool_call_id=tool_call_id)
     return (
         f"Added research from {url} to {lead['name']}'s notes. "
@@ -379,7 +381,7 @@ async def enrich_lead_from_website(
     gets something researched instead of just "wants a demo." Reaches the
     open internet — declared "outward" in TOOL_CAPABILITIES, so it always
     requires human approval before it runs, same as any mutating tool.
-    Requires an existing lead (log_lead_interaction first)."""
+    Requires an existing lead: if it is new, call log_lead_interaction alone and wait for its result, never in the same step."""
     ctx = ctx_or_refuse(config, "enrich_lead")
     if ctx is None:
         return NO_CTX_REFUSAL
