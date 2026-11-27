@@ -119,9 +119,9 @@ services:
       - ./deploy/dev/litellm-patches:/app/patches:ro
     environment:
       PYTHONPATH: /app/patches
-      # Keys for the hosted tiers, empty until you have them: the Gemini blocks in litellm-config.yaml read them. Put them in .env, never here.
-      GEMINI_API_KEY_MEDIUM: ${GEMINI_API_KEY_MEDIUM:-}
-      GEMINI_API_KEY_STRONG: ${GEMINI_API_KEY_STRONG:-}
+      # A Google AI Studio key: `chat-medium` and `chat-strong` in litellm-config.yaml call Gemini with it. Empty is fine while the router is off
+      # (nothing calls those aliases). Put it in .env, never here.
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       # Proxy-level Langfuse logging.
       LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse-web:3000}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}

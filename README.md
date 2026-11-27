@@ -443,12 +443,13 @@ Three chat tiers, each a gateway alias (the app names aliases, never a provider'
 | Tier | Alias | Dev (`deploy/dev/litellm-config.yaml`) | Production | Used by |
 |---|---|---|---|---|
 | 🟢 easy | `chat` | qwen2.5:7b, local | `LLM_CHAT_MODEL` | every turn (`CHAT_MODEL=chat`) |
-| 🟡 medium | `chat-medium` | qwen2.5:7b, a local stand-in (same as `chat`) | `LLM_MEDIUM_*`; unset = `chat` | the router's middle tier; a specialist's `AGENT.md` `model:` |
-| 🔴 strong | `chat-strong` | qwen2.5:14b, local (`make pull-strong-model`) | `LLM_STRONG_*`; unset = `chat` | the router's top tier |
+| 🟡 medium | `chat-medium` | gemini-3.5-flash-lite (needs `GOOGLE_API_KEY`) | `LLM_MEDIUM_*`; unset = `chat` | the router's middle tier; a specialist's `AGENT.md` `model:` |
+| 🔴 strong | `chat-strong` | gemini-3.6-flash (needs `GOOGLE_API_KEY`) | `LLM_STRONG_*`; unset = `chat` | the router's top tier |
 
-- 💲 **Every local alias states a price** in `model_info` ($0.10 / $0.20 per million input / output tokens for the 7B, $0.20 / $0.40 for the 14B). They're shadow prices: without one LiteLLM reports a local model as unpriced or a flat $0, and no gateway budget can ever trip on $0. Change them if you like, but keep them above 0 ([pattern 74](docs/COST_GOVERNANCE.md)).
+- 💲 **Every alias states a price** in `model_info` ($0.10 / $0.20 per million input / output tokens for the local 7B; Gemini's paid list price for the two hosted tiers). They're shadow prices: without one LiteLLM reports a local model as unpriced or a flat $0, and no gateway budget can ever trip on $0. Change them if you like, but keep them above 0 ([pattern 74](docs/COST_GOVERNANCE.md)).
 - 🔧 **Strict tool schemas** (`TOOL_CALLS_STRICT`, **off**): leave off on Ollama, where the smallest model calls tools measurably worse with it; turn on only for a provider that enforces strict calling, with `make probe-tools` before and after ([docs/RETRIEVAL_AND_MODEL_PATTERNS.md](docs/RETRIEVAL_AND_MODEL_PATTERNS.md) pattern 74).
-- ♊ **Attaching Gemini** to the medium or strong tier is configuration: the key in `.env` (`GEMINI_API_KEY_MEDIUM` / `GEMINI_API_KEY_STRONG`), the Gemini block commented under `chat-medium` in `deploy/dev/litellm-config.yaml` (production: the `LLM_MEDIUM_*` / `LLM_STRONG_*` variables), a proxy restart, then `make probe-tools ARGS="--alias chat-medium"`. LiteLLM doesn't know an `openai/<gemini id>`, so state its price in `model_info`. **Not tried against a real key**, and Google doesn't document the streamed `usage` the app meters from, so send one streamed turn too.
+- ♊ **Dev's two upper tiers are Gemini, on Google AI Studio's free tier** (`GOOGLE_API_KEY` in `.env`; nothing calls them while the router is off). Know three things before turning it on:
+  Google says **free-tier content is used to improve its products**, so send it only sample data; the quotas are small (measured 2026-11-27: `gemini-3.5-flash-lite` 15 requests a minute, `gemini-3.6-flash` 20 a **day**, and 503 "high demand" spells); and a quota 429 on a routed turn **fails that turn** (only an unreachable model or a 5xx repeats on `chat`). `make probe-tools` speaks Ollama only: it does not test these two.
 
 ### Routing a turn to a medium or strong model
 
@@ -460,13 +461,15 @@ choose the model; approval, tenant scoping and idempotency are unchanged under e
 - **Roll out in stages.** `shadow` makes and counts every decision but runs on `chat`, so you read what routing *would* have spent (`agent_model_route_tier_total{tier,mode="shadow"}`, `agent_model_route_total{outcome}`), then `on`:
 
 ```bash
-make pull-strong-model        # dev only: the stand-in is a LOCAL qwen2.5:14b (about 9 GB)
-# .env
+# .env (the app containers read these through compose; `make up-app` after changing them)
+GOOGLE_API_KEY=...                # dev: both upper tiers are Gemini
 MEDIUM_CHAT_MODEL=chat-medium     # either or both; an unset tier does not exist and a decision for it steps down
 STRONG_CHAT_MODEL=chat-strong     # shadow|on refuses to start with neither, or if two tiers share an alias
 ROUTER_MODE=shadow                # off | shadow | on
 ROUTER_MAX_TIER=strong            # the ceiling: spend is bounded by it
 ```
+
+- 🧪 **Checking where questions go.** The web client's "Try asking" entries are tagged with the tier each should route to, and with the skill, subagents and tools it should use. `make route-suggestions` asks the classifier about every one and fails on a tier tag that disagrees. In a running stack, the worker's `model_route` log line says what each turn got (`docker logs <project>-agent-worker-1 2>&1 | grep model_route`).
 
 - **A hosted target** (edit the `chat-medium` / `chat-strong` entry in `deploy/dev/litellm-config.yaml`, or set `LLM_MEDIUM_*` / `LLM_STRONG_*`) needs OpenAI chat completions with `stream_options.include_usage`, native OpenAI-shape tool calls, a context window of at least 32,000 tokens and a price LiteLLM can find (an unpriced alias steps the turn down a tier rather than refusing it). Nothing in `app/` names a provider.
 - ✅ **Measured:** the label set (`make model-eval KIND=classifier CANDIDATE=labelset-bge-small-en-v1.5 DATASET=route-topics`; numbers in `specs/015-label-sets-and-tiered-routing/research.md`). On this repository's prompts it routes about 5% of turns up a tier.

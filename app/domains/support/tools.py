@@ -83,7 +83,18 @@ class CreateTicketArgs(ToolArgs):
     priority: TicketPriority = Field(
         ..., description="One of low, normal, high, urgent. Use normal unless the customer's words clearly say otherwise."
     )
+    escalation_reason: str | None = Field(
+        ...,
+        description="Why a person must take this over: a refund, an account or billing change, a whole team locked out, or the customer asking for a "
+        "human. Pass null for an ordinary ticket.",
+    )
     tool_call_id: Annotated[str, InjectedToolCallId]
+
+    @field_validator("escalation_reason")
+    @classmethod
+    def _blank_reason_is_no_escalation(cls, v: str | None) -> str | None:
+        # An empty string is how a model says "none"; escalating a ticket with no reason would page a person for nothing.
+        return (v or "").strip() or None
 
     @field_validator("subject", "description")
     @classmethod
@@ -93,8 +104,12 @@ class CreateTicketArgs(ToolArgs):
         return v
 
 
+async def _notify_escalation(ctx: SecurityCtx, ticket_id: int, reason: str) -> None:
+    await team_channel.get().post("support-escalations", f"[{ctx['tenant']}] Ticket #{ticket_id} escalated by {ctx['principal']}: {reason}")
+
+
 async def _create_ticket_impl(
-    subject: str, description: str, priority: TicketPriority, ctx: SecurityCtx, tool_call_id: str
+    subject: str, description: str, priority: TicketPriority, ctx: SecurityCtx, tool_call_id: str, escalation_reason: str | None = None
 ) -> str:
     ticket_id = await ticket_store.get().create_ticket(
         tenant=ctx["tenant"],
@@ -103,8 +118,13 @@ async def _create_ticket_impl(
         description=description,
         priority=priority.value,
         tool_call_id=tool_call_id,
+        escalation_reason=escalation_reason,
     )
-    return f"Ticket #{ticket_id} opened ({priority.value} priority): {subject}"
+    if escalation_reason is None:
+        return f"Ticket #{ticket_id} opened ({priority.value} priority): {subject}"
+    # Posted on a replay too: a notification twice is better than a person who was never told (the post is best-effort, the row is the record).
+    await _notify_escalation(ctx, ticket_id, escalation_reason)
+    return f"Ticket #{ticket_id} opened ({priority.value} priority) and escalated to a human agent: {escalation_reason}"
 
 
 @tool(args_schema=CreateTicketArgs)
@@ -114,10 +134,13 @@ async def create_ticket(
     config: RunnableConfig,
     tool_call_id: Annotated[str, InjectedToolCallId],
     priority: TicketPriority = TicketPriority.normal,
+    escalation_reason: str | None = None,
 ) -> str:
     """Open a new Tier-1 support ticket for the current customer. Use this
     when the knowledge base doesn't resolve the issue and it needs to be
-    tracked/followed up on."""
+    tracked/followed up on. If a person has to take it over, set
+    escalation_reason: this one call then opens AND escalates the ticket, so
+    do not call escalate_to_human for it as well."""
     ctx = ctx_or_refuse(config, "create_ticket")
     if ctx is None:
         return NO_CTX_REFUSAL
@@ -127,7 +150,7 @@ async def create_ticket(
         config=config,
         tool_name="create_ticket",
         fn=lambda: arun_with_timeout(
-            _create_ticket_impl, subject, description, priority, ctx, tool_call_id
+            _create_ticket_impl, subject, description, priority, ctx, tool_call_id, escalation_reason
         ),
     )
 
@@ -174,11 +197,8 @@ class EscalateToHumanArgs(BaseModel):
 async def _escalate_to_human_impl(ticket_id: int, reason: str, ctx: SecurityCtx) -> str:
     updated = await ticket_store.get().escalate_ticket(ctx["tenant"], ticket_id, reason)
     if not updated:
-        return f"No ticket #{ticket_id} found to escalate. Use the number create_ticket returned (list_my_tickets shows it), then escalate that one."
-    await team_channel.get().post(
-        "support-escalations",
-        f"[{ctx['tenant']}] Ticket #{ticket_id} escalated by {ctx['principal']}: {reason}",
-    )
+        return f"No ticket #{ticket_id} found to escalate. list_my_tickets shows the numbers; for a new problem, use create_ticket with escalation_reason."
+    await _notify_escalation(ctx, ticket_id, reason)
     return f"Ticket #{ticket_id} escalated to a human agent: {reason}"
 
 
@@ -186,7 +206,8 @@ async def _escalate_to_human_impl(ticket_id: int, reason: str, ctx: SecurityCtx)
 async def escalate_to_human(
     ticket_id: int, reason: str, config: RunnableConfig, tool_call_id: Annotated[str, InjectedToolCallId]
 ) -> str:
-    """Hand an existing ticket off to a human agent — use this for anything
+    """Hand a ticket that ALREADY EXISTS off to a human agent (for a new
+    problem, use create_ticket with escalation_reason instead) — for anything
     outside Tier-1 scope (refunds, account changes, anything the knowledge
     base doesn't cover, or a customer explicitly asking for a person).
     This is the sandbox boundary: you cannot resolve these yourself, only

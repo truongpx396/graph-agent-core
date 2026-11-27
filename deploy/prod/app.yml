@@ -51,6 +51,15 @@ x-app-env: &app-env
   LLM_READ_TIMEOUT_SECONDS: ${LLM_READ_TIMEOUT_SECONDS:-}
   MAX_COST_USD_PER_TURN: ${MAX_COST_USD_PER_TURN:-0.50}
   MAX_TOKENS_PER_TURN: ${MAX_TOKENS_PER_TURN:-40000}
+  # Model routing (specs/014, 015; off by default, with Settings' own defaults). A container does not read `.env`, so without these lines setting
+  # ROUTER_MODE there changed nothing. MEDIUM_CHAT_MODEL=chat-medium, STRONG_CHAT_MODEL=chat-strong and ROUTER_MODE=on turn it on.
+  ROUTER_MODE: ${ROUTER_MODE:-off}
+  MEDIUM_CHAT_MODEL: ${MEDIUM_CHAT_MODEL:-}
+  STRONG_CHAT_MODEL: ${STRONG_CHAT_MODEL:-}
+  ROUTER_MAX_TIER: ${ROUTER_MAX_TIER:-strong}
+  ROUTER_LABELS: ${ROUTER_LABELS:-true}
+  ROUTER_LONG_PROMPT_CHARS: ${ROUTER_LONG_PROMPT_CHARS:-1500}
+  ROUTER_TIMEOUT_SECONDS: ${ROUTER_TIMEOUT_SECONDS:-0.5}
   MAX_COST_USD_PER_TENANT_PER_DAY: ${MAX_COST_USD_PER_TENANT_PER_DAY:-20.0}
   # The three optional ceilings (0 = off, Settings' own default, so a line left unset changes nothing) and what to do with a model LiteLLM cannot price.
   # deploy/prod/prod.env.example told operators to set them, but nothing passed them to a container: a $400 monthly cap in `.env` capped nothing.

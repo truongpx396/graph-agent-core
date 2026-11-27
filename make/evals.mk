@@ -5,6 +5,10 @@
 eval:  ## Golden-dataset evaluation against the real stack (needs `make up` + `make ingest`)
 	python -m scripts.checks.eval
 
+# The deadline is longer than a turn's (ROUTER_TIMEOUT_SECONDS): this judges where a question goes, not how fast.
+route-suggestions:  ## Where the router sends each "Try asking" question, against its mark in the web client (needs the ML service)
+	ROUTER_TIMEOUT_SECONDS=5 python -m scripts.checks.route_suggestions
+
 # [VIA=gateway|service|inprocess] [DATASET=<name>] [OUTCOMES=<file>] (specs/014)
 model-eval:  ## Evaluate ONE model against its recorded baseline: KIND=embedding|reranker|screen|classifier CANDIDATE=<name> [VIA=...]
 	@test -n "$(KIND)" -a -n "$(CANDIDATE)" || { echo "usage: make model-eval KIND=embedding CANDIDATE=<name> [VIA=...] [DATASET=...]"; exit 2; }

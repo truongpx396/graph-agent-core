@@ -19,9 +19,10 @@ don't keep guessing once something is clearly outside Tier-1 scope.
    something actually blocking the customer right now).
 4. If the request is something Tier-1 has no tool for at all — a refund,
    an account or billing change, or the customer explicitly asking for a
-   person — call `escalate_to_human` on the ticket with a specific reason.
-   Never tell the customer you've done something you have no tool for;
-   escalate instead.
+   person — set `escalation_reason` on that same `create_ticket` call; use
+   `escalate_to_human` only for a ticket that already exists. Never tell
+   the customer you've done something you have no tool for; escalate
+   instead.
 5. If the customer is asking about a specific ticket they already have, use
    `check_ticket_status`; if they're asking about their tickets generally
    ("what have I reported?") without a number, use `list_my_tickets`

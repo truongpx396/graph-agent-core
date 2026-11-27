@@ -42,6 +42,15 @@ x-app-env: &app-env
   # An answer saying the pre-fetched documents lack it is asked again without them (GRAPH_PATTERNS.md pattern 105). "false" turns that off.
   CONTEXT_GAP_REASK_ENABLED: ${CONTEXT_GAP_REASK_ENABLED:-true}
   MAX_TOKENS_PER_TURN: ${MAX_TOKENS_PER_TURN:-40000}
+  # Model routing (specs/014, 015; off by default, with Settings' own defaults). A container does not read `.env`, so without these lines setting
+  # ROUTER_MODE there changed nothing. MEDIUM_CHAT_MODEL=chat-medium, STRONG_CHAT_MODEL=chat-strong and ROUTER_MODE=on turn it on.
+  ROUTER_MODE: ${ROUTER_MODE:-off}
+  MEDIUM_CHAT_MODEL: ${MEDIUM_CHAT_MODEL:-}
+  STRONG_CHAT_MODEL: ${STRONG_CHAT_MODEL:-}
+  ROUTER_MAX_TIER: ${ROUTER_MAX_TIER:-strong}
+  ROUTER_LABELS: ${ROUTER_LABELS:-true}
+  ROUTER_LONG_PROMPT_CHARS: ${ROUTER_LONG_PROMPT_CHARS:-1500}
+  ROUTER_TIMEOUT_SECONDS: ${ROUTER_TIMEOUT_SECONDS:-0.5}
   # opensandbox-mcp is a stdio subprocess of this process (app/adapters/outbound/mcp/sandbox_tools.py), so it resolves the in-network name. Only matters
   # with the `sandbox` profile up; without it the sandbox tools are absent.
   OPENSANDBOX_MCP_DOMAIN: opensandbox-server:8090

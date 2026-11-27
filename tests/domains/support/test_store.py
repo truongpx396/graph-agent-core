@@ -9,6 +9,8 @@ code from a plain `def test_...`.
 """
 from contextlib import asynccontextmanager
 
+import pytest
+
 from app.domains.support import store
 
 
@@ -107,6 +109,18 @@ async def test_create_ticket_a_repeated_tool_call_id_returns_the_original_row_no
 
     assert ticket_id == 9
     assert len(fake.captured_sqls) == 2
+
+
+@pytest.mark.parametrize("reason, status", [(None, "open"), ("needs a refund", "escalated")])
+async def test_create_ticket_inserts_it_already_escalated_when_it_has_a_reason(monkeypatch, reason, status):
+    """One statement for both (TOOL_PATTERNS.md 110): a second UPDATE could fail, or name the wrong ticket, and leave it open."""
+    fake = _FakeConnection(row=(42,))
+    monkeypatch.setattr(store, "get_connection", _fake_get_connection(fake))
+
+    await store.create_ticket("ecorp", "alice", "Refund", "Order twice", "normal", tool_call_id="call-1", escalation_reason=reason)
+
+    assert fake.captured["sql"].startswith("INSERT")
+    assert fake.captured["params"] == ["ecorp", "alice", "Refund", "Order twice", "normal", status, reason, "call-1"]
 
 
 async def test_get_ticket_scopes_to_tenant_and_id(monkeypatch):
