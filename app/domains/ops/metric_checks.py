@@ -92,6 +92,17 @@ def detect_anomalies(readings: dict[str, float | None]) -> list[str]:
     return anomalies
 
 
+def no_anomaly_line(readings: dict[str, float | None]) -> str:
+    """What to say when `detect_anomalies` found nothing (TOOL_PATTERNS.md 108). An unread metric is not a normal one: with the metrics
+    store unreachable every reading is None, nothing can be past a threshold, and this said "every metric is within its normal range"."""
+    missing = [name for name, value in readings.items() if value is None]
+    if len(missing) == len(readings):
+        return "No metric has a value (nothing happened in the check windows, or the metrics store could not be reached), so this is NOT an all-clear."
+    if missing:
+        return f"No anomalies among the metrics that have data. No data for {', '.join(missing)}, so nothing can be said about those."
+    return "No anomalies — every metric is within its normal range."
+
+
 def format_readings(readings: dict[str, float | None]) -> str:
     """Human-readable line per check, for feeding to the digest's
     summarization prompt (scripts/jobs/ops_digest.py) or an ad-hoc

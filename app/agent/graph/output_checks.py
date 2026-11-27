@@ -41,6 +41,7 @@ from app.agent.graph.output_guardrails import (
     fabricates_tool_output,
     reveals_system_prompt,
     skipped_required_sandbox_after_skill,
+    writes_tool_call_as_text,
 )
 from app.agent.graph.state import CONTEXT_GAP_REASON, MIN_ANSWER_LENGTH
 from app.core import metrics
@@ -72,6 +73,8 @@ class CheckContext:
     # Tools a loaded skill may name as required, restricted to the ones THIS domain really has:
     # a domain without the tool can never be asked to call it.
     skill_required_tools: tuple[str, ...]
+    # This domain's bound tools: what an answer can have printed a call to instead of making it.
+    tool_names: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -106,6 +109,10 @@ def _fabricated(ctx: CheckContext) -> Any:
     # present tense so the deferral check's future-tense phrasing missed it. Ranks ABOVE deferred:
     # presenting false info as true is worse than merely failing to act.
     return True if fabricates_tool_output(ctx.content) else None
+
+
+def _call_as_text(ctx: CheckContext) -> Any:
+    return writes_tool_call_as_text(ctx.content, ctx.tool_names)
 
 
 def _skipped_tool(ctx: CheckContext) -> Any:
@@ -201,6 +208,13 @@ def _fabricated_feedback(_detail: Any) -> str:
     )
 
 
+def _call_as_text_feedback(tool_name: str) -> str:
+    return (
+        f"You wrote a call to {tool_name} out as text, so nothing ran and the person sees code. Call {tool_name} now through tool "
+        "calling, with no text before it, or answer in plain words without any call written out."
+    )
+
+
 def _skipped_tool_feedback(tool_name: str) -> str:
     # Distinct from fabricated (no fake tool-output claim) and deferred (this gave a full, confident
     # answer): the model computed by hand instead of calling the tool a loaded skill required.
@@ -243,7 +257,7 @@ GENERIC_NO_ANSWER_MESSAGE = (
 )
 
 # Priority order: leaked prompt (the only reason with a real security dimension, severe enough that
-# it can't also be merely too short) > too short > fabricated > skipped required tool > context gap > deferred >
+# it can't also be merely too short) > too short > fabricated > tool call written as text > skipped required tool > context gap > deferred >
 # uncited. A marker on a sentence its source does not support is not a reason: `graph_node_check_output` removes it (pattern 104).
 CHECKS: tuple[OutputCheck, ...] = (
     OutputCheck(
@@ -260,6 +274,13 @@ CHECKS: tuple[OutputCheck, ...] = (
             "want to guess — try asking me to actually run or look that "
             "up, or rephrase your question."
         ),
+    ),
+    OutputCheck(
+        "call_as_text",
+        _call_as_text,
+        _call_as_text_feedback,
+        # Not "nothing was done": earlier tools in the same turn may have run.
+        fallback="I wasn't able to finish that: a step I meant to take did not run. Please ask again.",
     ),
     OutputCheck(
         "skipped_tool",

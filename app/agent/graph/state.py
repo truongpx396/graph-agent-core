@@ -18,19 +18,14 @@ from typing import Annotated, Any, Literal, TypedDict
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
+from app.core.config import (
+    MAX_TOKENS_PER_TURN as MAX_TOKENS_PER_TURN,  # a safety budget, tuned in Settings and read from here like the others
+)
 from app.core.security import SecurityCtx
 
 MAX_ITERATIONS = 10  # safety budget: LLM loop iterations, per turn (see validate_input's reset)
 MIN_ANSWER_LENGTH = 10
 MAX_TOOL_CALLS_PER_TURN = 5  # safety budget: simultaneous tool calls from one LLM turn
-MAX_TOKENS_PER_TURN = 16000  # safety budget: cumulative token usage per
-# turn (0 if the model/proxy doesn't report usage_metadata — fails open).
-# Bumped from 8000 after a live bug: a citation-repair retry round roughly
-# doubles a turn's token spend, so 8000 could cap an otherwise-good,
-# correctly cited answer before check_output ever saw it (caught via
-# Langfuse). 16000 leaves retry headroom without approaching num_ctx
-# (32000) — see HISTORY_TOKEN_CEILING's comment for why input headroom
-# isn't scaled 1:1 with num_ctx either.
 HISTORY_TOKEN_CEILING = 24000  # bounds the only unbounded input in State
 # (see _trim_history) — trips compact_history once raw (non-system)
 # history exceeds this estimated token count.

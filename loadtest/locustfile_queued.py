@@ -66,12 +66,10 @@ INJECTION_MESSAGES = [
 ]
 DENYLIST_MESSAGES = ["How to make a bomb?"]
 
-# ~17k+ words — fake_llm_server.py's _final_answer_text echoes the user's
-# own message back as the completion, so completion_tokens (len(text.split()))
-# is large enough to trip MAX_TOKENS_PER_TURN=16000 (app/agent/graph/routing.py)
-# on the model's very first reply, before compact_history could ever get
-# a chance to shrink anything.
-HUGE_MESSAGE = "x " * 17000
+# 15,000 words: fake_llm_server.py's _final_answer_text echoes the user's own message back as the completion, so completion_tokens
+# (len(text.split())) passes the MAX_TOKENS_PER_TURN deploy/dev/loadtest.yml gives the worker, on the model's very first reply, before
+# compact_history could shrink anything. It must also stay under CHAT_MESSAGE_MAX_CHARS, or the API answers 422 and no turn runs.
+HUGE_MESSAGE = "x " * 15000
 
 # A single space: non-empty by Pydantic's min_length=1, but strips to "" —
 # app/agent/graph/core.py's _human_has_content gate (reject_input).

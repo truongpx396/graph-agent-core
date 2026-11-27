@@ -121,7 +121,7 @@ that fired is counted.
 3. **Given** the model repeats an identical tool-call batch 3 times in a row, **When** the third
    repeat is requested, **Then** the turn ends (counted as "no progress") instead of exhausting
    the round ceiling.
-4. **Given** cumulative usage in the turn reaches the token ceiling (default 16,000) or the
+4. **Given** cumulative usage in the turn reaches the token ceiling (default 40,000) or the
    cost ceiling (default $0.50), **When** the next round would begin, **Then** the turn ends
    with a user-visible message as in scenario 1. Usage by delegated sub-runs counts toward the
    same ceilings.
@@ -351,7 +351,7 @@ confirm the question is still answered normally.
 **Bounds and safety budgets**
 
 - **FR-013**: The system MUST end a turn that reaches the reasoning-round ceiling (default 10),
-  the cumulative token ceiling (default 16,000), or the per-turn cost ceiling (default $0.50)
+  the cumulative token ceiling (default 40,000), or the per-turn cost ceiling (default $0.50)
   with a user-visible message — the model's last content only if it still passes the quality
   checks, otherwise a fallback; a ceiling trip MUST be counted; usage by delegated sub-runs MUST
   count toward the parent's ceilings.
@@ -461,7 +461,7 @@ confirm the question is still answered normally.
 - **SC-001**: 100% of turns, under normal operation and under each injected single-dependency
   failure, end in exactly one terminal outcome (answer, approval request, or error) within the
   turn time limit; no turn hangs and none returns an empty reply.
-- **SC-002**: No turn exceeds 10 reasoning rounds, 16,000 tokens or $0.50 of model spend,
+- **SC-002**: No turn exceeds 10 reasoning rounds, 40,000 tokens or $0.50 of model spend,
   regardless of model behavior (verified against scripted looping, fan-out and runaway-usage
   models).
 - **SC-003**: For 100% of requests refused at entry (no identity, empty message, injection or
@@ -495,7 +495,7 @@ confirm the question is still answered normally.
   supplies their tenant and principal; the pipeline refuses to guess either (see feature 002).
 - The model, embedding and re-ranking services run locally and are reached through a single
   gateway using logical aliases, never provider model names; the pipeline works fully offline.
-- Numeric defaults (rounds 10, tool fan-out 5, repeats 3, tokens 16,000, cost $0.50, tool 15 s,
+- Numeric defaults (rounds 10, tool fan-out 5, repeats 3, tokens 40,000, cost $0.50, tool 15 s,
   turn 60 s, history 24,000/4,000, summary 4,000 chars, cache 0.95/1 h) are tunables, not
   contracts; the *existence* of each bound is the requirement.
 - English-language questions; no localisation is assumed.

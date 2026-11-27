@@ -127,6 +127,7 @@ def make_graph_node_no_answer(
     system_prompt: str,
     enforce_citations: bool = True,
     skill_required_tools: tuple[str, ...] = (),
+    tool_names: frozenset[str] = frozenset(),
 ) -> Callable[[State], dict[str, Any]]:
     def graph_node_no_answer(state: State) -> dict[str, Any]:
         last = state["messages"][-1]
@@ -161,6 +162,7 @@ def make_graph_node_no_answer(
             system_prompt=system_prompt,
             enforce_citations=enforce_citations,
             skill_required_tools=skill_required_tools,
+            tool_names=tool_names,
         )
         # Text written alongside a tool request is the model narrating what it is about to do, not
         # a final answer, so it is never shown even when it would pass check_output.

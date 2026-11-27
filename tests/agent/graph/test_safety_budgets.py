@@ -493,6 +493,12 @@ class TestTokenBudget:
         }
         assert graph_edge_route_after_agent(state) == "no_answer"
 
+    def test_the_default_budget_lets_a_skill_flow_make_its_third_tool_call(self):
+        """Every call re-sends the prompt and about 4,000 tokens of tool schemas. At the old fixed 16,000, `skill_search` then `use_skill` left no room
+        for the tool the skill named, and the deal-economics script never ran."""
+        state = {"iterations": 3, "total_tokens": 20_000, "messages": [_tool_call_message("calculator", {"expression": "1+1"})]}
+        assert graph_edge_route_after_agent(state) != "no_answer"
+
     def test_missing_total_tokens_defaults_to_zero(self):
         state = {"iterations": 1, "messages": [AIMessage(content="final answer here.")]}
         assert graph_edge_route_after_agent(state) == "check_output"

@@ -1444,13 +1444,14 @@ class TestOutputCheckRegistry:
     """Which reason wins, and what each one says, is the registry in graph/output_checks.py."""
 
     def test_the_priority_order(self):
-        """Leaked prompt (the only reason with a security dimension) > too short > fabricated > skipped required
+        """Leaked prompt (the only reason with a security dimension) > too short > fabricated > tool call written as text > skipped required
         tool > context gap > deferred > uncited. (A marker its source does not support is not a reason: it is dropped, pattern 104.)
         """
         assert [c.code for c in output_checks.CHECKS] == [
             "leaked_prompt",
             "too_short",
             "fabricated",
+            "call_as_text",
             "skipped_tool",
             "context_gap",
             "deferred",

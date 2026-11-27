@@ -16,6 +16,7 @@ All tools are `async def`, matching app/agent/tools/builtin.py's async-first
 design (store queries, HTTP clients, and the sandbox MCP session all await
 real I/O).
 """
+import re
 from typing import Annotated, Any, cast
 
 from langchain_core.runnables import RunnableConfig
@@ -74,6 +75,10 @@ async def fetch_metrics_summary(config: RunnableConfig) -> str:
     return await arun_with_timeout(fetch_metrics_summary_impl)
 
 
+# What an unwritten message looks like. Real bug, found live: "post a summary of current latency" sent "Current latency metrics: [insert details here]."
+_PLACEHOLDER_RE = re.compile(r"\[(?:insert|fill|add|your|placeholder)\b[^\]]*\]|<(?:insert|fill|your)\b[^>]*>|\{\{[^}]*\}\}", re.IGNORECASE)
+
+
 class PostToTeamChannelArgs(BaseModel):
     channel: str = Field(..., description="Which team channel, e.g. 'ops-digest' or 'ops-alerts'.")
     message: str = Field(..., description="The message to post.")
@@ -84,6 +89,13 @@ class PostToTeamChannelArgs(BaseModel):
     def _not_blank(cls, v: str) -> str:
         if not v.strip():
             raise ValueError("must not be empty")
+        return v
+
+    @field_validator("message")
+    @classmethod
+    def _written(cls, v: str) -> str:
+        if _PLACEHOLDER_RE.search(v):
+            raise ValueError("message still holds a placeholder: fetch the real values first (fetch_metrics_summary) and write them in")
         return v
 
 
@@ -100,7 +112,8 @@ async def post_to_team_channel(
     app's own corpus (a real deployment would post to Slack), unlike the
     read-only fetch_metrics_summary — declared "outward" in
     TOOL_CAPABILITIES, so it is always gated behind human_approval before
-    it runs, same as any mutating tool."""
+    it runs, same as any mutating tool. The message is what people will read:
+    fetch whatever numbers it reports FIRST, and never post a placeholder."""
     ctx = ctx_or_refuse(config, "post_to_channel")
     if ctx is None:
         return NO_CTX_REFUSAL

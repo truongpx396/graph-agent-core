@@ -312,6 +312,7 @@ def build_graph(
         system_prompt=manifest.system_prompt,
         enforce_citations=profile.enforce_citations,
         skill_required_tools=skill_required_tools,
+        tool_names=valid_tool_names,
         # Validated here, at build, so a typo or a protected check stops the process at start-up instead of leaving a check running that the operator thinks is off.
         skip_on_routed_tiers=parse_checks_off_on_routed_tiers(OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS),
         checks_off=frozenset() if CONTEXT_GAP_REASK_ENABLED else frozenset({CONTEXT_GAP_REASON}),
@@ -376,6 +377,7 @@ def build_graph(
             system_prompt=manifest.system_prompt,
             enforce_citations=profile.enforce_citations,
             skill_required_tools=skill_required_tools,
+            tool_names=valid_tool_names,
         ),
     )
 

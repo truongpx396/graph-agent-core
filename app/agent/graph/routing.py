@@ -147,6 +147,7 @@ def graph_node_check_output(
     *,
     enforce_citations: bool = True,
     skill_required_tools: tuple[str, ...] = (),
+    tool_names: frozenset[str] = frozenset(),
     skip_on_routed_tiers: frozenset[str] = frozenset(),
     checks_off: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
@@ -162,7 +163,8 @@ def graph_node_check_output(
     citation checks off and inserts no `[n]` marker: a subagent is told NOT to use bracket markers (they'd
     name its own sources, meaningless to the parent), so judging or "repairing" by them contradicted its
     prompt and put a stray `[1]` in the text handed back. Every other check still applies.
-    `skill_required_tools` is the subset of `SKILL_REQUIRED_TOOL_MARKERS` this domain has.
+    `skill_required_tools` is the subset of `SKILL_REQUIRED_TOOL_MARKERS` this domain has. `tool_names` are its bound tools (a call to one printed
+    as text is rejected, pattern 109).
     `skip_on_routed_tiers` (`OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS`, validated at build) are checks that do not run when the turn was routed to the `medium`
     or `strong` tier: they exist to correct small local models, and a false positive costs a full retry round. The `local` tier is unchanged, and every
     finding is counted by tier (`agent_output_check_fired_total`) so the list can be chosen from numbers. `checks_off` do not run on any tier
@@ -264,6 +266,7 @@ def graph_node_check_output(
             system_prompt=system_prompt,
             enforce_citations=enforce_citations,
             skill_required_tools=skill_required_tools,
+            tool_names=tool_names,
         ),
         skip=checks_off | (skip_on_routed_tiers if tier in ROUTED_TIERS else frozenset()),
     )

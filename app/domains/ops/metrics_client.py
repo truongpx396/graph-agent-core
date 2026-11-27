@@ -5,6 +5,7 @@ app/adapters/inbound/channels/telegram/bot.py, app/ingestion/ingestor.py).
 Which checks exist, and what makes a reading an anomaly, is the domain's (`metric_checks.py`).
 """
 import asyncio
+import math
 
 import httpx
 
@@ -28,7 +29,9 @@ async def _query_one(expr: str) -> float | None:
         result = resp.json()["data"]["result"]
         if not result:
             return None
-        return float(result[0]["value"][1])
+        value = float(result[0]["value"][1])
+        # histogram_quantile over a window with no observations, and 0/0, come back as NaN: no data, not a value that compares as normal.
+        return None if math.isnan(value) else value
     except Exception:  # noqa: BLE001 - degrade to "unknown," never fail the digest
         return None
 

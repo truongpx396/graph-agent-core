@@ -14,6 +14,9 @@ services:
       # per-instance lock, app/adapters/outbound/postgres/checkpointing.py) caps in-process throughput even with both knobs open.
       AGENT_WORKER_MAX_CONCURRENCY: "50"
       CHECKPOINTER_POOL_MAX_SIZE: "50"
+      # Below what locustfile_queued.py's HUGE_MESSAGE comes back as, so its token-budget scenario can end a turn at the ceiling: the default is
+      # more words than the API's message limit lets one request carry.
+      MAX_TOKENS_PER_TURN: "12000"
 
   ingest-worker:
     environment:

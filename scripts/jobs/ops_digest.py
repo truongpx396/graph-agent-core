@@ -50,7 +50,7 @@ def build_digest_prompt(readings: dict[str, float | None], anomalies: list[str])
         lines.append("\nFlagged anomalies (past an alert-matching threshold):")
         lines.extend(f"- {a}" for a in anomalies)
     else:
-        lines.append("\nNo anomalies — everything is within its normal range.")
+        lines.append("\n" + usecases.no_anomaly_line(readings))
     return "\n".join(lines)
 
 

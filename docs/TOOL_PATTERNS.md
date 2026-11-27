@@ -10,6 +10,7 @@ How tools reach data and the outside world without becoming a way around the app
 | 50 | Web crawling (crawl4ai) and a sandbox (OpenSandbox over MCP) |
 | 78 | A published MCP server acts for whoever launched it, and a remote server is untrusted input |
 | 87 | A web search is a read that sends text out and spends money, so it waits for a human |
+| 108 | A metric that could not be read is not a normal one |
 
 ### 21. Fixed-tool structured data access, plus MCP exposure
 `query_employees` is a closed, typed Postgres query: `tenant` (from `SecurityCtx`), a `department` enum and `name_contains` are the only variables, every query is parameterized and ANDs `WHERE tenant = %s`. There is no `execute(sql)`: the access boundary lives in reviewable code, not in a string the model writes. The MCP server wraps the same query under a separate trust boundary (78).
@@ -47,3 +48,9 @@ One rule runs through both directions (`app/adapters/inbound/mcp/` publishes, `a
 - **Always declared, even with no key:** the tool list must not change between deploys, or a thread paused on it could not resume. With no key it answers "web search is not set up".
 - `agent_web_search_total{outcome}` and `WebSearchProviderRefusing`; `make web-search-check` makes the one real call (one credit).
 - **Gaps:** an out-of-credits account and a 429 were never observed; only `organic` results are read; the spend is not metered (no per-tenant quota or result cache); nothing scans the query for customer data beyond the prompt and the human at approval.
+
+### 108. A metric that could not be read is not a normal one
+`fetch_metrics_summary` (and the cron digest) reads each alert expression from Prometheus. A query that fails, answers nothing or answers NaN is `None`, and a `None` is never an anomaly. What it says when nothing is past a threshold is therefore its own function (`metric_checks.py::no_anomaly_line`): all unread says this is not an all-clear, some unread names them, and only a full set of readings says every metric is normal.
+- **Bug:** the app containers had no `PROMETHEUS_URL`, so every query dialled the container itself and the ops agent answered "every metric is within its normal range".
+- **Gaps:** a ratio whose numerator has never had a sample (no failed turn yet) is unread, not 0, so a quiet system reports "no data" for it. In production the app droplet cannot reach the observability droplet's Prometheus by default.
+

@@ -151,7 +151,7 @@ write tools (features 002/003).
 | Tool calls / round | 5 | `MAX_TOOL_CALLS_PER_TURN` (hardcoded) |
 | Identical consecutive batches | 3 | `MAX_REPEATED_ACTIONS` (hardcoded) |
 | Same retry reason, consecutive | 2 | `MAX_CONSECUTIVE_SAME_RETRY_REASON` (hardcoded) |
-| Tokens / turn | 16 000 | `MAX_TOKENS_PER_TURN` (hardcoded; fails open without usage metadata) |
+| Tokens / turn | 40 000 | `Settings.max_tokens_per_turn` (fails open without usage metadata) |
 | Cost / turn | $0.50 | `Settings.max_cost_usd_per_turn` |
 | Tool timeout | 15 s | `tools.py::TOOL_TIMEOUT_SECONDS` |
 | Turn timeout | 60 s | `Settings.request_timeout_seconds` |
