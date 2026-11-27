@@ -10,6 +10,7 @@ rather than asserting against a fake that could drift from their real
 behavior.
 """
 import io
+import zlib
 
 import pytest
 from docx import Document
@@ -40,6 +41,18 @@ startxref
 0
 %%EOF"""
     return pdf.encode()
+
+
+def _pdf_with_compressed_page(content: bytes) -> bytes:
+    """One page whose content stream is Flate-compressed, so a small file can stand for a very large one."""
+    stream = zlib.compress(content, 9)
+    return b"".join([
+        b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n",
+        b"3 0 obj<</Type/Page/Parent 2 0 R/Resources<</Font<</F1 5 0 R>>>>/MediaBox[0 0 612 792]/Contents 4 0 R>>endobj\n",
+        b"4 0 obj<</Filter/FlateDecode/Length %d>>stream\n" % len(stream), stream, b"\nendstream\nendobj\n",
+        b"5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n",
+        b"xref\n0 6\ntrailer<</Size 6/Root 1 0 R>>\nstartxref\n0\n%%EOF",
+    ])
 
 
 def _docx_bytes(paragraphs: list[str]) -> bytes:
@@ -73,6 +86,11 @@ class TestExtractPdfText:
     def test_empty_bytes_raise_extraction_failed(self):
         with pytest.raises(ExtractionFailedError):
             extract_pdf_text(b"")
+
+    def test_a_decompression_bomb_is_refused_as_a_failed_extraction(self):
+        """A 78 KB upload that inflates to 80 MB: pypdf 5 inflated it all; pypdf 6 stops with its own limit error, which must come out as ours."""
+        with pytest.raises(ExtractionFailedError, match="Limit reached"):
+            extract_pdf_text(_pdf_with_compressed_page(b" " * 80_000_000))
 
 
 class TestExtractDocxText:
