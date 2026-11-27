@@ -11,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.adapters.outbound.web import serper
-from app.core.untrusted import CLOSE_TAG, OPEN_TAG
+from app.core.untrusted import AFTER_FRAME_NOTE, CLOSE_TAG, OPEN_TAG
 from app.domains.ecorp.domain import ECORP_DOMAIN_PLUGIN
 from app.domains.registry import DOMAINS, resolve_domain
 from app.domains.shared import web_search as tool_module
@@ -84,7 +84,7 @@ async def test_a_result_is_framed_as_untrusted_data_with_title_address_and_snipp
 
     content = str((await _call(_tool())).content)
 
-    assert content.startswith(OPEN_TAG) and content.endswith(CLOSE_TAG)
+    assert content.startswith(OPEN_TAG) and content.endswith(f"{CLOSE_TAG}\n{AFTER_FRAME_NOTE}")
     assert "Stripe Status" in content and "https://status.stripe.com (2 days ago)" in content and "All systems operational." in content
 
 
@@ -94,7 +94,7 @@ async def test_a_result_cannot_close_its_own_frame_from_inside(search_returns):
 
     content = str((await _call(_tool())).content)
 
-    assert content.count(CLOSE_TAG) == 1 and content.endswith(CLOSE_TAG)
+    assert content.count(CLOSE_TAG) == 1 and content.endswith(f"{CLOSE_TAG}\n{AFTER_FRAME_NOTE}")
 
 
 async def test_a_result_is_never_numbered_like_a_knowledge_base_citation(search_returns):

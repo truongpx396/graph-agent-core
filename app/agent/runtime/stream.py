@@ -807,6 +807,10 @@ async def _run_turn(
             "callbacks": callbacks,
             "recursion_limit": runtime_module.RECURSION_LIMIT,
         }
+        # Run metadata is copied onto every span and generation of the turn (Langfuse's callback handler), so answers can be compared by what
+        # the model was told. A hand-built graph in a test has no version.
+        if version := getattr(graph, "prompt_version", None):
+            cfg["metadata"] = {"prompt_version": version}
         async with aclosing(_run_graph_stream(graph, build_input(), cfg, trace, cancel_check=cancel_check)) as events:
             async for event in events:
                 yield event

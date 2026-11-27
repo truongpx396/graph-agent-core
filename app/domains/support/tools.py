@@ -168,7 +168,8 @@ async def _check_ticket_status_impl(ticket_id: int, ctx: SecurityCtx) -> str:
         line += f"\nEscalated: {ticket['escalation_reason']}"
     if ticket.get("notes"):
         line += f"\nFollow-up notes:\n{ticket['notes']}"
-    return line
+    # Subject, reason and notes are free text someone else may have typed.
+    return frame_untrusted(line)
 
 
 @tool(args_schema=CheckTicketStatusArgs)
@@ -236,7 +237,7 @@ async def _list_my_tickets_impl(ctx: SecurityCtx) -> str:
         f"- #{t['id']} — {t['status']} ({t['priority']} priority): {t['subject']}"
         for t in tickets
     ]
-    return "\n".join(lines)
+    return frame_untrusted("\n".join(lines))
 
 
 @tool(args_schema=ListMyTicketsArgs)
@@ -299,7 +300,7 @@ class FetchExternalReferenceArgs(BaseModel):
 
 
 async def _fetch_external_reference_impl(url: str) -> str:
-    # Page text is untrusted data (SYSTEM_PROMPT's promise about tool results).
+    # Page text is untrusted data (the promise app/core/prompt_rules.py makes about tool results).
     return frame_untrusted(await page_renderer.get().render(url))
 
 
@@ -311,11 +312,8 @@ async def fetch_external_reference(
     (real headless-browser render) for THIS turn's answer — e.g. the
     customer links the API/webhook doc that doesn't match what they're
     seeing. This does NOT add anything to the knowledge base (search_docs
-    is unaffected) — it's a one-off live read, never a corpus write, which
-    is why this domain can offer it without breaking its own "sandboxed to
-    knowledge base + ticket system" design. Reaches the open internet —
-    declared "outward" in TOOL_CAPABILITIES, so it always requires human
-    approval before it runs."""
+    is unaffected): it's a one-off live read. Reaches the open internet, so
+    it always requires human approval before it runs."""
     ctx = ctx_or_refuse(config, "fetch_external_reference")
     if ctx is None:
         return NO_CTX_REFUSAL
@@ -394,8 +392,7 @@ async def run_command_in_sandbox(
     here via `python -c '...'` is exactly the mistake
     run_python_in_sandbox exists to make impossible — a pasted payload
     with its own quote or apostrophe collides with the shell's own
-    quoting and silently breaks the script, confirmed via repeated
-    real failures. For the full worked procedure, call
+    quoting and silently breaks the script. For the full worked procedure, call
     use_skill("support-log-triage") before writing anything — don't
     freehand it. One sandbox is created automatically per conversation
     and reused for every call in it — you never create, connect to, or
@@ -507,9 +504,7 @@ async def read_sandbox_file(
     write_sandbox_file). Same auto-created sandbox as
     run_command_in_sandbox. If this returns an unexpected "file not
     found" for a file you know exists, use run_command_in_sandbox with
-    `cat <path>` instead — a disclosed, environment-specific gap in
-    this particular tool, not in write_sandbox_file or
-    run_command_in_sandbox. Reaches an external service — always
+    `cat <path>` instead. Reaches an external service — always
     requires human approval before it runs."""
     ctx = ctx_or_refuse(config, "read_sandbox_file")
     if ctx is None:

@@ -54,6 +54,7 @@ from app.core.config import (
 from app.core.security import DEFAULT_POLICY, SecurityCtx, valid_ctx
 from app.core.tool_runtime import NO_CTX_REFUSAL, arun_with_timeout, ctx_or_refuse
 from app.core.tool_schema import ToolArgs
+from app.core.untrusted import frame_untrusted
 from app.core.url_safety import linkable_url
 from app.ports.outbound.retrieval import SearchHit, document_index
 
@@ -231,7 +232,8 @@ async def _search_docs_impl(
     hits = await _document_hits(ctx, query, topic, doc_ids)
     if not hits:
         return "No relevant documents found."
-    return _format_cited_context(hits)
+    # Framed like the pre-fetched block: the same documents, reached by a call the model made.
+    return frame_untrusted(_format_cited_context(hits))
 
 
 @tool(args_schema=SearchDocsArgs)
@@ -243,12 +245,7 @@ async def search_docs(
 ) -> str:
     """Search the knowledge base for company facts — hours, policies,
     procedures, product/service information, and similar. Use this for
-    ANY general company-facts question, including one whose wording
-    happens to overlap with a department name (e.g. "support hours" is a
-    knowledge-base fact about business hours, not a staff lookup, even
-    though "Support" is also a department query_employees can filter by).
-    Only use query_employees instead when the question is actually asking
-    WHO works somewhere — a specific person, a roster, or headcount."""
+    ANY general company-facts question."""
     ctx = ctx_or_refuse(config, "search")
     if ctx is None:
         return NO_CTX_REFUSAL
@@ -293,15 +290,12 @@ async def _ask_clarification_impl(question: str, options: list[str]) -> str:
 async def ask_clarification(question: str, options: list[str]) -> str:
     """Use this ONLY when a question is ambiguous in a way that would
     materially change the answer — offer 2-4 concrete interpretations
-    instead of guessing. Deliberately NOT special-cased in the graph
-    (GRAPH_PATTERNS.md pattern 27): this is an ordinary read_only tool —
-    its result is a formatted options list that becomes a ToolMessage,
-    and the SYSTEM_PROMPT instructs the model to relay that list back to
-    the user verbatim as its final answer on the very next turn, rather
-    than trying to answer the original (still-ambiguous) question. No new
-    node, no new routing — the existing agent -> tools -> agent loop
-    already does exactly what this needs.
+    instead of guessing. When it returns, give the person its result as
+    your whole answer, unchanged: do not also try to answer the original
+    question.
     """
+    # Deliberately NOT special-cased in the graph (GRAPH_PATTERNS.md pattern 27): an ordinary read_only tool whose result becomes a ToolMessage the
+    # model relays. The relay rule is in the description above so that every domain with the tool is told, not only the one whose prompt says it.
     return await arun_with_timeout(_ask_clarification_impl, question, options)
 
 

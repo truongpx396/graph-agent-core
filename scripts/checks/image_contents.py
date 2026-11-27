@@ -26,6 +26,10 @@ def problems() -> list[str]:
     if not subagent_catalog.load_subagents():
         found.append("the subagent catalog is empty (the subagents/ folders under app/domains are missing from the image)")
     try:
+        importlib.import_module("app.domains.registry")  # reads every domain's prompt.md
+    except OSError as exc:
+        found.append(f"a domain's prompt file is missing from the image: {exc}")
+    try:
         importlib.import_module("scripts.tools.index_skills")
     except ImportError as exc:
         found.append(f"the scripts package is missing or broken: {exc}")

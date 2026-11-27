@@ -18,9 +18,11 @@ patched, i.e. the boundary this fix is about.
 """
 import pytest
 
+from app.core.untrusted import AFTER_FRAME_NOTE
 from app.domains.ops import tools as ops_tools
 from app.domains.sales import store
 from app.domains.sales import tools as sales_tools
+from app.domains.sales.usecases import BRIEF_NOTES_MAX_CHARS
 from app.domains.support import tools as support_tools
 from tests.fakes.web import use_page_renderer
 
@@ -35,7 +37,7 @@ def _page(filler: int = 50) -> str:
 
 def _assert_framed_once(text: str) -> None:
     assert text.startswith(OPEN + "\n"), "the page text is not framed as untrusted data"
-    assert text.endswith("\n" + CLOSE)
+    assert text.endswith(f"\n{CLOSE}\n{AFTER_FRAME_NOTE}")
     assert text.count(CLOSE) == 1 and text.count(OPEN) == 1, "page text must not be able to add or close a frame"
 
 
@@ -149,7 +151,7 @@ async def test_the_brief_replay_has_a_ceiling_however_many_enrichments_piled_up(
 
     brief = await _brief(monkeypatch, notes)
 
-    assert len(brief) < sales_tools.BRIEF_NOTES_MAX_CHARS + 1_000
+    assert len(brief) < BRIEF_NOTES_MAX_CHARS + 1_000
 
 
 async def test_when_the_replay_is_cut_the_newest_notes_survive_and_the_cut_is_marked(monkeypatch):

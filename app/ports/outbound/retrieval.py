@@ -118,7 +118,8 @@ class DocumentWriter(Protocol):
 class AnswerCache(Protocol):
     async def get(self, ctx: SecurityCtx | None, query: str, *, domain: str) -> tuple[str, list[dict[str, Any]]] | None:
         """A cached `(answer, citations)` for a semantically close query from the same tenant, person AND domain, or None. The domain is part of the key
-        because another domain has another prompt and other tools: the same person asking the same question there must not be handed this one's answer."""
+        because another domain has another prompt and other tools: the same person asking the same question there must not be handed this one's answer.
+        `build_graph` passes the domain's name and the version of what its model is told, so an answer from before a prompt change is not replayed."""
         ...
 
     async def set(self, ctx: SecurityCtx | None, query: str, answer: str, citations: list[dict[str, Any]], *, domain: str) -> None:

@@ -34,6 +34,7 @@ from app.agent.graph.state import STATE_SCHEMA_VERSION
 from app.agent.runtime import core as agent_module
 from app.agent.runtime import stream as stream_module
 from app.core import metrics
+from app.core.prompt_rules import compose_system_prompt
 from app.ports.outbound import checkpointing as checkpointing_port
 from app.ports.outbound.domains import AgentManifest
 from tests.agent.fakes import cfg, scripted_llm
@@ -247,7 +248,7 @@ class TestAsyncEntryPoints:
 
         assert not any(isinstance(m, SystemMessage) for m in stored), "a prompt was written into the thread"
         first_message_of_each_call = [call[0].content for call in sent]
-        assert first_message_of_each_call == ["You are v1 of the prompt.", "You are v2 of the prompt."]
+        assert first_message_of_each_call == [compose_system_prompt("You are v1 of the prompt."), compose_system_prompt("You are v2 of the prompt.")]
 
     async def test_astream_events_resume_checks_resumability_without_raising(
         self, monkeypatch

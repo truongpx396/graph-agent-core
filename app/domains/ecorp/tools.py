@@ -70,11 +70,8 @@ async def add_note(
 ) -> str:
     """Add a new note to the knowledge base so future searches can find it.
 
-    This WRITES to the knowledge base — unlike search_docs/calculator, this
-    changes what other users and future turns will see. It is declared
-    "mutating" in TOOL_CAPABILITIES, which means app/agent/graph/core.py's
-    graph_edge_route_after_agent routes it through human_approval every time, regardless
-    of whether the caller opted into require_approval.
+    This WRITES to the knowledge base: it changes what other users and
+    future turns will see, so a person approves it before it runs.
     """
     ctx = ctx_or_refuse(config, "write_note")
     if ctx is None:
@@ -113,9 +110,8 @@ async def remember(
     sessions to recall — e.g. a stated preference or a piece of context
     they'll likely reference again.
 
-    This WRITES a persistent, cross-session memory — declared "mutating"
-    in TOOL_CAPABILITIES, so it's gated behind human_approval every time,
-    same as add_note. Only use this for something worth remembering
+    This WRITES a persistent, cross-session memory, so a person approves it
+    before it runs. Only use this for something worth remembering
     long-term, not for information already answerable from the current
     conversation.
     """

@@ -24,6 +24,7 @@ from app.core.tool_runtime import arun_with_timeout
 from app.core.tool_schema import ToolArgs
 from app.core.untrusted import frame_untrusted
 from app.domains.sales.ports import lead_store
+from app.domains.sales.usecases import bounded_notes
 from app.domains.shared import sandbox_session
 from app.domains.shared.policy import ActionAllowlistPolicy
 from app.domains.shared.web_search import make_web_search_tool
@@ -155,9 +156,9 @@ async def schedule_followup(
     config: RunnableConfig,
     tool_call_id: Annotated[str, InjectedToolCallId],
 ) -> str:
-    """Schedule a future follow-up for a lead. scripts/jobs/followup_sweep.py
-    (run via cron) picks these up once due and drafts a nudge for a human
-    to review and send."""
+    """Schedule a future follow-up for a lead. A daily job picks these up
+    once due and drafts a nudge for a human to review and send."""
+    # The job is scripts/jobs/followup_sweep.py, run by cron.
     ctx = ctx_or_refuse(config, "schedule_followup")
     if ctx is None:
         return NO_CTX_REFUSAL
@@ -176,26 +177,6 @@ class PackageLeadBriefArgs(BaseModel):
     contact: str = Field(..., description="The lead's contact to brief on.")
 
 
-# What `package_lead_brief` will replay of a lead's notes, in characters. A single
-# website-research note can be 20,000 characters (the crawler's own cap) and every
-# `enrich_lead_from_website` adds another, so an uncapped replay grew with each
-# enrichment — 59,150 characters after three. Roughly 2,000 tokens is room for
-# the notes a rep actually wrote plus the newest research, and a small model's
-# context is not the place for the rest.
-BRIEF_NOTES_MAX_CHARS = 8_000
-
-
-def _bounded_notes(notes: str) -> str:
-    """The newest `BRIEF_NOTES_MAX_CHARS` of `notes` (they are aggregated
-    oldest-first), with the cut stated so a reader doesn't take the start of
-    the text for the start of the history. Cuts the aggregate, not each note:
-    the aggregate is one string by the time it reaches here, and the newest
-    material is what a handoff needs."""
-    if len(notes) <= BRIEF_NOTES_MAX_CHARS:
-        return notes
-    return f"[earlier notes omitted — the newest {BRIEF_NOTES_MAX_CHARS} characters follow]\n{notes[-BRIEF_NOTES_MAX_CHARS:]}"
-
-
 async def _package_lead_brief_impl(contact: str, ctx: SecurityCtx) -> str:
     history = await lead_store.get().lead_history(ctx["tenant"], contact)
     if history is None:
@@ -203,7 +184,7 @@ async def _package_lead_brief_impl(contact: str, ctx: SecurityCtx) -> str:
     # Notes are untrusted: they include whole crawled pages (enrichment) and
     # text a lead wrote, and this tool is read-only so it runs without an
     # approval. Framed as data and bounded, however many accumulated.
-    notes = _bounded_notes(history["notes"]) if history["notes"] else ""
+    notes = bounded_notes(history["notes"]) if history["notes"] else ""
     lines = [
         f"Lead: {history['name']} ({history['contact']})",
         f"Status: {history['status']}",
@@ -211,9 +192,8 @@ async def _package_lead_brief_impl(contact: str, ctx: SecurityCtx) -> str:
     ]
     if history["followups"]:
         lines.append("Follow-ups:")
-        lines.extend(
-            f"  - [{f['status']}] due {f['due_at']}: {f['note']}" for f in history["followups"]
-        )
+        # A follow-up's note was written from what a lead said, like the notes above.
+        lines.append(frame_untrusted("\n".join(f"  - [{f['status']}] due {f['due_at']}: {f['note']}" for f in history["followups"])))
     return "\n".join(lines)
 
 
@@ -289,7 +269,7 @@ async def _list_pending_followups_impl(contact: str | None, ctx: SecurityCtx) ->
     lines = [
         f"- due {f['due_at']}: {f['lead_name']} ({f['contact']}) — {f['note']}" for f in followups
     ]
-    return "\n".join(lines)
+    return frame_untrusted("\n".join(lines))
 
 
 @tool(args_schema=ListPendingFollowupsArgs)
@@ -379,8 +359,7 @@ async def enrich_lead_from_website(
     research summary to their notes — use this BEFORE package_lead_brief/
     handoff_to_human for a lead who's shown real buying intent, so a rep
     gets something researched instead of just "wants a demo." Reaches the
-    open internet — declared "outward" in TOOL_CAPABILITIES, so it always
-    requires human approval before it runs, same as any mutating tool.
+    open internet, so it always requires human approval before it runs.
     Requires an existing lead: if it is new, call log_lead_interaction alone and wait for its result, never in the same step."""
     ctx = ctx_or_refuse(config, "enrich_lead")
     if ctx is None:
@@ -457,8 +436,7 @@ async def run_command_in_sandbox(
 ) -> str:
     """Run a shell command inside an isolated, disposable sandbox —
     use this for plain shell tasks only, NOT for Python computation.
-    For real deal-economics math calculator's plain arithmetic can't
-    do (a multi-year contract with an annual escalation % and
+    For real deal-economics math (a multi-year contract with an annual escalation % and
     volume-discount tiers, not just one flat expression), use
     run_python_in_sandbox instead — it takes your script as a plain
     parameter, no shell quoting to get right. STOP: if this is that
@@ -469,8 +447,7 @@ async def run_command_in_sandbox(
     `python -c '...'` is exactly the mistake run_python_in_sandbox
     exists to make impossible — any quote or apostrophe in your code
     (a dict literal like {'years': 3, ...}, an f-string) collides with
-    the shell's own quoting and silently breaks the script, confirmed
-    via repeated real failures. One sandbox is created
+    the shell's own quoting and silently breaks the script. One sandbox is created
     automatically per conversation and reused for every call in it —
     you never create, connect to, or track a sandbox yourself, just
     describe the command. Don't `pip install` anything (no network
@@ -517,8 +494,7 @@ async def _run_python_in_sandbox_impl(script: str, thread_id: str, ctx: Security
 async def run_python_in_sandbox(
     script: str, config: RunnableConfig, tool_call_id: Annotated[str, InjectedToolCallId]
 ) -> str:
-    """Run real deal-economics math calculator's plain arithmetic
-    can't do: a multi-year contract with an annual escalation % and
+    """Run real deal-economics math: a multi-year contract with an annual escalation % and
     volume-discount tiers, not just one flat expression. STOP: if this
     is that kind of multi-year/escalation/discount math, call
     use_skill("deal-economics") BEFORE writing anything — it has the
@@ -581,9 +557,7 @@ async def read_sandbox_file(
     write_sandbox_file). Same auto-created sandbox as
     run_command_in_sandbox. If this returns an unexpected "file not
     found" for a file you know exists, use run_command_in_sandbox with
-    `cat <path>` instead — a disclosed, environment-specific gap in
-    this particular tool, not in write_sandbox_file or
-    run_command_in_sandbox. Reaches an external service — always
+    `cat <path>` instead. Reaches an external service — always
     requires human approval before it runs."""
     ctx = ctx_or_refuse(config, "read_sandbox_file")
     if ctx is None:

@@ -22,6 +22,7 @@ Run with: `python -m promptfoo.dump_prompts` (see Makefile).
 import json
 from pathlib import Path
 
+from app.core.prompt_rules import compose_system_prompt
 from app.domains.ops.domain import OPS_SYSTEM_PROMPT
 from app.domains.sales.domain import SALES_SYSTEM_PROMPT
 from app.domains.support.domain import SUPPORT_SYSTEM_PROMPT
@@ -39,7 +40,7 @@ def main() -> None:
     PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
     for name, system_prompt in _DOMAIN_PROMPTS.items():
         messages = [
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": compose_system_prompt(system_prompt)},  # what the app sends: with the platform rules (pattern 114)
             {"role": "user", "content": "{{user_message}}"},
         ]
         (PROMPTS_DIR / f"{name}.json").write_text(json.dumps(messages, indent=2), encoding="utf-8")

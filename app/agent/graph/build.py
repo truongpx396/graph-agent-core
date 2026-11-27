@@ -28,11 +28,13 @@ factory that builds it; `graph_edge_route_after_<node>` is the router of that no
 identity (traces, metrics, checkpoints); `EDGE_CHANNEL_NAMES` is the edge's.
 """
 import functools
+import logging
 from collections.abc import Awaitable, Callable, Hashable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.runnables import RunnableConfig
+from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -112,8 +114,11 @@ from app.core.config import (
     OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS,
     SEMANTIC_CACHE_ENABLED,
 )
+from app.core.prompt_rules import compose_system_prompt, prompt_version
 from app.core.security import SecurityCtx
 from app.ports.outbound.retrieval import answer_cache
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from app.ports.outbound.domains import AgentManifest, DomainPlugin
@@ -294,6 +299,12 @@ def build_graph(
     llm_client = deps.llm or (deps.llm_factory or make_llm)(domain_tools)
     model_alias = deps.model_alias or CHAT_MODEL
 
+    # What the model is sent, and what the leak check compares an answer against: the domain's prompt plus the platform's rules. Composed
+    # here, the one builder, so a domain or a subagent cannot be built without them (pattern 114).
+    system_prompt = compose_system_prompt(manifest.system_prompt)
+    version = prompt_version(system_prompt, [convert_to_openai_tool(t) for t in domain_tools])
+    logger.info("graph built", extra={"domain": manifest.name, "prompt_version": version})
+
     # Plain module-level functions bound to THIS domain with functools.partial, not factories:
     # they stay directly callable from tests with just `state` (and the domain's values), and
     # each is checked against the capability mapping / tool set / prompt the graph was ACTUALLY
@@ -308,7 +319,7 @@ def build_graph(
     )
     graph_node_check_output_bound = functools.partial(
         graph_node_check_output,
-        system_prompt=manifest.system_prompt,
+        system_prompt=system_prompt,
         enforce_citations=profile.enforce_citations,
         skill_required_tools=skill_required_tools,
         tool_names=valid_tool_names,
@@ -325,7 +336,7 @@ def build_graph(
         citation_reminder=profile.enforce_citations,
         skill_required_tools=skill_required_tools,
         cannot_open_links=cannot_open_links(valid_tool_names),
-        system_prompt=manifest.system_prompt,
+        system_prompt=system_prompt,
         hold_context_gap=CONTEXT_GAP_REASK_ENABLED,
     )
     graph_node_retrieve_context = make_graph_node_retrieve_context(deps.search_docs or default_search)
@@ -373,7 +384,7 @@ def build_graph(
         "no_answer",
         make_graph_node_no_answer(
             emit_message=emit_no_answer_message,
-            system_prompt=manifest.system_prompt,
+            system_prompt=system_prompt,
             enforce_citations=profile.enforce_citations,
             skill_required_tools=skill_required_tools,
             tool_names=valid_tool_names,
@@ -384,16 +395,19 @@ def build_graph(
         # Read as bare module globals, resolved when build_graph runs: tests/conftest.py's autouse
         # fixtures replace default_cache_get/default_cache_set on THIS module.
         # The default cache is bound to THIS graph's domain (`manifest.name`) here, in the one place that knows it: `app/agent/runtime/core.py` knows it too,
-        # but imports this module. A test's injected `cache_get`/`cache_set` is used as given.
+        # but imports this module. The prompt's version is part of that scope: after a prompt or tool change, an answer the old one gave is not replayed
+        # (it expired only with SEMANTIC_CACHE_TTL_SECONDS, an hour, which is how long a safety fix took to reach a cached question). A test's injected
+        # `cache_get`/`cache_set` is used as given.
+        cache_scope = f"{manifest.name}@{version}"
         # SEMANTIC_CACHE_ENABLED false makes both nodes return at once; they stay in the graph so the topology does not depend on a setting.
         add(
             "check_semantic_cache",
-            make_graph_node_check_semantic_cache(deps.cache_get or functools.partial(default_cache_get, domain=manifest.name), enabled=SEMANTIC_CACHE_ENABLED),
+            make_graph_node_check_semantic_cache(deps.cache_get or functools.partial(default_cache_get, domain=cache_scope), enabled=SEMANTIC_CACHE_ENABLED),
         )
         add(
             "write_semantic_cache",
             make_graph_node_write_semantic_cache(
-                deps.cache_set or functools.partial(default_cache_set, domain=manifest.name), tool_capabilities, enabled=SEMANTIC_CACHE_ENABLED
+                deps.cache_set or functools.partial(default_cache_set, domain=cache_scope), tool_capabilities, enabled=SEMANTIC_CACHE_ENABLED
             ),
         )
     if profile.include_compaction:
@@ -512,6 +526,7 @@ def build_graph(
     # it and which tools it was given, without changing this function's return type.
     compiled.manifest = manifest  # type: ignore[attr-defined]  # deliberate stash, see comment above
     compiled.tools_by_name = {t.name: t for t in domain_tools}  # type: ignore[attr-defined]  # same
+    compiled.prompt_version = version  # type: ignore[attr-defined]  # same; the runtime puts it on a turn's trace
     return compiled
 
 

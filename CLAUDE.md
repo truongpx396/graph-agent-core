@@ -54,7 +54,9 @@ make chat              # CLI agent; chat-hitl adds approval prompts (turns go th
 
 `make eval`, `promptfoo`, `garak`, `deepeval`, `test-sandbox`, `test-provider-sandbox` need live models or services and
 are manual by design. Run `make eval` + `make promptfoo` after a prompt, model-alias or
-retrieval change. `make model-eval KIND=embedding|reranker|screen|classifier CANDIDATE=<name>` is the same kind of tier for a
+retrieval change. Run `make prompt-check` (native Ollama, ~5 min) before and after any change to a prompt, a tool description or
+`app/core/prompt_rules.py` (`ARGS="--out before.json"`, then `ARGS="--compare before.json"`): it is the only check that sends each
+domain's real prompt and tools. `make model-eval KIND=embedding|reranker|screen|classifier CANDIDATE=<name>` is the same kind of tier for a
 *model swap*: it judges a candidate against the recorded baseline (`evals/README.md`), and `make model-eval-verify`
 needs no model or network. Run it before changing an embedding, reranker or screening model, and read the report's
 `controls` first. The routing classifier has one more manual target, `make router-label JUDGE=<alias>` (score the local and strong
@@ -79,7 +81,7 @@ they delete volumes or kill running processes.
   several domains share, with `SHARED_TOOL_CAPABILITIES`), `idempotency.py`, the skill and subagent catalogs
   (one shared `frontmatter.py` loader) and `run_subagent`. `cost/` is the spend meter and caps
   (`docs/COST_GOVERNANCE.md`). `AgentManifest`/`DomainPlugin` (the plugin contract) are in `app/ports/outbound/domains.py`. Outside `app/agent`, a domain imports only `app.agent.tools` and a driving adapter only `app.agent.runtime` and `app.agent.cost` (`tests/core/test_architecture_layers.py`).
-- `app/domains/{ecorp,support,ops,sales}/` — each is a **module** (`docs/ARCHITECTURE.md`, "The business modules"): `domain.py` + `tools.py` + `store.py` + `ports.py` (its repository port), and
+- `app/domains/{ecorp,support,ops,sales}/` — each is a **module** (`docs/ARCHITECTURE.md`, "The business modules"): `prompt.md` (its system prompt, pattern 114) + `domain.py` + `tools.py` + `store.py` + `ports.py` (its repository port), and
   `registry.py` looks them up by name. A module imports no other module (`app/domains/shared/` holds `policy.py`, `sandbox_session.py` and `web_search.py`, which they share), and code outside
   `app/domains/` imports only its `domain` and `usecases` (`tests/core/test_architecture_layers.py`). Ecorp is the default but has no standing in the graph: `build_graph`
   requires a manifest and a domain. A new use case follows that shape; it never forks `build_graph()`. A domain's skills and subagents are
@@ -104,7 +106,7 @@ they delete volumes or kill running processes.
   `app/bootstrap.py::adapters()` is the one table of port to adapter; every entrypoint calls `wire()` first. In `app/agent` and
   `app/domains` import no infrastructure client (psycopg, redis, qdrant_client, openai, httpx, ...) and no adapter:
   `tests/core/test_architecture_layers.py` fails the build. Tests bind a fake with `Slot.overriding` (`tests/fakes/`).
-- `app/core/` — what every package may use and that depends on none of them: config, `log_context.py` (the ids every log line carries), `spans.py` (OpenTelemetry spans: where time went) and `llm_tracing.py` (the Langfuse client: what the model saw), which share one trace id (RUNTIME_PATTERNS.md 113), security (`SecurityCtx`, `AccessScope`),
+- `app/core/` — what every package may use and that depends on none of them: `prompt_rules.py` (the rules every agent's system prompt ends with, pattern 114), config, `log_context.py` (the ids every log line carries), `spans.py` (OpenTelemetry spans: where time went) and `llm_tracing.py` (the Langfuse client: what the model saw), which share one trace id (RUNTIME_PATTERNS.md 113), security (`SecurityCtx`, `AccessScope`),
   metrics, errors, scrubbing, resilience, `gateway.py` (the identity the gateway is told) and `moderation.py`, and what every
   tool runs through: `tool_runtime.py` (timeout, scrub, fail-closed ctx) and `tool_idempotency.py` (the exactly-once guard). A
   module belongs here when it imports nothing from `agent`, `domains`, `api` or an adapter, and no infrastructure client. The

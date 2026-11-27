@@ -23,6 +23,7 @@ def test_documentation_alone_skips_the_slow_jobs(paths):
     # Markdown the AGENT runs: a change here changes behaviour and must be tested like code.
     ["app/domains/support/skills/refund/SKILL.md"],
     ["app/domains/ops/subagents/triage/AGENT.md"],
+    ["app/domains/ops/prompt.md"],
     ["docs/ARCHITECTURE.md", "app/core/config.py"],
     ["requirements-lock.txt"], [".github/workflows/ci.yml"], ["services/ml-service/models.toml"], ["packages/billing/pyproject.toml"],
     [],  # an empty diff is a failed lookup, not a documentation change
