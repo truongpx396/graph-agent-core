@@ -40,9 +40,11 @@ def _llm():
 async def test_the_default_cache_is_asked_and_written_under_the_graphs_own_domain(monkeypatch):
     asked, written = _record(monkeypatch)
 
-    await _run_one_turn(build_graph(GraphDeps(llm=_llm())))
+    graph = build_graph(GraphDeps(llm=_llm()))
+    await _run_one_turn(graph)
 
-    assert asked == ["ecorp"] and written == ["ecorp"]
+    scope = f"ecorp@{graph.prompt_version}"
+    assert asked == [scope] and written == [scope]
 
 
 async def test_another_domains_graph_uses_its_own_name(monkeypatch):
@@ -51,7 +53,7 @@ async def test_another_domains_graph_uses_its_own_name(monkeypatch):
     await _run_one_turn(build_graph(GraphDeps(llm=_llm()), manifest=SUPPORT_MANIFEST, domain=SUPPORT_DOMAIN_PLUGIN))
     await _run_one_turn(build_graph(GraphDeps(llm=_llm()), manifest=SALES_MANIFEST, domain=SALES_DOMAIN_PLUGIN))
 
-    assert asked == ["support", "sales"] and written == ["support", "sales"]
+    assert [scope.split("@")[0] for scope in asked] == ["support", "sales"] and written == asked
 
 
 async def test_a_cache_a_test_injects_is_used_as_given_with_no_domain_forced_on_it(monkeypatch):

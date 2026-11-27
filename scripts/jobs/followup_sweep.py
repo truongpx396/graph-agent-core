@@ -31,23 +31,15 @@ from app.core.prompt_rules import compose_system_prompt
 from app.core.security import SecurityCtx
 from app.core.untrusted import frame_untrusted
 from app.domains.sales import usecases
-from app.domains.sales.domain import SALES_VOICE
+from app.domains.sales.domain import SALES_FOLLOWUP_PROMPT
 from app.platform.job_runtime import scheduled_job
 from app.ports.outbound.llm import ChatModel
 from app.ports.outbound.notify import team_channel
 
 _CRON_CTX: SecurityCtx = {"tenant": DEFAULT_TENANT, "principal": "sales-followup-cron", "claims": {}}
 
-# Its own prompt, not the concierge's: that one orders tool calls ("call log_lead_interaction first") and this call has no tools.
-_DRAFT_SYSTEM_PROMPT = compose_system_prompt(
-    f"""You are Ecorp's sales concierge.
-
-{SALES_VOICE}
-
-You are drafting ONE follow-up nudge for a lead who is due for contact today. You'll be given their name, the note left when this follow-up
-was scheduled, and what is on record about them. Write a short, ready-to-send message in the voice described above: write the message itself,
-not a description of what you'd say. You have no tools here. Use only what you are given, and never invent a price, a feature or a date."""
-)
+# Its own prompt (app/domains/sales/followup_prompt.md), not the concierge's: that one orders tool calls and this call has no tools.
+_DRAFT_SYSTEM_PROMPT = compose_system_prompt(SALES_FOLLOWUP_PROMPT)
 
 
 def build_followup_prompt(lead_name: str, contact: str, note: str, history: str) -> str:
