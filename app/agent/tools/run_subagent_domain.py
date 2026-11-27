@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.agent.tools import run_subagent as subagent_tools_module
 from app.agent.tools.run_subagent import build_subagent_registry
+from app.core.untrusted import frame_untrusted
 
 
 def make_domain_subagent_tool(
@@ -106,7 +107,8 @@ def make_domain_subagent_tool(
         )
         return Command(
             update={
-                "messages": [ToolMessage(content=result.answer, tool_call_id=tool_call_id)],
+                # A specialist reads documents and records, so what it reports back is framed like what it read.
+                "messages": [ToolMessage(content=frame_untrusted(result.answer), tool_call_id=tool_call_id)],
                 "subagent_spend": [(result.total_tokens, result.total_cost_usd)],
             }
         )

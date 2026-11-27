@@ -17,6 +17,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from app.agent.graph.build import GraphDeps
 from app.agent.graph.messages import COMPACTION_MARKER_KEY
 from app.agent.graph.retrieval import make_graph_node_retrieve_context
+from app.core.prompt_rules import compose_system_prompt
 from app.ports.outbound.domains import AgentManifest
 from tests.agent.fakes import cfg, scripted_llm
 from tests.ecorp import build_graph
@@ -80,7 +81,7 @@ async def test_the_model_is_sent_the_summary_and_context_before_the_question_aft
     compacted = [m for m in (await g.aget_state(config)).values["messages"] if getattr(m, "additional_kwargs", {}).get(COMPACTION_MARKER_KEY)]
     assert compacted, "test setup: compaction never fired, so this proves nothing"
     # The agent's call: the calls before it are the compaction's own, the one after it the follow-ups'.
-    call_ = next(c for c in seen if c[0].content == "You are the prompt." and any("REFUND POLICY TEXT" in str(m.content) for m in c))
+    call_ = next(c for c in seen if c[0].content == compose_system_prompt("You are the prompt.") and any("REFUND POLICY TEXT" in str(m.content) for m in c))
     sent = next(m for m in call_ if "REFUND POLICY TEXT" in str(m.content))
     assert isinstance(sent, HumanMessage), "the context rides on the question, not on a system message (pattern 79)"
     text = str(sent.content)

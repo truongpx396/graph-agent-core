@@ -9,9 +9,9 @@ import re
 from app.agent.tools.skill_catalog import load_skills
 from app.domains.registry import DOMAINS
 
-# (skill, domain, tool): a skill that NAMES a tool its domain lacks, on purpose, to say it is not enough. `deal-economics` (sales) explains that `calculator` cannot hold a
-# loop and sends the agent to the sandbox. Not a gap: delete the entry if the skill stops saying it.
-MENTIONED_NOT_CALLED = frozenset({("deal-economics", "sales", "calculator")})
+# (skill, domain, tool): a skill that NAMES a tool its domain lacks, on purpose, to say it is not enough. None today: a model that reads a
+# tool's name may try to call it, so say what to do instead.
+MENTIONED_NOT_CALLED: frozenset[tuple[str, str, str]] = frozenset()
 
 
 def tools_of(domain: str) -> set[str]:

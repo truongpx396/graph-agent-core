@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+from app.core.untrusted import OPEN_TAG, frame_untrusted
 from app.domains.shared import sandbox_session
 
 
@@ -397,7 +398,7 @@ class TestReadWriteSandboxFileImpl:
 
         result = await sandbox_session.read_sandbox_file_impl("/tmp/out.txt", "t", raw, tenant="ecorp")
 
-        assert result == "hello world"
+        assert result == frame_untrusted("hello world")
 
     async def test_write_confirms_the_path(self):
         captured = {}
@@ -481,7 +482,7 @@ class TestSandboxResultsAreBounded:
 
         result = await sandbox_session.run_command_in_sandbox_impl("yes", "t", raw, tenant="ecorp")
 
-        assert result.startswith("exit code: 0")
+        assert result.startswith(f"{OPEN_TAG}\nexit code: 0")
         assert "characters omitted" in result
         assert len(result) < 1000
 
@@ -524,7 +525,7 @@ class TestSandboxResultsAreBounded:
 
         result = await sandbox_session.run_command_in_sandbox_impl("echo 42", "t", raw, tenant="ecorp")
 
-        assert result == "exit code: 0\nstdout:\n42\n"
+        assert result == frame_untrusted("exit code: 0\nstdout:\n42\n")
 
 
 class TestTheSharedArgumentLimit:

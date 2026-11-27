@@ -27,32 +27,39 @@ from pydantic import SecretStr
 
 from app.agent.cost import metering
 from app.core.config import CHAT_MODEL, DEFAULT_TENANT, OPENAI_API_BASE, OPENAI_API_KEY
+from app.core.prompt_rules import compose_system_prompt
 from app.core.security import SecurityCtx
+from app.core.untrusted import frame_untrusted
 from app.domains.sales import usecases
-from app.domains.sales.domain import SALES_MANIFEST
+from app.domains.sales.domain import SALES_VOICE
 from app.platform.job_runtime import scheduled_job
 from app.ports.outbound.llm import ChatModel
 from app.ports.outbound.notify import team_channel
 
 _CRON_CTX: SecurityCtx = {"tenant": DEFAULT_TENANT, "principal": "sales-followup-cron", "claims": {}}
 
-_DRAFT_TASK_INSTRUCTIONS = """
+# Its own prompt, not the concierge's: that one orders tool calls ("call log_lead_interaction first") and this call has no tools.
+_DRAFT_SYSTEM_PROMPT = compose_system_prompt(
+    f"""You are Ecorp's sales concierge.
 
-You are now drafting ONE follow-up nudge for a lead who is due for contact
-today. You'll be given their name, the note left when this follow-up was
-scheduled, and their interaction history so far. Write a short,
-ready-to-send message in the voice described above — a human will review
-it before anything goes out, so write the message itself, not a
-description of what you'd say."""
+{SALES_VOICE}
+
+You are drafting ONE follow-up nudge for a lead who is due for contact today. You'll be given their name, the note left when this follow-up
+was scheduled, and what is on record about them. Write a short, ready-to-send message in the voice described above: write the message itself,
+not a description of what you'd say. You have no tools here. Use only what you are given, and never invent a price, a feature or a date."""
+)
 
 
-def build_followup_prompt(lead_name: str, contact: str, note: str) -> str:
+def build_followup_prompt(lead_name: str, contact: str, note: str, history: str) -> str:
     """Pure — the human-turn text for one lead's drafting call. Kept
     separate from run_followup_sweep so it's directly unit-testable
-    without an LLM."""
+    without an LLM. The history holds what a lead said and what a page said,
+    so it is framed as data; the scheduling note is what this draft is FOR,
+    so it is not (a frame tells the model not to do what it says)."""
     return (
         f"Lead: {lead_name} ({contact})\n"
-        f"Follow-up note: {note}\n\n"
+        f"Follow-up note: {note}\n"
+        f"On record:\n{frame_untrusted(history) if history else '(nothing yet)'}\n\n"
         "Draft the nudge message now."
     )
 
@@ -72,15 +79,14 @@ async def run_followup_sweep(tenant: str = DEFAULT_TENANT, llm: ChatModel | None
         api_key=SecretStr(OPENAI_API_KEY),
         temperature=0,
     )
-    system_prompt = SALES_MANIFEST.system_prompt + _DRAFT_TASK_INSTRUCTIONS
-
     drafts = []
     for item in due:
-        human_prompt = build_followup_prompt(item["lead_name"], item["contact"], item["note"])
+        history = await usecases.lead_notes(tenant, item["contact"])
+        human_prompt = build_followup_prompt(item["lead_name"], item["contact"], item["note"], history)
         # One metered call (app/agent/cost/metering.py): identity, priced once, one usage event.
         call = await metering.metered_invoke(
             chat,
-            [SystemMessage(content=system_prompt), HumanMessage(content=human_prompt)],
+            [SystemMessage(content=_DRAFT_SYSTEM_PROMPT), HumanMessage(content=human_prompt)],
             config={"configurable": {"ctx": _CRON_CTX, "thread_id": f"followup-sweep:{item['id']}"}},
             kind="cron",
             model_alias=CHAT_MODEL,

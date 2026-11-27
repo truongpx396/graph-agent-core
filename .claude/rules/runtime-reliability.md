@@ -20,7 +20,10 @@ session; the pattern documents (`docs/README.md` maps each number to its file) h
 
 ## Graph (`app/agent/graph/`)
 
-- `SYSTEM_PROMPT` stays a ctx-free constant (pattern 19). Never interpolate a tenant, principal,
+- Every prompt is a domain's own text plus the platform's rules (`app/core/prompt_rules.py`, added by `build_graph`, pattern 114): a rule for
+  every agent goes there, never into one domain. Outside text a tool returns goes through `frame_untrusted`, and a tool's docstring is read by
+  the model, so developer notes are comments.
+- A system prompt stays a ctx-free constant (pattern 19). Never interpolate a tenant, principal,
   or timestamp; `tests/agent/graph/test_prompt_cache_stability.py` guards it.
 - Names follow one rule (docs/GRAPH_PATTERNS.md "Naming", `tests/agent/graph/test_graph_naming.py`): the node registered as `"<node>"` is
   `graph_node_<node>` (a factory is `make_graph_node_<node>`), and the router of its conditional edge is

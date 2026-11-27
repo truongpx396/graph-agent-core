@@ -16,7 +16,7 @@ import getpass
 import sys
 import uuid
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 
 from app.agent.graph.build import build_graph
@@ -47,10 +47,7 @@ async def investigate(question: str) -> str:
     # (app/agent/graph/core.py); LangGraph's sync Pregel loop can't run one.
     result = await graph.ainvoke(
         {
-            "messages": [
-                SystemMessage(content=OPS_MANIFEST.system_prompt),
-                HumanMessage(content=question),
-            ],
+            "messages": [HumanMessage(content=question)],  # the graph adds the system prompt on every call (pattern 19)
             "require_approval": False,
         },
         config=config,

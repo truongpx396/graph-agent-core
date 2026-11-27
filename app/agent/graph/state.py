@@ -37,7 +37,8 @@ HISTORY_TOKEN_FLOOR = 4000  # once tripped, trim front-to-back until the
 # cache-friendly growth before the ceiling trips again.
 #
 # Not scaled 1:1 with litellm-config.yaml's num_ctx (32000): that answers "what fits without truncation"
-# (margin for ~2500 tokens of system prompt/tool schemas plus a retry round's ~2x spend); this pair answers
+# (margin for the 3,000 to 4,700 tokens of system prompt and tool schemas the shipped domains send, cl100k estimate,
+# 2026-11, plus a retry round's ~2x spend); this pair answers
 # "how much raw history is worth carrying", a cost/latency tradeoff. qwen2.5:3b has dropped the "mandatory"
 # citation instruction in prompts of only ~2300-2800 tokens, so a wide ceiling is not sized up just because
 # num_ctx has room. 24000/4000 leaves margin for a retry round plus retrieved context.

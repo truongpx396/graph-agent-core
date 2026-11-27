@@ -160,7 +160,6 @@ async def _run_case_once(graph: AgentGraph, case: GoldenCase) -> _Attempt:
     }
     start = time.monotonic()
 
-    # Seed the system prompt before the first real turn — build_graph() +
     # `ainvoke`/`aget_state`, not sync `.invoke()`/`.get_state()` — the
     # graph's nodes are `async def` now (app/agent/graph/core.py), and
     # LangGraph's sync Pregel loop can't run an async-only node at all.

@@ -46,6 +46,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from app.agent.runtime.core import DEFAULT_DOMAIN
 from app.bootstrap import wire
 from app.core.config import settings as app_settings
+from app.core.prompt_rules import compose_system_prompt
 from app.core.tool_schema import strict_tool_schema
 from app.domains.registry import resolve_domain
 
@@ -201,7 +202,7 @@ def app_tools_and_prompt(strict: bool | None = None) -> tuple[list[dict[str, Any
     if manifest.allowed_tools:
         tools = [t for t in tools if t.name in set(manifest.allowed_tools)]
     use_strict = app_settings.tool_calls_strict if strict is None else strict
-    return [strict_tool_schema(t) if use_strict else convert_to_openai_tool(t) for t in tools], manifest.system_prompt
+    return [strict_tool_schema(t) if use_strict else convert_to_openai_tool(t) for t in tools], compose_system_prompt(manifest.system_prompt)
 
 
 def chat(client: httpx.Client, base: str, model: str, options: dict[str, Any], messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> dict[str, Any]:

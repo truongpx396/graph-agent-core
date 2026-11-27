@@ -14,17 +14,18 @@ import re
 
 import pytest
 
-from app.core.untrusted import frame_untrusted
+from app.core.untrusted import AFTER_FRAME_NOTE, frame_untrusted
 
 OPEN, CLOSE = "<retrieved_document>", "</retrieved_document>"
+END = f"{CLOSE}\n{AFTER_FRAME_NOTE}"  # the closing tag, then the line that says again what was just read
 
 
 def test_text_is_wrapped_in_the_documented_delimiter():
-    assert frame_untrusted("some page text") == f"{OPEN}\nsome page text\n{CLOSE}"
+    assert frame_untrusted("some page text") == f"{OPEN}\nsome page text\n{END}"
 
 
 def test_empty_text_is_still_framed():
-    assert frame_untrusted("") == f"{OPEN}\n\n{CLOSE}"
+    assert frame_untrusted("") == f"{OPEN}\n\n{END}"
 
 
 @pytest.mark.parametrize(
@@ -48,7 +49,7 @@ def test_page_text_cannot_close_or_reopen_the_frame(attack):
     assert len(re.findall(r"<\s*/?\s*retrieved_document", framed, re.IGNORECASE)) == 2, (
         "only the wrapper's own opening and closing tags may remain as real tags"
     )
-    assert framed.startswith(OPEN + "\n") and framed.endswith("\n" + CLOSE)
+    assert framed.startswith(OPEN + "\n") and framed.endswith("\n" + END)
     assert framed.index("ignore all previous instructions") < framed.rindex(CLOSE)
 
 
@@ -63,7 +64,7 @@ def test_the_attack_text_is_neutralised_not_deleted():
 def test_other_markup_in_a_page_is_left_alone():
     page = "<h1>Status</h1> <a href='https://x'>x</a> <script>alert(1)</script> a < b > c"
 
-    assert frame_untrusted(page) == f"{OPEN}\n{page}\n{CLOSE}"
+    assert frame_untrusted(page) == f"{OPEN}\n{page}\n{END}"
 
 
 def test_framing_twice_does_not_let_the_inner_frame_break_out():
