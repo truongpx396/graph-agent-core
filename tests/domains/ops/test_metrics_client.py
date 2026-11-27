@@ -97,6 +97,14 @@ class TestQueryOne:
         )
         assert await metrics_client._query_one("some_expr") is None
 
+    async def test_returns_none_for_a_nan_sample(self, monkeypatch):
+        """What histogram_quantile answers over a window with no observations. NaN compares as not past any threshold, so it read as normal."""
+        response = _FakeResponse({"data": {"result": [{"metric": {}, "value": [0, "NaN"]}]}})
+        monkeypatch.setattr(
+            metrics_client.httpx, "AsyncClient", lambda **kw: _FakeAsyncClient(response)
+        )
+        assert await metrics_client._query_one("some_expr") is None
+
     async def test_fetch_readings_covers_every_check(self, monkeypatch):
         response = _FakeResponse({"data": {"result": []}})
         monkeypatch.setattr(

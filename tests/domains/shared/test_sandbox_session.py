@@ -175,6 +175,19 @@ class TestRunCommandInSandboxImpl:
         assert "stdout: (empty)" in result
         assert "stderr:\nboom" in result
 
+    @pytest.mark.parametrize("stdout, says_nothing_was_printed", [([], True), ([{"text": "2"}], False)])
+    async def test_a_script_that_printed_nothing_is_told_it_has_no_result(self, stdout, says_nothing_was_printed):
+        raw = _raw(
+            sandbox_list=lambda filter: json.dumps({"sandbox_infos": [], "pagination": {}}),
+            sandbox_create=lambda **kw: json.dumps({"sandbox_id": "sbx_1", "info": {}}),
+            file_write=lambda **kw: json.dumps({"status": "written"}),
+            command_run=lambda **kw: json.dumps({"exit_code": 0, "logs": {"stdout": stdout, "stderr": []}}),
+        )
+
+        result = await sandbox_session.run_python_in_sandbox_impl("counts['db_timeout']", "t", raw, tenant="ecorp")
+
+        assert ("printed nothing" in result) is says_nothing_was_printed
+
     async def test_a_remote_tool_error_on_command_run_propagates(self):
         raw = _raw(
             sandbox_list=lambda filter: json.dumps({"sandbox_infos": [], "pagination": {}}),

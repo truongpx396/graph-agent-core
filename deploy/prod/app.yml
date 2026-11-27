@@ -45,6 +45,7 @@ x-app-env: &app-env
   # Blank (the default) follows the turn's limit; deploy/prod/prod.env.example suggests 30 for a hosted model.
   LLM_READ_TIMEOUT_SECONDS: ${LLM_READ_TIMEOUT_SECONDS:-}
   MAX_COST_USD_PER_TURN: ${MAX_COST_USD_PER_TURN:-0.50}
+  MAX_TOKENS_PER_TURN: ${MAX_TOKENS_PER_TURN:-40000}
   MAX_COST_USD_PER_TENANT_PER_DAY: ${MAX_COST_USD_PER_TENANT_PER_DAY:-20.0}
   # The three optional ceilings (0 = off, Settings' own default, so a line left unset changes nothing) and what to do with a model LiteLLM cannot price.
   # deploy/prod/prod.env.example told operators to set them, but nothing passed them to a container: a $400 monthly cap in `.env` capped nothing.
@@ -66,6 +67,9 @@ x-app-env: &app-env
   # The Pyroscope server on the observability droplet, over the VPC (http://<observability_private_ipv4>:4040). Blank = no profiling, the default until
   # it has been tried there (deploy/prod/prod.env.example).
   PYROSCOPE_SERVER_ADDRESS: ${PYROSCOPE_SERVER_ADDRESS:-}
+  # What the ops agent's fetch_metrics_summary reads. The observability droplet's firewall does not open Prometheus to this droplet by default, so with the
+  # default the tool says no metric could be read (deploy/prod/prod.env.example).
+  PROMETHEUS_URL: ${PROMETHEUS_URL:-http://localhost:9090}
   CRAWL4AI_SERVER_URL: ${CRAWL4AI_SERVER_URL:-}
   CRAWL4AI_API_TOKEN: ${CRAWL4AI_API_TOKEN:-}
   SERPER_API_KEY: ${SERPER_API_KEY:-}

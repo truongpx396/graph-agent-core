@@ -238,6 +238,11 @@ class Settings(BillingSettings):
     # (pattern 74). The tools' own validation is the same either way.
     tool_calls_strict: bool = False
 
+    # Cumulative input+output tokens one turn may use before its next tool call is refused (graph/routing.py). Every call re-sends the system prompt
+    # and the tool schemas, about 4,000 tokens in the sales domain, so the old fixed 16,000 stopped any four-call flow: skill_search, use_skill, the
+    # tool, the answer (measured: the deal-economics skill never reached its script). The dollar ceiling below bounds what the work costs.
+    max_tokens_per_turn: int = Field(default=40_000, gt=0)
+
     # Per-run cost ceiling (graph/routing.py::graph_edge_route_after_agent, pattern 35) —
     # a HARD stop before the next tool/LLM call, independent of
     # MAX_TOKENS_PER_TURN (a token cap bounds work; a dollar cap bounds what
@@ -869,6 +874,7 @@ OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS = settings.output_checks_off_on_routed_tiers
 CONTEXT_GAP_REASK_ENABLED = settings.context_gap_reask_enabled
 SEMANTIC_CACHE_TTL_SECONDS = settings.semantic_cache_ttl_seconds
 MEMORY_RETENTION_DAYS = settings.memory_retention_days
+MAX_TOKENS_PER_TURN = settings.max_tokens_per_turn
 MAX_COST_USD_PER_TURN = settings.max_cost_usd_per_turn
 MAX_SUBAGENT_COST_USD_PER_RUN = settings.max_subagent_cost_usd_per_run
 MAX_COST_USD_PER_TENANT_PER_DAY = settings.max_cost_usd_per_tenant_per_day

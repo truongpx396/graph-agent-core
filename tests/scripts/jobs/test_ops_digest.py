@@ -47,8 +47,14 @@ def test_build_digest_prompt_includes_readings_and_flags_anomalies():
 
 
 def test_build_digest_prompt_says_no_anomalies_when_none_found():
-    prompt = ops_digest.build_digest_prompt({}, [])
+    prompt = ops_digest.build_digest_prompt({"turn_error_rate": 0.0}, [])
     assert "No anomalies" in prompt
+
+
+def test_build_digest_prompt_gives_no_all_clear_when_no_metric_could_be_read():
+    prompt = ops_digest.build_digest_prompt({"turn_error_rate": None, "p95_latency_seconds": None}, [])
+    assert "NOT an all-clear" in prompt
+    assert "within its normal range" not in prompt
 
 
 def test_run_digest_posts_the_summary_to_the_team_channel(monkeypatch):

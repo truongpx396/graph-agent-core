@@ -67,6 +67,7 @@ Each budget catches a failure the others cannot.
 
 - **Bug:** `iterations` and `total_tokens` persist across a thread, so `validate_input` resets them each turn (not on a resume). A reset needs a reducer that allows it: `subagent_spend` used `operator.add`, so "reset to `[]`" did nothing.
 - **Bug:** the safety-net exits routed to `no_answer`, which never answered the `tool_calls` of the message that tripped them, so the next LLM call was rejected. `no_answer_fallback` answers each pending call; a subagent run ending that way is `budget_exceeded`.
+- **Bug:** `MAX_TOKENS_PER_TURN` was a fixed 16,000. Every call re-sends the system prompt and the tool schemas (about 4,000 tokens in the sales domain), so a skill flow (`skill_search`, `use_skill`, the sandbox, the answer) was refused its third tool: the deal-economics example never ran its script. It is now the `MAX_TOKENS_PER_TURN` setting, default 40,000.
 
 ### 12. Untrusted content framing
 Retrieved text is wrapped in `<retrieved_document>` delimiters and the prompt says delimited content is data. One function frames everything: `app/core/untrusted.py::frame_untrusted`.
@@ -209,7 +210,12 @@ The pre-fetch puts documents on the question before the model has decided what t
 - **Bug:** "Who works on Ecorp's engineering team?" got "The retrieved document does not provide specific information..." with `query_employees` bound. The block was a name match ("Ecorp was founded in 2021", +0.6 on the reranker). It takes both an earlier answered turn and the block: alone, or with the history and no block, the model calls the tool.
 - **Bug (found while building it):** re-asking the bare question invented "The CEO of Ecorp is John Doe [2]", with sources; with the line, one question in eleven still got generic steps from memory ("how do I request a new laptop?"), which is why an answer that looked nothing up is thrown away rather than trusted. Telling the model its documents lacked it, as feedback, produced a document search for a staff question, or a tool call written out as text.
 - **Cost:** one extra model call on these turns (nothing removes it); a documents answer starts to show after its first sentence, not its first token; a second look arrives whole. `agent_context_gap_reask_total{outcome="looked_up"|"restored"}` says whether the extra call buys anything: mostly `restored` means it does not. `CONTEXT_GAP_REASK_ENABLED=false` turns all of it off (`OUTPUT_CHECKS_OFF_ON_ROUTED_TIERS` can for routed turns only).
-- **Gaps:** English cue shapes only. An admission worded another way ("None of the provided facts mention an office dog") is not caught, nor is a tool call written out as text. A second look that runs some unrelated tool (a skill search) and then answers from memory is kept: "a tool ran" is all that is checked. In a domain whose prompt allows general knowledge, a correct general answer from a second look is replaced by the "not found" one, which is what that turn showed before.
+- **Gaps:** English cue shapes only. An admission worded another way ("None of the provided facts mention an office dog") is not caught, nor is a tool call written out as text (109 catches that one by its shape). A second look that runs some unrelated tool (a skill search) and then answers from memory is kept: "a tool ran" is all that is checked. In a domain whose prompt allows general knowledge, a correct general answer from a second look is replaced by the "not found" one, which is what that turn showed before.
+
+### 109. A tool call written out as text ran nothing, so it is sent back
+A small model sometimes prints the call it means to make (`log_lead_interaction({...})`, or a fenced `{"name": ..., "arguments": ...}`) and returns no `tool_calls`. `check_output` took it for an answer, and the person read code where the result should have been.
+- **Check:** `call_as_text` (`output_guardrails.writes_tool_call_as_text`): one of THIS domain's bound tool names followed by `({`, or as the `"name"` of a JSON object that has `"arguments"`. Naming a tool in a sentence does not count. Two rounds, then a message saying a step did not run.
+- **Gaps:** only those two shapes. A call narrated in words is `deferred`'s; an action claimed as done that no tool did ("Ticket created") is not caught by any check.
 
 ### Where the other numbers live
 These are not patterns of the graph. Their numbers are kept so references ("pattern 58") resolve.
@@ -219,7 +225,7 @@ These are not patterns of the graph. Their numbers are kept so references ("patt
 | 11, 29, 30, 31, 37, 43, 49, 96, 99: metrics, web UI, error envelope, pools, the queue and the workers | [RUNTIME_PATTERNS.md](RUNTIME_PATTERNS.md) |
 | 82, 84, 85, 86, 97, 98: the front door, identity, the MCP gateway, production routing | [ACCESS_PATTERNS.md](ACCESS_PATTERNS.md) |
 | 42, 89, 91, 92, 93, 94: the CLI and Telegram | [CHANNEL_PATTERNS.md](CHANNEL_PATTERNS.md) |
-| 21, 28, 32, 50, 78, 87: data tools, MCP, scrubbing, crawl and sandbox, web search | [TOOL_PATTERNS.md](TOOL_PATTERNS.md) |
+| 21, 28, 32, 50, 78, 87, 108: data tools, MCP, scrubbing, crawl and sandbox, web search, metrics | [TOOL_PATTERNS.md](TOOL_PATTERNS.md) |
 | 18, 20, 24, 33, 38, 67, 68, 73, 74: memory, retrieval, ingestion, embeddings, model choice and routing | [RETRIEVAL_AND_MODEL_PATTERNS.md](RETRIEVAL_AND_MODEL_PATTERNS.md) |
 | 40, 48, 59, 60, 69, 72, 75, 76, 77, 83, 86\*, 87\*, 88, 90, 95, 100-102, 106, 107: tests, evals, builds, measurements | [ENGINEERING_PATTERNS.md](ENGINEERING_PATTERNS.md) |
 | 26, 51, 57, 58, 62, 63, 64, 74\*: the usage meter and spend limits | [COST_GOVERNANCE.md](COST_GOVERNANCE.md) |
@@ -340,7 +346,7 @@ A **replay** sees the same `tool_call_id` twice; a **re-ask** arrives under a ne
 The system-wide list; a fix PR deletes its entry.
 
 - **Whoever can write to the checkpoint database can run code in the app.** Loading a crafted msgpack checkpoint imports and calls what it names on `langgraph-checkpoint` 3.0.1 (reproduced; CVE-2026-28277, CVE-2026-48775), as it did on 2.1.2. The upstream fixes need `langgraph` 1.0.10 and checkpoint 4.1.1, which need LangChain 1.x (R19). A deserializer restricted to the types the state really holds would close it sooner; not built. Until then the database's credentials are as sensitive as shell access.
-- **A pre-fetched block can still steer the small model away from the right tool** (qwen2.5:7b at temperature 0; patterns 104, 105). The case where the model SAYS the block lacks the answer is handled (105). Still open: the model that answers from the wrong block without saying so, or writes the tool call out as text. The cause is upstream, the pre-fetch deciding before anything knows what the question needs, and these remedies for it were measured and rejected:
+- **A pre-fetched block can still steer the small model away from the right tool** (qwen2.5:7b at temperature 0; patterns 104, 105). The case where the model SAYS the block lacks the answer is handled (105). Still open: the model that answers from the wrong block without saying so (one that writes the tool call out as text is sent back, 109). The cause is upstream, the pre-fetch deciding before anything knows what the question needs, and these remedies for it were measured and rejected:
   - *A stricter pre-fetch floor than `search_docs`'s -8.0.* On `retrieval-domains` v1 (151 labelled questions, 78 chunks, `ml-service` `/rerank`) a floor of +1 drops the roster questions (0.0 to -0.6) and also the context of 12% of dev and 7% of test questions, and without context only 5 of those 13 make the model call `search_docs`. The score ranges overlap (the gold chunks' 10th percentile is -2.6 on dev).
   - *A sentence after the citation reminder* ("if that content lacks the answer, call the tool that can look it up"): roster 0 to 1 of 4, and not the right tool.
   - *The pre-fetch presented as an assistant `search_docs` call and its result*: roster 0 of 4, good matches unchanged.

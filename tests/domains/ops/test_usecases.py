@@ -42,6 +42,23 @@ async def test_the_summary_says_so_when_nothing_is_past_its_threshold():
     assert "No anomalies" in text and "Anomalies (past" not in text
 
 
+async def test_the_summary_gives_no_all_clear_when_no_metric_could_be_read():
+    """The metrics store unreachable: every reading is None, so nothing is past a threshold. It reported every metric as normal."""
+    with metrics_reader.overriding(_Metrics({check.name: None for check in metric_checks.CHECKS})):
+        text = await usecases.fetch_metrics_summary_impl()
+
+    assert "NOT an all-clear" in text
+    assert "within its normal range" not in text
+
+
+async def test_the_summary_names_the_metrics_it_has_no_data_for():
+    with metrics_reader.overriding(_Metrics(_quiet() | {"p95_latency_seconds": None})):
+        text = await usecases.fetch_metrics_summary_impl()
+
+    assert "No data for p95_latency_seconds" in text
+    assert "within its normal range" not in text
+
+
 async def test_the_summary_lists_each_anomaly_after_the_readings():
     with metrics_reader.overriding(_Metrics(_quiet() | {"turn_error_rate": 0.5})):
         text = await usecases.fetch_metrics_summary_impl()

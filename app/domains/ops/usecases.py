@@ -4,7 +4,7 @@
 `MetricsReader` port and the thresholds are the domain's (`metric_checks.py`); incidents come from the `IncidentStore` port (`ports.py`).
 """
 from app.domains.ops import metric_checks
-from app.domains.ops.metric_checks import format_readings
+from app.domains.ops.metric_checks import format_readings, no_anomaly_line
 from app.domains.ops.ports import incident_store, metrics_reader
 from app.domains.shared.policy import ActionAllowlistPolicy
 
@@ -13,6 +13,7 @@ __all__ = [
     "fetch_metrics_summary_impl",
     "format_readings",
     "list_recent_incidents_impl",
+    "no_anomaly_line",
     "read_metrics",
 ]
 
@@ -48,7 +49,7 @@ async def fetch_metrics_summary_impl() -> str:
         lines.append("\nAnomalies (past an alert-matching threshold):")
         lines.extend(f"- {a}" for a in anomalies)
     else:
-        lines.append("\nNo anomalies — every metric is within its normal range.")
+        lines.append("\n" + no_anomaly_line(readings))
     return "\n".join(lines)
 
 

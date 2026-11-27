@@ -264,7 +264,12 @@ async def run_python_in_sandbox_impl(script: str, thread_id: str, raw: dict[str,
         command=f"python3 {_RUN_PYTHON_SCRIPT_PATH}",
         connect_if_missing=True,
     )
-    return _format_execution(execution)
+    result = _format_execution(execution)
+    # A script whose last line is a bare expression prints nothing, and the answer then states a number no script produced. Real bug, found live:
+    # `counts['db_timeout']` returned an empty stdout and the model said "appears 2 times" anyway.
+    if execution.get("exit_code") == 0 and result.endswith("stdout: (empty)"):
+        result += "\nThe script printed nothing, so there is no result to report: print() the value and run it again."
+    return result
 
 
 async def read_sandbox_file_impl(path: str, thread_id: str, raw: dict[str, BaseTool], *, tenant: str) -> str:
