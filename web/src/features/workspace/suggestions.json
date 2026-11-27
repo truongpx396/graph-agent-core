@@ -1,0 +1,61 @@
+{
+  "ecorp": [
+    { "text": "What is a LangGraph checkpointer?" },
+    { "text": "What's 15% of 2,450?" },
+    { "text": "Who works on Ecorp's engineering team?" },
+    { "text": "Prepare an onboarding brief for Priya Nair.", "skill": "onboarding-brief", "tools": ["query_employees", "search_docs"] },
+    { "text": "Turn these into an expense report: taxi $23.50, hotel $180, team lunch $64.20", "skill": "expense-summary" },
+    { "text": "Have a researcher pull together what our docs say about LangGraph and Qdrant, in three bullets.", "subagents": ["researcher"] },
+    { "text": "Add to the company knowledge base: our refund window is 30 days." },
+    { "text": "Remember that I prefer short, bulleted answers." },
+    { "text": "Compare Engineering with Sales and tell me which team is stretched thinner, and why.", "route": "medium", "tools": ["query_employees", "query_employees"] },
+    { "text": "Can we legally keep an employee's records after they leave the company?", "route": "strong" }
+  ],
+  "support": [
+    { "text": "What are Ecorp's support hours?" },
+    { "text": "How do I reset my password?" },
+    { "text": "My dashboard won't load — can you open a ticket?" },
+    { "text": "What are all of my open tickets?" },
+    { "text": "The same issue happened again this morning — I already have a ticket open for it.", "tools": ["list_my_tickets", "add_ticket_comment"] },
+    { "text": "What's the latest on my most recent ticket?" },
+    { "text": "Have a researcher check my past tickets and the docs for anything about the dashboard not loading.", "subagents": ["ticket-researcher"] },
+    { "text": "Can you just refund my last order right now?" },
+    { "text": "Our whole team has been locked out since 9am — open an urgent ticket and escalate it to a human." },
+    { "text": "It's not working." },
+    { "text": "A customer says GitHub's API cuts them off after 60 requests an hour. Is that the real limit? Check https://api.github.com/rate_limit" },
+    { "text": "A customer sees ERR_CERT_AUTHORITY_INVALID in their browser — search the web for what causes it.", "route": "strong" },
+    { "text": "Here's the error log a customer pasted — count how many times 'db_timeout' shows up: db_timeout at 09:12, retry ok, db_timeout at 09:14, auth_failed at 09:15", "skill": "support-log-triage" },
+    { "text": "Compare my open tickets and tell me which one to deal with first, and why.", "route": "medium" },
+    { "text": "A customer says our outage cost them a contract and mentions their lawyer. How should we respond?", "route": "strong", "tools": ["search_docs", "create_ticket"] }
+  ],
+  "ops": [
+    { "text": "Did anything break overnight?", "tools": ["fetch_metrics_summary", "list_recent_incidents"] },
+    { "text": "Give me a shift handover for the next on-call.", "skill": "shift-handover", "tools": ["fetch_metrics_summary", "list_recent_incidents"] },
+    { "text": "Log an incident: checkout requests timed out for ten minutes around 09:40 and recovered after a worker restart." },
+    { "text": "Are there any open incidents right now?" },
+    { "text": "The checkout timeouts are fixed, we added a second worker — resolve that incident.", "tools": ["list_recent_incidents", "resolve_incident"] },
+    { "text": "Has litellm-proxy come up in our incident log before?", "route": "medium", "subagents": ["vendor-history-researcher"] },
+    { "text": "Post a summary of current latency to the team channel.", "tools": ["fetch_metrics_summary", "post_to_team_channel"] },
+    { "text": "Does GitHub's status page (https://www.githubstatus.com/) show an incident right now?" },
+    { "text": "Latency just spiked and GitHub (https://www.githubstatus.com/) looks like a likely cause — is this our fault or theirs?", "skill": "vendor-incident-postmortem", "tools": ["fetch_metrics_summary", "check_vendor_status_page"] },
+    { "text": "Search the web for Cloudflare's status page, open it, and tell me whether it reports an incident.", "tools": ["web_search", "check_vendor_status_page"] },
+    { "text": "Can you write and run a script to find the 95th percentile of these latencies: 120, 340, 90, 500, 210, 180, 620, 150?" },
+    { "text": "Compare our open incidents and tell me which to handle first, and why.", "route": "medium", "tools": ["list_recent_incidents", "fetch_metrics_summary"] },
+    { "text": "Work out the break-even point if a second worker costs $90 a month and each hour of outage costs us $400.", "route": "strong" },
+    { "text": "Ask the metrics researcher how things look now, and the history researcher whether GitHub has hit us before.", "subagents": ["metrics-researcher", "vendor-history-researcher"] }
+  ],
+  "sales": [
+    { "text": "A lead asked what Ecorp actually does." },
+    { "text": "New lead Jordan (jordan@example.com) says their company site is https://qdrant.tech — log this and research their company before I call them.", "tools": ["log_lead_interaction", "enrich_lead_from_website"] },
+    { "text": "Draft a reply to Jordan (jordan@example.com), who asked about our enterprise plan and pricing.", "route": "medium", "skill": "lead-reply-draft" },
+    { "text": "Schedule a follow-up with jordan@example.com in 3 days to send pricing." },
+    { "text": "What follow-ups are pending right now?" },
+    { "text": "Jordan (jordan@example.com) wants pricing and to talk to someone directly — hand them off to a rep.", "tools": ["package_lead_brief", "handoff_to_human"] },
+    { "text": "Package a lead brief on jordan@example.com before my call." },
+    { "text": "jordan@example.com hasn't replied after three follow-ups — what should we do?" },
+    { "text": "New contact Sam (sam@example.org) says they've already bought from a competitor — record that and close them out.", "tools": ["log_lead_interaction", "mark_lead_lost"] },
+    { "text": "A lead wants a 3-year deal at $50k/year with 5% annual escalation and a 10% volume discount on the total — what's the real contract value?", "route": "medium", "skill": "deal-economics" },
+    { "text": "Which of our pending leads should we prioritize this week, and why?", "route": "medium", "tools": ["list_pending_followups", "package_lead_brief"] },
+    { "text": "A lead wants us to sign their NDA before the demo. Can we sign it without a legal review?", "route": "strong" }
+  ]
+}

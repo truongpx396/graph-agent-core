@@ -7,7 +7,7 @@ pull-models:  ## Pull the chat (qwen2.5:7b), test (qwen2.5:3b) and embedding mod
 	ollama pull qwen2.5:3b
 	ollama pull nomic-embed-text
 
-pull-strong-model:  ## Pull the local 14B stand-in for `chat-strong` (~9 GB; needed once ROUTER_MODE is shadow or on)
+pull-strong-model:  ## Pull qwen2.5:14b, a local alternative for `chat-strong` (~9 GB; only if you point that alias back at Ollama)
 	ollama pull qwen2.5:14b
 
 ingest:  ## Embed sample docs and upsert them into Qdrant

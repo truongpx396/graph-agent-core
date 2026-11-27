@@ -53,8 +53,8 @@ An operator can attach up to two more models behind gateway aliases (`chat-mediu
 - **It sends** the first 2,000 characters of the current message, never tenant, principal, history or retrieved text. The answer is validated, and a missing label never cancels the rules.
 - **Modes:** `off`, `shadow` (decides and counts, runs local) and `on`; `routing_policy.decide` is pure, so the evaluation harness runs the same code.
 - **A failing routed model is handled in `agent()`, not the gateway:** the call repeats on the local alias (`ModelRoutedTierFailing`), because a gateway `fallbacks` entry would price a model that did not serve. An unpriced routed alias steps down a tier, so the router is never why a turn is refused.
-- **Dev stand-ins are local;** in production both aliases default to `chat` until `LLM_MEDIUM_*` / `LLM_STRONG_*` are set. **Not built:** per-tenant control (set `ROUTER_MAX_TIER=local`).
-- **Gaps:** nothing shows routing improves an answer (the label set itself is measured, `make model-eval KIND=classifier ... DATASET=route-topics`); only the current message is read; a routed endpoint that never answers is not seen by the fallback.
+- **In dev both tiers are free-tier Gemini** (`GOOGLE_API_KEY`, with `num_retries: 0` so the gateway does not multiply the app's retries against a daily quota); in production both aliases default to `chat` until `LLM_MEDIUM_*` / `LLM_STRONG_*` are set. **Not built:** per-tenant control (set `ROUTER_MAX_TIER=local`).
+- **Gaps:** nothing shows routing improves an answer (the label set itself is measured, `make model-eval KIND=classifier ... DATASET=route-topics`); only the current message is read; a routed endpoint that never answers is not seen by the fallback; a routed alias that is **out of quota** (429) fails the turn, since only an unreachable model or a 5xx repeats on `chat`.
 
 ### 73. The chat model is chosen by what it does with this app's tool calls, and a sampling option can break them
 "Remember this" never ran `remember`: Ollama silently discards a tool call whose JSON it cannot parse. Two causes: the gateway's `repeat_penalty: 1.3` (it penalises the `":` and quote tokens a call repeats) and `qwen2.5:3b` being unreliable even without it. `make probe-tools` (22 labelled prompts) scored tool-needing prompts answered, out of 19:
@@ -65,7 +65,7 @@ An operator can attach up to two more models behind gateway aliases (`chat-mediu
 | 1.1 (default) | 13 | **19** | 12 |
 | 1.0 | 15 | **19** | 12 |
 
-- **Decision:** `chat` and `chat-backup` are `qwen2.5:7b` at `repeat_penalty: 1.1`; `chat-strong` is `qwen2.5:14b`, so escalating changes something. Run `make probe-tools` after ANY change to a chat alias's model or `repeat_penalty` (it exits 1 on a dropped call, a loop, or under 90%).
+- **Decision:** `chat` and `chat-backup` are `qwen2.5:7b` at `repeat_penalty: 1.1`. Run `make probe-tools` after ANY change to a local chat alias's model or `repeat_penalty` (it exits 1 on a dropped call, a loop, or under 90%).
 - **Gaps:** 22 prompts on one machine is a screen, not a ranking; CI's small models (3b, 1.5b) score 13/19 and 12/19, a plausible cause of flaky live tests, not yet tested; the `vision` alias keeps `repeat_penalty: 1.3`.
 
 ### 74. Strict tool schemas are a form the model is sent, not the contract the app enforces, and they are off until a provider enforces them

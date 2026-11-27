@@ -30,6 +30,7 @@ from app.agent.graph.messages import (
     is_user_message,
     last_human_message,
     tool_ran_this_turn,
+    with_bounded_tool_call_ids,
     with_turn_notes,
     with_unanswered_calls_closed,
 )
@@ -342,6 +343,10 @@ def make_graph_node_agent(
                 raise
             return _refusal_update(state, block)
         response, usage = call.response, call.usage
+        # Here, before the reply reaches State: every later use of an id (approval, the tool, its result, `idempotent()`) sees the same short one.
+        response, shortened = with_bounded_tool_call_ids(response)
+        if shortened:
+            metrics.agent_tool_call_id_shortened_total.inc(shortened)
         if (
             usage.get("output_tokens")
             and not response.content
