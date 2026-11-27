@@ -28,6 +28,14 @@ fi
 
 deploy/prod/compose.sh up -d --remove-orphans
 printf '%s\n' "$tag" > .image-tag
+# `up -d` recreates a container when its definition changes, never when only a file mounted into it does: without this Caddy keeps its old
+# routing and log format, and the collectors their old pipelines. A reload is graceful, and with an invalid config Caddy keeps the old one
+# (the release then stops here).
+deploy/prod/compose.sh restart promtail otel-collector-agent
+if ! timeout 60 bash -c 'until deploy/prod/compose.sh exec -T caddy caddy reload --config /deploy/prod/caddy/Caddyfile --adapter caddyfile; do sleep 3; done'; then
+  echo "Caddy kept its previous configuration: fix deploy/prod/caddy or deploy/shared/caddy and release again" >&2
+  exit 1
+fi
 
 # Through the front door, as a client reaches it: the API publishes no host port. API_DOMAIN is in the droplet's own .env, which CI never sees.
 # 120 s: a first release also waits for Let's Encrypt to issue the certificates.

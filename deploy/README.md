@@ -174,7 +174,8 @@ Merge to `main`. In that commit's `CI` run:
    compose and config files of that commit and runs [`prod/release.sh <sha>`](prod/release.sh) on the app droplet: pull, check the
    billing schema (only when `CREDITS_PER_USD` is set in `.env`), `up -d`, record the tag in `.image-tag`, wait for `/health/ready`
    through the front door, then remove images unused for a week. Its `observability` job does the same sync and `up -d` for the
-   monitoring droplet.
+   monitoring droplet. Both then apply the config files that changed: `release.sh` reloads Caddy and restarts Promtail and the collector, and the
+   `observability` job restarts that stack. LiteLLM's config is the exception: restart it by hand (`dc restart litellm`) after editing it.
 
 Watch it in the Actions tab, or SSH in and use the `dc` alias from [Everyday operations](#everyday-operations) below: `compose.sh` reads
 `.image-tag`, so a manual `dc up -d` keeps the release that is running.
