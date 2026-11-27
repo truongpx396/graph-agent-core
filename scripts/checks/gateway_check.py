@@ -8,7 +8,7 @@ It checks what the app's design rests on and a mock can't show:
    own parser accepts;
 2. a chat call is priced by the gateway: `x-litellm-response-cost` equals the stub's token counts times the
    configured price;
-3. NOTHING identifying reaches the model backend, on the Ollama route and an OpenAI-compatible one: not the
+3. NOTHING identifying reaches the model backend, on the Ollama route, the Gemini one and an OpenAI-compatible one: not the
    end user (`user`), tenant, principal or conversation. The end user is readable on purpose
    (`gateway.end_user_id`: `tenant:<tenant>/user:<principal>`), which is safe only while the gateway keeps it
    to itself. That is a property of LiteLLM, not of this code, hence the check and why the image is pinned by
@@ -85,6 +85,9 @@ class _Stub(BaseHTTPRequestHandler):
         prompt, completion = STUB_TOKENS
         if self.path.startswith("/api/chat"):  # Ollama
             reply: dict[str, Any] = {"model": body.get("model"), "created_at": "2026-01-01T00:00:00Z", "message": {"role": "assistant", "content": "hello"}, "done": True, "done_reason": "stop", "prompt_eval_count": prompt, "eval_count": completion}
+        elif "generateContent" in self.path:  # Google AI Studio (`gemini/` aliases)
+            reply = {"candidates": [{"content": {"role": "model", "parts": [{"text": "hello"}]}, "finishReason": "STOP", "index": 0}], "modelVersion": "stub",
+                     "usageMetadata": {"promptTokenCount": prompt, "candidatesTokenCount": completion, "totalTokenCount": prompt + completion}}
         else:  # OpenAI-compatible
             reply = {"id": "chatcmpl-stub", "object": "chat.completion", "created": 0, "model": body.get("model"), "choices": [{"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion}}
         data = json.dumps(reply).encode()
@@ -123,7 +126,9 @@ def main() -> int:
         subprocess.run([docker, "rm", "-f", name], capture_output=True)
         started = subprocess.run(
             [docker, "run", "-d", "--rm", "--name", name, "--add-host", "host.docker.internal:host-gateway", "-p", f"127.0.0.1:{GATEWAY_PORT}:4000",
-             "-v", f"{config_path}:/app/config.yaml:ro", "-e", f"LITELLM_MASTER_KEY={MASTER}", pinned_image(), "--config", "/app/config.yaml", "--port", "4000"],
+             "-v", f"{config_path}:/app/config.yaml:ro", "-e", f"LITELLM_MASTER_KEY={MASTER}",
+             "-e", "GOOGLE_API_KEY=stub-google-key",  # the `gemini/` aliases need one to build a request; it only ever reaches the stub
+             pinned_image(), "--config", "/app/config.yaml", "--port", "4000"],
             capture_output=True, text=True,
         )
         if started.returncode != 0:

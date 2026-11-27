@@ -109,7 +109,10 @@ def _replay_key(update_id: int) -> str:
 def _format_reply(text: str, citations: list[dict[str, Any]]) -> str:
     if not citations:
         return text
-    sources = "\n".join(f"{c.get('marker', '')} {c.get('title') or c.get('doc_id', '?')}" for c in citations)
+    # No parse mode is set, so Telegram turns a bare address into a link by itself.
+    sources = "\n".join(
+        f"{c.get('marker', '')} {c.get('title') or c.get('doc_id', '?')}" + (f"\n{c['source_url']}" if c.get("source_url") else "") for c in citations
+    )
     return f"{text}\n\nSources:\n{sources}"
 
 

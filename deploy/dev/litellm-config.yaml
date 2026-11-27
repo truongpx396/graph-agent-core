@@ -4,13 +4,15 @@
 #
 # Three chat tiers, each a gateway ALIAS (the app names aliases, never a provider's model id):
 #
-#   tier    alias         dev stand-in (this file)       attach a hosted model by
-#   easy    chat          qwen2.5:7b, local               it already is the day-to-day model
-#   medium  chat-medium   qwen2.5:7b, local (as chat)     editing that ONE entry (a Gemini block is ready under it); prod: LLM_MEDIUM_*
-#   strong  chat-strong   qwen2.5:14b, local              editing that ONE entry (same block); prod: LLM_STRONG_*
+#   tier    alias         dev (this file)                       to use another model
+#   easy    chat          qwen2.5:7b, local                     edit that ONE entry
+#   medium  chat-medium   gemini-3.5-flash-lite, free tier      edit that ONE entry; prod: LLM_MEDIUM_*
+#   strong  chat-strong   gemini-3-flash-preview, free tier     edit that ONE entry; prod: LLM_STRONG_*
 #
-# Nothing in the app asks for `chat-medium` yet (a delegated specialist can: its AGENT.md `model:` names an alias), and `chat-strong` is
-# the router's escalation target (STRONG_CHAT_MODEL, off by default). Every dev stand-in is local so the stack needs no third party and no key.
+# `chat-medium` and `chat-strong` are the router's two escalation targets (MEDIUM_CHAT_MODEL, STRONG_CHAT_MODEL; off by default, and a delegated
+# specialist can name either in its AGENT.md `model:`). They need GOOGLE_API_KEY in `.env`; everything else here is local and needs no key.
+# FREE TIER, DEV DATA ONLY: Google's pricing page says free-tier content is used to improve its products, and a routed turn sends the whole
+# conversation, retrieved documents and tool results. Its quotas are small and set per project (AI Studio shows them).
 #
 # PRICES. Every local alias below states a price in `model_info`. A local model costs no money, but without a price LiteLLM reports it as
 # either unknown (`null`: the app counts every call as unpriced and `UNPRICED_MODEL_POLICY=block` would refuse it) or a known $0 (and a
@@ -106,53 +108,34 @@ model_list:
     model_info:
       input_cost_per_token: 0.0000001
       output_cost_per_token: 0.0000002
-  # Tier "medium": between `chat` and `chat-strong`. Nothing selects it automatically yet; a delegated specialist names it in its AGENT.md
-  # `model:` (priced by its own alias), and an operator can point CHAT_MODEL at it. The dev stand-in is the SAME local model as `chat`, so
-  # it works with no extra download and no key; it is a placeholder for a hosted model, not a different one, exactly like a production
-  # alias whose LLM_MEDIUM_* variables are unset (it then equals `chat`). To attach Gemini, replace this entry's `litellm_params` and
-  # `model_info` with the block below. NO `fallbacks` entry names it, on purpose: a gateway fallback would price a call at the model that
-  # did not answer it (the same reason `chat-strong` has none).
-  #
-  #   litellm_params:
-  #     model: openai/<a Gemini flash-class model id from https://ai.google.dev/gemini-api/docs/models>
-  #     api_base: https://generativelanguage.googleapis.com/v1beta/openai/   # Google's OpenAI-compatibility endpoint (still beta, per Google)
-  #     api_key: os.environ/GEMINI_API_KEY_MEDIUM                            # set it in .env; docker-compose.yml already passes it in
-  #   model_info:                                                            # LiteLLM does not know an `openai/<gemini id>`: state the price
-  #     input_cost_per_token: <USD per token, from Google's pricing page>
-  #     output_cost_per_token: <USD per token>
-  #
-  # Drop the Ollama-only options (`num_ctx`, `repeat_penalty`) when you do: they are not part of an OpenAI-shaped request. Before relying
-  # on it, run `make probe-tools ARGS="--alias chat-medium"` (native tool calls) and send one streamed turn to see that the final chunk
-  # carries `usage` (the app needs it to meter the call). Neither was run here: there is no key yet.
+  # Tier "medium": between `chat` and `chat-strong`. The router sends analysis and code work here. `gemini/` is LiteLLM's own Google AI Studio
+  # provider: it carries Gemini's thought signatures from one tool call to the next, which Google's OpenAI-compatible endpoint would make the app
+  # carry itself. Ollama's options (`num_ctx`, `repeat_penalty`) do not apply. NO `fallbacks` entry names it, on purpose: a gateway fallback would
+  # price a call at the model that did not answer it (the same reason `chat-strong` has none).
   - model_name: chat-medium
     litellm_params:
-      model: ollama_chat/qwen2.5:7b
-      api_base: http://host.docker.internal:11434
-      num_ctx: 32000
-      num_predict: 2048
-      repeat_penalty: 1.1
+      model: gemini/gemini-3.5-flash-lite
+      api_key: os.environ/GOOGLE_API_KEY
+      # No gateway retries on a free tier: they multiply the app's own (3 attempts), up to 9 calls against Google's quota for one model call.
+      num_retries: 0
+    # The paid-tier list price, as a SHADOW price (see PRICES above): $0.30 per million input tokens, $2.50 per million output.
     model_info:
-      input_cost_per_token: 0.0000001
-      output_cost_per_token: 0.0000002
+      input_cost_per_token: 0.0000003
+      output_cost_per_token: 0.0000025
   # The escalation alias (specs/014, contracts/gateway-aliases.md section 1): where the model router sends a turn it judges to need a stronger
-  # model. ALWAYS present so the proxy starts and the alias resolves; INERT until the app is told to use it (STRONG_CHAT_MODEL, ROUTER_MODE,
-  # both off by default). In dev it is a bigger LOCAL model, so the whole seam can be exercised with no third party and no key
-  # (`make pull-strong-model`, about 9 GB, only needed once the router is on; it is a size up from `chat`, which is what makes escalating mean
-  # something). To point it at a hosted model, edit this one entry: an
-  # OpenAI-compatible endpoint with native tool calls, `stream_options.include_usage`, and a context window of at least 32000. NO `fallbacks`
-  # entry names it, on purpose: the app repeats a failed strong call on `chat` itself, so the usage ledger prices the model that answered.
+  # model (reasoning and high-stakes questions). ALWAYS present so the proxy starts and the alias resolves; INERT until the app is told to use it
+  # (STRONG_CHAT_MODEL, ROUTER_MODE, both off by default). Pro-class Gemini models have no free tier. To point it elsewhere, edit this one entry:
+  # a model with native tool calls, `stream_options.include_usage` and a context window of at least 32000. NO `fallbacks` entry names it, on
+  # purpose: the app repeats a failed strong call on `chat` itself, so the usage ledger prices the model that answered.
   - model_name: chat-strong
     litellm_params:
-      model: ollama_chat/qwen2.5:14b
-      api_base: http://host.docker.internal:11434
-      num_ctx: 32000
-      num_predict: 2048
-      repeat_penalty: 1.1
-    # Tier "strong". A size up from `chat`, so a shadow price a size up: $0.20 per million input tokens, $0.40 per million output. To attach
-    # Gemini here, use the block under `chat-medium` (with its own key, e.g. GEMINI_API_KEY_STRONG, and a Pro-class model id).
+      model: gemini/gemini-3.6-flash
+      api_key: os.environ/GOOGLE_API_KEY
+      num_retries: 0
+    # Shadow price at the paid-tier list price: $0.50 per million input tokens, $3.00 per million output.
     model_info:
-      input_cost_per_token: 0.0000002
-      output_cost_per_token: 0.0000004
+      input_cost_per_token: 0.0000005
+      output_cost_per_token: 0.000003
   # Vision-capable alias slot (GRAPH_PATTERNS.md pattern 44) — "chat" above
   # (qwen2.5:7b) has no vision capability, so an attached image is carried
   # through the pipeline correctly but the model can't actually see it.

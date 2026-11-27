@@ -47,6 +47,17 @@ class FakeQdrant:
     async def collection_exists(self, collection_name):
         return collection_name in self.collections
 
+    async def get_collections(self):
+        return SimpleNamespace(collections=[SimpleNamespace(name=n) for n in self.collections])
+
+    async def get_collection(self, collection_name):
+        config = self.collections[self._physical(collection_name)]["config"]
+        return SimpleNamespace(config=SimpleNamespace(metadata=config.get("metadata")))
+
+    async def update_collection(self, collection_name, metadata=None, **_):
+        config = self.collections[self._physical(collection_name)]["config"]
+        config["metadata"] = {**(config.get("metadata") or {}), **(metadata or {})}
+
     async def get_aliases(self):
         return SimpleNamespace(aliases=[SimpleNamespace(alias_name=a, collection_name=c) for a, c in self.aliases.items()])
 

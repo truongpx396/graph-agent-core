@@ -362,7 +362,7 @@ curl -s -N -X POST http://localhost:8000/chat/stream/queued \
 
 - 📜 **OpenAPI:** the running API serves it at `/openapi.json` (Swagger UI at `/docs`). Each HTTP service's document is also committed, beside its Dockerfile: [`openapi.json`](openapi.json) (this API), [`services/ml-service/openapi.json`](services/ml-service/openapi.json) and [`services/authlimit/openapi.json`](services/authlimit/openapi.json) (hand-written: authlimit's routing and body types are generated FROM it, `make authlimit-generate`). `make openapi` rewrites the first two from the code, and a test fails while a committed document is stale. They are also held to behaviour: every response the ML service's tests get, and every event the turn loop and the workers publish, must match its document (`tests/openapi_conformance.py`). The streaming routes document one event under `itemSchema`; the security scheme (a Bearer token for the front door) is held to the door's route table. CI's `openapi` job runs on every PR: `make openapi-breaking` fails a change that breaks a client of what main serves (a deliberate break is one line in [`.github/openapi-breaking-ignore.txt`](.github/openapi-breaking-ignore.txt) and still needs a new major version), and `make openapi-version` fails any change to the contract that left `info.version` where it was.
 - 🧪 **Bruno:** [`bruno/`](bruno/README.md) is every endpoint above as a [Bruno](https://www.usebruno.com) collection, with a `local` environment (this API alone) and a `door` one (behind the front door). A test keeps it in step with the routes.
-- 📡 **SSE events:** `token`, `tool_start`, `tool_end`, `citations` and `followups` (just before `done`; only sources the answer cited), `approval_required`, `error`, `done`. Two are not terminal and a client must handle them: `retry` means discard everything streamed so far (the answer was rejected, replaced or restarted; fresh tokens follow), and `compacted` is informational (older history was summarised). A new message on a conversation whose earlier approval pause could not be resumed after an app update starts with a `system_note` saying so.
+- 📡 **SSE events:** `token`, `tool_start`, `tool_end`, `citations` and `followups` (just before `done`; only sources the answer cited, each with a `source_url` when its document has an original to open), `approval_required`, `error`, `done`. Two are not terminal and a client must handle them: `retry` means discard everything streamed so far (the answer was rejected, replaced or restarted; fresh tokens follow), and `compacted` is informational (older history was summarised). A new message on a conversation whose earlier approval pause could not be resumed after an app update starts with a `system_note` saying so.
 - ✋ **Approvals:** `POST /chat/resume` approves or rejects an `approval_required` event; `POST /chat/cancel` stops the run.
 - 🧵 **Threads:** reuse a `thread_id` to continue a conversation (Langfuse groups traces by it). It belongs to whoever sends on it first (tenant + principal + domain); anyone else gets the same 404 an unknown id gets, so switching identity needs a new one. `telegram:<chat id>` ids are reserved. The check lives at the API; the worker doesn't repeat it (pattern 17).
 - 🔁 **Resubmits:** an identical `(thread_id, message, images)` within `CHAT_SUBMIT_DEDUP_TTL_SECONDS` (10) streams the first attempt's turn.
@@ -395,6 +395,12 @@ re-upload leaves the old version serving), and `DELETE /ingest/documents` remove
 under one name replace each other. An answer the semantic cache already holds may quote the old text for up to `SEMANTIC_CACHE_TTL_SECONDS` (an hour); it is not invalidated
 by content. There is no route that lists a tenant's documents.
 
+**What a citation shows.** The document's title, linked to the original when ingestion recorded one (`ingest_url` records the address it fetched and uses the page's
+own `<title>`; `ingest_text` takes `source_url=`; an uploaded file has none, since no route serves it back). The link is shown to the person and never put in the
+prompt. `make ingest` seeds summaries of real LangGraph and Qdrant pages, long enough to split into several parent passages and child chunks, plus two short
+fictional Ecorp notes that stay one chunk each. `make ingest` **recreates the collection**: it drops everything else in it, other tenants' documents and
+saved memories included.
+
 ### Embedding models, and swapping them
 
 A **question** and a **stored passage** are embedded as two operations (`embed_query`, `embed_document(s)` in
@@ -403,7 +409,9 @@ A **question** and a **stored passage** are embedded as two operations (`embed_q
 `search_document: ` prefixes pay is a measurement (`make model-eval`), not a default.
 
 **A collection records what its vectors were made with** (the `embed` alias's model, vector size, both prefixes,
-`EMBED_MODEL_REVISION`) in its name, and the app **refuses to mix two**. After any of them changes, the old collection is
+`EMBED_MODEL_REVISION`): hashed into its name (`docs-1a2b3c4d`), and spelled out in its metadata. `make vector-collections` prints which model each
+collection holds and which is live (`ARGS=--record` writes the metadata onto one built before it was kept). The app **refuses to mix two**: after any of
+them changes, a model re-pointed behind the alias included (noticed within `MODEL_RESOLVE_TTL_SECONDS`, 60), the old collection is
 refused and degrades like an outage (`GET /health/ready` lists it under `warnings`;
 `agent_embedding_identity_total{outcome="mismatch"}` counts it; `EmbeddingIdentityMismatch` fires). One command per collection fixes it:
 
@@ -417,6 +425,9 @@ It rebuilds from the text each point stores, keeping ids, payload (tenant and ow
 deletes the old collection (remove it after a bake period); and **stops without swapping** if the collection was written to
 meanwhile (pause ingestion first; exit 4). The answer cache needs nothing: its index follows the identity. A collection from
 before identities existed is *adopted* with a warning until its first re-embed.
+
+**This swap is atomic, not zero-downtime**: between the alias swap and the restart that gives the app the new settings, retrieval is refused. The order that
+keeps that window short, with a second gateway alias so the old model keeps serving during the rebuild, is in `deploy/README.md`, "Changing the embedding model".
 
 **To serve an ONNX embedding model from `ml-service`** (config only): `GET http://localhost:8083/v1/models` lists the models and
 their prefixes (`services/ml-service/models.toml` declares them; `ML_MODELS_ENABLED=bge-small-en-v1.5,gte-modernbert-base-int8`
@@ -432,12 +443,13 @@ Three chat tiers, each a gateway alias (the app names aliases, never a provider'
 | Tier | Alias | Dev (`deploy/dev/litellm-config.yaml`) | Production | Used by |
 |---|---|---|---|---|
 | 🟢 easy | `chat` | qwen2.5:7b, local | `LLM_CHAT_MODEL` | every turn (`CHAT_MODEL=chat`) |
-| 🟡 medium | `chat-medium` | qwen2.5:7b, a local stand-in (same as `chat`) | `LLM_MEDIUM_*`; unset = `chat` | the router's middle tier; a specialist's `AGENT.md` `model:` |
-| 🔴 strong | `chat-strong` | qwen2.5:14b, local (`make pull-strong-model`) | `LLM_STRONG_*`; unset = `chat` | the router's top tier |
+| 🟡 medium | `chat-medium` | gemini-3.5-flash-lite (needs `GOOGLE_API_KEY`) | `LLM_MEDIUM_*`; unset = `chat` | the router's middle tier; a specialist's `AGENT.md` `model:` |
+| 🔴 strong | `chat-strong` | gemini-3.6-flash (needs `GOOGLE_API_KEY`) | `LLM_STRONG_*`; unset = `chat` | the router's top tier |
 
-- 💲 **Every local alias states a price** in `model_info` ($0.10 / $0.20 per million input / output tokens for the 7B, $0.20 / $0.40 for the 14B). They're shadow prices: without one LiteLLM reports a local model as unpriced or a flat $0, and no gateway budget can ever trip on $0. Change them if you like, but keep them above 0 ([pattern 74](docs/COST_GOVERNANCE.md)).
+- 💲 **Every alias states a price** in `model_info` ($0.10 / $0.20 per million input / output tokens for the local 7B; Gemini's paid list price for the two hosted tiers). They're shadow prices: without one LiteLLM reports a local model as unpriced or a flat $0, and no gateway budget can ever trip on $0. Change them if you like, but keep them above 0 ([pattern 74](docs/COST_GOVERNANCE.md)).
 - 🔧 **Strict tool schemas** (`TOOL_CALLS_STRICT`, **off**): leave off on Ollama, where the smallest model calls tools measurably worse with it; turn on only for a provider that enforces strict calling, with `make probe-tools` before and after ([docs/RETRIEVAL_AND_MODEL_PATTERNS.md](docs/RETRIEVAL_AND_MODEL_PATTERNS.md) pattern 74).
-- ♊ **Attaching Gemini** to the medium or strong tier is configuration: the key in `.env` (`GEMINI_API_KEY_MEDIUM` / `GEMINI_API_KEY_STRONG`), the Gemini block commented under `chat-medium` in `deploy/dev/litellm-config.yaml` (production: the `LLM_MEDIUM_*` / `LLM_STRONG_*` variables), a proxy restart, then `make probe-tools ARGS="--alias chat-medium"`. LiteLLM doesn't know an `openai/<gemini id>`, so state its price in `model_info`. **Not tried against a real key**, and Google doesn't document the streamed `usage` the app meters from, so send one streamed turn too.
+- ♊ **Dev's two upper tiers are Gemini, on Google AI Studio's free tier** (`GOOGLE_API_KEY` in `.env`; nothing calls them while the router is off). Know three things before turning it on:
+  Google says **free-tier content is used to improve its products**, so send it only sample data; the quotas are small (measured 2026-11-27: `gemini-3.5-flash-lite` 15 requests a minute, `gemini-3.6-flash` 20 a **day**, and 503 "high demand" spells); and a quota 429 on a routed turn **fails that turn** (only an unreachable model or a 5xx repeats on `chat`). `make probe-tools` speaks Ollama only: it does not test these two.
 
 ### Routing a turn to a medium or strong model
 
@@ -449,13 +461,15 @@ choose the model; approval, tenant scoping and idempotency are unchanged under e
 - **Roll out in stages.** `shadow` makes and counts every decision but runs on `chat`, so you read what routing *would* have spent (`agent_model_route_tier_total{tier,mode="shadow"}`, `agent_model_route_total{outcome}`), then `on`:
 
 ```bash
-make pull-strong-model        # dev only: the stand-in is a LOCAL qwen2.5:14b (about 9 GB)
-# .env
+# .env (the app containers read these through compose; `make up-app` after changing them)
+GOOGLE_API_KEY=...                # dev: both upper tiers are Gemini
 MEDIUM_CHAT_MODEL=chat-medium     # either or both; an unset tier does not exist and a decision for it steps down
 STRONG_CHAT_MODEL=chat-strong     # shadow|on refuses to start with neither, or if two tiers share an alias
 ROUTER_MODE=shadow                # off | shadow | on
 ROUTER_MAX_TIER=strong            # the ceiling: spend is bounded by it
 ```
+
+- 🧪 **Checking where questions go.** The web client's "Try asking" entries are tagged with the tier each should route to, and with the skill, subagents and tools it should use. `make route-suggestions` asks the classifier about every one and fails on a tier tag that disagrees. In a running stack, the worker's `model_route` log line says what each turn got (`docker logs <project>-agent-worker-1 2>&1 | grep model_route`).
 
 - **A hosted target** (edit the `chat-medium` / `chat-strong` entry in `deploy/dev/litellm-config.yaml`, or set `LLM_MEDIUM_*` / `LLM_STRONG_*`) needs OpenAI chat completions with `stream_options.include_usage`, native OpenAI-shape tool calls, a context window of at least 32,000 tokens and a price LiteLLM can find (an unpriced alias steps the turn down a tier rather than refusing it). Nothing in `app/` names a provider.
 - ✅ **Measured:** the label set (`make model-eval KIND=classifier CANDIDATE=labelset-bge-small-en-v1.5 DATASET=route-topics`; numbers in `specs/015-label-sets-and-tiered-routing/research.md`). On this repository's prompts it routes about 5% of turns up a tier.
@@ -845,6 +859,7 @@ until configured**.
 | **📥 Data and models** | |
 | `make pull-models` · `make ingest` · `make index-skills` | Pull Ollama models · seed docs · index skills |
 | `make reembed COLLECTION_NAME=docs` | Rebuild a collection under the current embedding identity, swap atomically (`ARGS=--dry-run` first) |
+| `make vector-collections` | Which embedding model each vector collection holds, and which is live |
 | `make model-eval` · `make labelset-calibrate` · `make router-label` | Judge a model swap against its baseline · choose a label set's cutoff · score the router's outcomes ([evals/README.md](evals/README.md)) |
 | `make probe-tools` · `make gateway-check` · `make web-search-check` | Does the chat model emit usable tool calls · does the gateway keep identities from the model backend · does the Serper key work (spends a credit) |
 | **💵 Cost and billing** | |
@@ -931,6 +946,7 @@ anyone who sets the right headers.
 - **Monthly spend caps are linear in a month's model calls** (about 0.4 s at 2,000,000 events; off by default; the lever, a per-day rollup, isn't built; pattern 58 in [COST_GOVERNANCE.md](docs/COST_GOVERNANCE.md)).
 - **Nothing alerts that the ledger carry-over was skipped, and nothing schedules `make usage-events-sweep` or `make checkpoint-sweep`** (`--dry-run` printing `Would carry 0` is the check; wire the sweep to cron once your retention policy is decided).
 - **A pre-existing vector collection is trusted, not verified** (adopted with a warning until its first `make reembed`), and a re-embed doesn't support writes while it runs (it detects them and stops).
+- **Switching the embedding model is not zero-downtime**: no writes to both collections during the rebuild, retrieval is refused from the swap until the app restarts, and going back means rebuilding again (`deploy/README.md`, "Changing the embedding model").
 - **Embedding spend isn't metered.** Chat calls are recorded per call and counted by the caps; embeddings are not, nor attributed at the gateway.
 
 * * *

@@ -206,14 +206,14 @@ def fabricates_tool_output(content: str) -> bool:
 
 
 def writes_tool_call_as_text(content: str, tool_names: frozenset[str]) -> str | None:
-    """The tool's name when a tool-call-free answer spells out a call to one of this domain's tools: `name({...})`, or a JSON object whose "name" is the tool
-    and that carries "arguments". Nothing ran, and the person sees code where the result should be (GRAPH_PATTERNS.md pattern 109). Real bugs, found
+    """The tool's name when a tool-call-free answer spells out a call to one of this domain's tools: `name({...})`, `name("...")`, `name(arg=...)`, or a
+    JSON object whose "name" is the tool and that carries "arguments". Nothing ran, and the person sees code where the result should be (GRAPH_PATTERNS.md pattern 109). Real bugs, found
     live on qwen2.5:7b: a hot-lead message answered with three calls printed as prose, and a fenced `{"name": "list_recent_incidents", ...}` after
     "let's check". A tool's name alone, or a call in words, is not enough."""
     if not content or not tool_names:
         return None
     names = "|".join(sorted(map(re.escape, tool_names), key=len, reverse=True))
-    found = re.search(rf'\b({names})\s*\(\s*\{{|"name"\s*:\s*"({names})"\s*,\s*"(?:arguments|parameters)"', content)
+    found = re.search(rf'\b({names})\s*\(\s*(?:\{{|["\']|\w+\s*=)|"name"\s*:\s*"({names})"\s*,\s*"(?:arguments|parameters)"', content)
     return (found.group(1) or found.group(2)) if found else None
 
 

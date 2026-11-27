@@ -39,6 +39,24 @@ class UnsafeURLError(Exception):
     headless-browser crawl is refused the same way but isn't an "ingest"."""
 
 
+_MAX_LINK_CHARS = 2048
+
+
+def linkable_url(value: object) -> str | None:
+    """`value` if a person can safely be shown it as a clickable link, else None. For a LINK, not a fetch: nothing is resolved (that is
+    `assert_safe_url`'s job). A citation's source address comes from whatever wrote the point, so only plain http(s) with a host and no
+    `user:password@` gets through: never `javascript:` or `data:`, and never a credential printed under every answer."""
+    if not isinstance(value, str) or len(value) > _MAX_LINK_CHARS or any(c.isspace() or not c.isprintable() for c in value):
+        return None
+    try:
+        parsed = urlparse(value)
+    except ValueError:  # an unclosed IPv6 bracket
+        return None
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or "@" in parsed.netloc:
+        return None
+    return value
+
+
 def _hostname_or_refuse(url: str) -> str:
     """The scheme/host half of the guard — everything that can be decided
     before any lookup, so a refused URL never costs a DNS query."""

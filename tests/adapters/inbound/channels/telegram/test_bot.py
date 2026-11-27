@@ -134,6 +134,14 @@ class TestFormatReply:
         result = telegram_channel._format_reply("answer text", [{"marker": "[1]", "title": "Checkpointers", "doc_id": "abc"}])
         assert "answer text" in result and "Sources:" in result and "[1] Checkpointers" in result
 
+    def test_a_source_with_an_original_is_followed_by_its_address(self):
+        result = telegram_channel._format_reply(
+            "answer",
+            [{"marker": "[1]", "title": "Payload", "source_url": "https://example.com/payload"}, {"marker": "[2]", "title": "About"}],
+        )
+
+        assert result.endswith("[1] Payload\nhttps://example.com/payload\n[2] About")
+
     def test_falls_back_to_doc_id_when_title_missing(self):
         assert "abc123" in telegram_channel._format_reply("answer", [{"marker": "[1]", "doc_id": "abc123"}])
 

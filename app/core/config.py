@@ -70,6 +70,9 @@ class Settings(BillingSettings):
     # How long a collection's embedding identity check is cached, so a search costs no extra round trip. A re-embed's alias swap is
     # picked up by every process within this long.
     embed_identity_cache_seconds: float = 10.0
+    # How long the gateway's answer to "which model is behind this alias" is trusted. It was once kept for the process life, so re-pointing the
+    # `embed` alias without restarting the app went unnoticed and one model's queries searched another's vectors (pattern 67).
+    model_resolve_ttl_seconds: float = 60.0
 
     # Qdrant
     qdrant_url: str = "http://localhost:6333"
@@ -839,6 +842,7 @@ EMBED_QUERY_PREFIX = settings.embed_query_prefix
 EMBED_DOCUMENT_PREFIX = settings.embed_document_prefix
 EMBED_MODEL_REVISION = settings.embed_model_revision
 EMBED_IDENTITY_CACHE_SECONDS = settings.embed_identity_cache_seconds
+MODEL_RESOLVE_TTL_SECONDS = settings.model_resolve_ttl_seconds
 QDRANT_URL = settings.qdrant_url
 COLLECTION = settings.collection
 DEFAULT_TENANT = settings.default_tenant

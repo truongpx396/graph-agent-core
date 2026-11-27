@@ -214,8 +214,13 @@ The pre-fetch puts documents on the question before the model has decided what t
 
 ### 109. A tool call written out as text ran nothing, so it is sent back
 A small model sometimes prints the call it means to make (`log_lead_interaction({...})`, or a fenced `{"name": ..., "arguments": ...}`) and returns no `tool_calls`. `check_output` took it for an answer, and the person read code where the result should have been.
-- **Check:** `call_as_text` (`output_guardrails.writes_tool_call_as_text`): one of THIS domain's bound tool names followed by `({`, or as the `"name"` of a JSON object that has `"arguments"`. Naming a tool in a sentence does not count. Two rounds, then a message saying a step did not run.
-- **Gaps:** only those two shapes. A call narrated in words is `deferred`'s; an action claimed as done that no tool did ("Ticket created") is not caught by any check.
+- **Check:** `call_as_text` (`output_guardrails.writes_tool_call_as_text`): one of THIS domain's bound tool names followed by `(` and then `{`, a quote or `arg=`, or as the `"name"` of a JSON object that has `"arguments"`. Positional arguments (`create_ticket("Dashboard…", …)`) got through the first version. Naming a tool in a sentence does not count. Two rounds, then a message saying a step did not run.
+- **Gaps:** only those shapes (`name()` with nothing in it is left alone: prose writes it). A call narrated in words is `deferred`'s; an action claimed as done that no tool did ("Ticket created") is not caught by any check.
+
+### 111. A tool call's id is a database key, so it is bounded as the reply enters State
+`idempotent()` claims the id and several tables keep it `UNIQUE`. LiteLLM packs Gemini's thought signature into it: 4,000 to 6,000 characters on a hard question, and Postgres refuses to index more than 2,704 bytes ("index row size 4816 exceeds btree version 4 maximum"), so the claim would fail open and the ticket insert would error (constitution Principle IV).
+- **Fix:** `messages.with_bounded_tool_call_ids`, in the `agent` node: an id over 2,000 bytes becomes `call_<sha256>`; a shorter one keeps its signature. Without one, LiteLLM sends Google's placeholder signature to a Gemini 3 model (checked with the pinned image on `gemini-3-flash-preview` and `gemini-3.5-flash-lite`). `agent_tool_call_id_shortened_total` counts them.
+- **Gaps:** Google says a placeholder signature can make the model's next step worse. The pinned LiteLLM sends it only for names containing `gemini-3`, so a Gemini 4 model would refuse a shortened call.
 
 ### Where the other numbers live
 These are not patterns of the graph. Their numbers are kept so references ("pattern 58") resolve.
@@ -225,7 +230,7 @@ These are not patterns of the graph. Their numbers are kept so references ("patt
 | 11, 29, 30, 31, 37, 43, 49, 96, 99, 112: metrics, logs, web UI, error envelope, pools, the queue and the workers | [RUNTIME_PATTERNS.md](RUNTIME_PATTERNS.md) |
 | 82, 84, 85, 86, 97, 98: the front door, identity, the MCP gateway, production routing | [ACCESS_PATTERNS.md](ACCESS_PATTERNS.md) |
 | 42, 89, 91, 92, 93, 94: the CLI and Telegram | [CHANNEL_PATTERNS.md](CHANNEL_PATTERNS.md) |
-| 21, 28, 32, 50, 78, 87, 108: data tools, MCP, scrubbing, crawl and sandbox, web search, metrics | [TOOL_PATTERNS.md](TOOL_PATTERNS.md) |
+| 21, 28, 32, 50, 78, 87, 108, 110: data tools, MCP, scrubbing, crawl and sandbox, web search, metrics, ticket escalation | [TOOL_PATTERNS.md](TOOL_PATTERNS.md) |
 | 18, 20, 24, 33, 38, 67, 68, 73, 74: memory, retrieval, ingestion, embeddings, model choice and routing | [RETRIEVAL_AND_MODEL_PATTERNS.md](RETRIEVAL_AND_MODEL_PATTERNS.md) |
 | 40, 48, 59, 60, 69, 72, 75, 76, 77, 83, 86\*, 87\*, 88, 90, 95, 100-102, 106, 107: tests, evals, builds, measurements | [ENGINEERING_PATTERNS.md](ENGINEERING_PATTERNS.md) |
 | 26, 51, 57, 58, 62, 63, 64, 74\*: the usage meter and spend limits | [COST_GOVERNANCE.md](COST_GOVERNANCE.md) |

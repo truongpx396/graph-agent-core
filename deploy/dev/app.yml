@@ -14,6 +14,13 @@ x-app-env: &app-env
   # A container does not read `.env` (compose only uses it to fill `${...}`), so before this line the containers sent the dev master key and a scoped
   # `make litellm-key` key was never used. Name as in deploy/prod/app.yml and scripts/tools/litellm_key.py. Unset falls back to `sk-anything`.
   OPENAI_API_KEY: ${LITELLM_APP_KEY:-sk-anything}
+  # The embedding identity (pattern 67). Passed through so a setting in `.env` reaches the containers: without these a prefix or a revision set
+  # there changed nothing here, and `make ingest` on the host (which does read `.env`) built a collection these containers then refused.
+  # Switching models: deploy/README.md, "Changing the embedding model".
+  EMBED_MODEL: ${EMBED_MODEL:-embed}
+  EMBED_QUERY_PREFIX: ${EMBED_QUERY_PREFIX:-}
+  EMBED_DOCUMENT_PREFIX: ${EMBED_DOCUMENT_PREFIX:-}
+  EMBED_MODEL_REVISION: ${EMBED_MODEL_REVISION:-}
   QDRANT_URL: http://qdrant:6333
   ML_SERVICE_URL: http://ml-service:80
   # Through PgBouncer, not Postgres: Postgres sees the pooler's pool size however many replicas run. LiteLLM, Langfuse and the exporters
@@ -35,6 +42,15 @@ x-app-env: &app-env
   # An answer saying the pre-fetched documents lack it is asked again without them (GRAPH_PATTERNS.md pattern 105). "false" turns that off.
   CONTEXT_GAP_REASK_ENABLED: ${CONTEXT_GAP_REASK_ENABLED:-true}
   MAX_TOKENS_PER_TURN: ${MAX_TOKENS_PER_TURN:-40000}
+  # Model routing (specs/014, 015; off by default, with Settings' own defaults). A container does not read `.env`, so without these lines setting
+  # ROUTER_MODE there changed nothing. MEDIUM_CHAT_MODEL=chat-medium, STRONG_CHAT_MODEL=chat-strong and ROUTER_MODE=on turn it on.
+  ROUTER_MODE: ${ROUTER_MODE:-off}
+  MEDIUM_CHAT_MODEL: ${MEDIUM_CHAT_MODEL:-}
+  STRONG_CHAT_MODEL: ${STRONG_CHAT_MODEL:-}
+  ROUTER_MAX_TIER: ${ROUTER_MAX_TIER:-strong}
+  ROUTER_LABELS: ${ROUTER_LABELS:-true}
+  ROUTER_LONG_PROMPT_CHARS: ${ROUTER_LONG_PROMPT_CHARS:-1500}
+  ROUTER_TIMEOUT_SECONDS: ${ROUTER_TIMEOUT_SECONDS:-0.5}
   # opensandbox-mcp is a stdio subprocess of this process (app/adapters/outbound/mcp/sandbox_tools.py), so it resolves the in-network name. Only matters
   # with the `sandbox` profile up; without it the sandbox tools are absent.
   OPENSANDBOX_MCP_DOMAIN: opensandbox-server:8090

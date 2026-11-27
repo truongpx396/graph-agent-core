@@ -5,6 +5,7 @@
   message (`last_human_message`, `previous_human_message`).
 - Where the current turn starts (`current_turn_messages`).
 - Answering a tool batch that will not run (`reject_tool_calls`).
+- Keeping a model's tool call ids short enough to be database keys (`with_bounded_tool_call_ids`).
 - Building retrieval query text for a vague follow-up (`retrieval_query`, with the crude
   word-overlap helper `content_words` it and the citation checks share).
 - Cutting an answer into sentences the way the citation checks and the closing-offer repair need
@@ -15,6 +16,7 @@
 `human_text`/`human_has_content` are also unit-tested directly by
 `tests/agent/graph/test_multimodal.py`.
 """
+import hashlib
 import re
 from typing import Any, TypeGuard
 
@@ -226,6 +228,43 @@ def reject_tool_calls(tool_calls: list[ToolCall], reason: str) -> list[ToolMessa
     NAMES it, so a call the person rejected (or any batch aborted here) used to leave the tool
     "pending", and the agent kept being told to call what had just been declined."""
     return [ToolMessage(content=reason, tool_call_id=tc["id"], name=tc["name"]) for tc in tool_calls]
+
+
+# A tool call's id is the key `idempotent()` claims and the stores keep UNIQUE (constitution Principle IV), and Postgres indexes at most about 2,700
+# bytes of it. LiteLLM packs Gemini's thought signature into the id: 4,000 to 6,000 characters on a hard question (GRAPH_PATTERNS.md pattern 111).
+MAX_TOOL_CALL_ID_BYTES = 2000
+
+
+def bounded_tool_call_id(tool_call_id: str) -> str:
+    """The id itself if it fits, else a digest of it: the same input always gives the same id, and different inputs give different ones."""
+    if len(tool_call_id.encode()) <= MAX_TOOL_CALL_ID_BYTES:
+        return tool_call_id
+    return f"call_{hashlib.sha256(tool_call_id.encode()).hexdigest()}"
+
+
+def with_bounded_tool_call_ids(message: Any) -> tuple[Any, int]:
+    """`message` with every over-long tool call id replaced wherever it carries it, and how many calls that was. The message itself when none is.
+    A streamed reply holds each id in `tool_call_chunks` too, which a reload rebuilds `tool_calls` from."""
+    if not isinstance(message, AIMessage):
+        return message, 0
+    shortened: set[str] = set()
+
+    def bound(calls: list[Any]) -> list[Any]:
+        out = []
+        for call in calls:
+            raw = call.get("id")
+            if raw and (new := bounded_tool_call_id(raw)) != raw:
+                shortened.add(raw)
+                call = {**call, "id": new}
+            out.append(call)
+        return out
+
+    update: dict[str, Any] = {"tool_calls": bound(message.tool_calls), "invalid_tool_calls": bound(message.invalid_tool_calls)}
+    if chunks := getattr(message, "tool_call_chunks", None):
+        update["tool_call_chunks"] = bound(chunks)
+    if raw_calls := message.additional_kwargs.get("tool_calls"):
+        update["additional_kwargs"] = {**message.additional_kwargs, "tool_calls": bound(raw_calls)}
+    return (message.model_copy(update=update), len(shortened)) if shortened else (message, 0)
 
 
 # What a model is told about a call with no result on record. Not "it did not run": a crash between a tool's side effect and the checkpoint

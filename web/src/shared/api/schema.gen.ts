@@ -578,6 +578,11 @@ export interface components {
             text: string;
             /** Score */
             score: number;
+            /**
+             * Source Url
+             * @description Where to read the original document (http or https). Absent when it has none, as an uploaded file does.
+             */
+            source_url?: string | null;
         };
         /**
          * CitationsEvent

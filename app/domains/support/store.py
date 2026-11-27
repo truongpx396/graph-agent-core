@@ -16,9 +16,11 @@ async def create_ticket(
     description: str,
     priority: str,
     tool_call_id: str | None = None,
+    escalation_reason: str | None = None,
 ) -> int:
-    """Insert one new ticket, always `status='open'`. Returns the new
-    ticket's id (fresh, never caller-targeted).
+    """Insert one new ticket: `status='open'`, or `'escalated'` with its reason when `escalation_reason` is given.
+    Returns the new ticket's id (fresh, never caller-targeted). One INSERT for both, so a ticket that has to reach a
+    person is never left open by a second step that failed or was given the wrong number (TOOL_PATTERNS.md 110).
 
     `tool_call_id` (postgres-init/14-tool-call-id-columns.sql), when given,
     makes this call exactly-once at the ROW level via `ON CONFLICT DO
@@ -31,13 +33,14 @@ async def create_ticket(
     conflict target ever matches a NULL column under standard SQL UNIQUE
     semantics, so any caller not passing one is unaffected."""
     sql = (
-        "INSERT INTO support_tickets (tenant, requester, subject, description, priority, tool_call_id) "
-        "VALUES (%s, %s, %s, %s, %s, %s) "
+        "INSERT INTO support_tickets (tenant, requester, subject, description, priority, status, escalation_reason, tool_call_id) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
         "ON CONFLICT (tool_call_id) DO NOTHING RETURNING id"
     )
+    status = "open" if escalation_reason is None else "escalated"
     async with get_connection() as conn:
         cur = await conn.execute(
-            sql, [tenant, requester, subject, description, priority, tool_call_id]
+            sql, [tenant, requester, subject, description, priority, status, escalation_reason, tool_call_id]
         )
         row = await cur.fetchone()
         if row is not None:

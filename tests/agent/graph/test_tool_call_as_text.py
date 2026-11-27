@@ -6,9 +6,11 @@ from app.agent.graph.output_guardrails import writes_tool_call_as_text
 from app.agent.graph.routing import graph_node_check_output
 
 TOOLS = frozenset({"log_lead_interaction", "list_recent_incidents", "calculator"})
-# The two shapes qwen2.5:7b actually produced.
+# Shapes qwen2.5:7b actually produced.
 PRINTED_CALLS = [
     'log_lead_interaction({"contact": "jordan@example.com", "name": "Jordan"})',
+    'ronics list_recent_incidents("Dashboard loading issue", "normal", null)',  # positional arguments, behind a stray fragment
+    "calculator(expression='2+2')",
     'Let me check.\n\n```json\n{\n    "name": "list_recent_incidents",\n    "arguments": {}\n}\n```',
 ]
 

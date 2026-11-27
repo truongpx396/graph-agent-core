@@ -14,9 +14,11 @@ from app.ports.slot import Slot
 
 class TicketStore(Protocol):
     async def create_ticket(
-        self, tenant: str, requester: str, subject: str, description: str, priority: str, tool_call_id: str | None = None
+        self, tenant: str, requester: str, subject: str, description: str, priority: str, tool_call_id: str | None = None,
+        escalation_reason: str | None = None,
     ) -> int:
-        """Inserts a new `open` ticket and returns its id (fresh, never caller-targeted). With a `tool_call_id`, a replay returns the ticket the first call made."""
+        """Inserts a new ticket, `open` or (with an `escalation_reason`) already `escalated`, and returns its id (fresh, never caller-targeted). With a
+        `tool_call_id`, a replay returns the ticket the first call made."""
         ...
 
     async def get_ticket(self, tenant: str, ticket_id: int) -> dict[str, Any] | None: ...

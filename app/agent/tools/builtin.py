@@ -46,12 +46,15 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.agent.tools import skill_catalog as skills_module
 from app.core.config import (
+    HYBRID_PREFETCH_LIMIT,
+    RERANK_TOP_K,
     SKILLS_COLLECTION,
     SKILLS_SEARCH_TOP_K,
 )
 from app.core.security import DEFAULT_POLICY, SecurityCtx, valid_ctx
 from app.core.tool_runtime import NO_CTX_REFUSAL, arun_with_timeout, ctx_or_refuse
 from app.core.tool_schema import ToolArgs
+from app.core.url_safety import linkable_url
 from app.ports.outbound.retrieval import SearchHit, document_index
 
 logger = logging.getLogger(__name__)
@@ -166,22 +169,27 @@ def _format_cited_context(hits: list[SearchHit], offset: int = 0) -> str:
 
 def _citation_records(hits: list[SearchHit], offset: int = 0) -> list[dict[str, Any]]:
     """Structured citation metadata — marker, source id, title, text,
-    relevance score — one per hit, same numbering as
-    `_format_cited_context`. app/agent/graph/core.py stores these in
-    State["citations"]; check_output filters them down to the ones the
-    final answer actually referenced (GRAPH_PATTERNS.md pattern 20)."""
+    relevance score, and `source_url` when the document has an original to
+    link to — one per hit, same numbering as `_format_cited_context`.
+    app/agent/graph/core.py stores these in State["citations"];
+    check_output filters them down to the ones the final answer actually
+    referenced (GRAPH_PATTERNS.md pattern 20). The link goes to the person
+    only, never into the prompt: the model has no address to copy or to
+    make up."""
     records = []
     for i, h in enumerate(hits):
         payload = h.payload or {}
-        records.append(
-            {
-                "marker": f"[{i + offset + 1}]",
-                "doc_id": str(h.id),
-                "title": payload.get("title") or payload.get("topic") or payload.get("kind", "source"),
-                "text": _display_text(h),
-                "score": float(h.score),
-            }
-        )
+        record = {
+            "marker": f"[{i + offset + 1}]",
+            "doc_id": str(h.id),
+            "title": payload.get("title") or payload.get("topic") or payload.get("kind", "source"),
+            "text": _display_text(h),
+            "score": float(h.score),
+        }
+        link = linkable_url(payload.get("source_url"))
+        if link:
+            record["source_url"] = link
+        records.append(record)
     return records
 
 
@@ -196,14 +204,17 @@ async def _document_hits(
     # regardless (the index applies the AccessScope as a pre-filter; qdrant_store.py::_build_filter),
     # so a caller can't use doc_ids to reach another tenant's point.
     scope = DEFAULT_POLICY.lower(ctx, "documents")
+    # Ask for every reranked candidate and cut AFTER removing siblings. Cut first, and the chunks of one long passage took the top places:
+    # five hits could leave a single passage to answer from. The search ranks all its candidates either way, so this costs nothing.
     hits = await document_index.get().search(
         query,
         scope=scope,
         topic=topic_value,
+        k=HYBRID_PREFETCH_LIMIT,
         doc_ids=doc_ids,
         min_score=MIN_RERANK_SCORE,
     )
-    return _dedupe_by_parent(hits)
+    return _dedupe_by_parent(hits)[:RERANK_TOP_K]
 
 
 async def _memory_hits(ctx: SecurityCtx, query: str) -> list[SearchHit]:

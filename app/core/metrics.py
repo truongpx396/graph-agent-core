@@ -725,6 +725,12 @@ agent_gateway_content_blocked_total = Counter(
     ["mode"],
 )  # mode: pre_call | post_call | during_call | other
 
+agent_tool_call_id_shortened_total = Counter(
+    "agent_tool_call_id_shortened_total",
+    "Tool calls whose id was too long to be a database key and was replaced by a digest of it. With a Gemini model this drops the thought "
+    "signature LiteLLM carried in the id, and LiteLLM sends Google's placeholder instead.",
+)
+
 agent_unparsed_completion_total = Counter(
     "agent_unparsed_completion_total",
     "Model calls that reported output tokens but returned neither text nor a tool call: the provider "

@@ -31,6 +31,7 @@ class Citation(BaseModel):
     title: str
     text: str
     score: float
+    source_url: str | None = Field(default=None, description="Where to read the original document (http or https). Absent when it has none, as an uploaded file does.")
 
 
 class ToolCall(BaseModel):
