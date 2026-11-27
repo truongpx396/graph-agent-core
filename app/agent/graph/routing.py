@@ -10,17 +10,20 @@ mandatory-approval gate), `graph/tool_guards.py` (`batch_problem`, the malformed
 from collections.abc import Mapping
 from typing import Any, Literal, cast
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.prebuilt import tools_condition
 
 from app.agent.graph.citations import (
     count_ungrounded_claims,
     drop_all_citation_markers,
     drop_citation_markers,
+    drop_dangling_citation_markers,
+    drop_tool_citations,
     find_likely_misattributed,
     find_likely_uncited,
     find_used_citations,
     insert_missing_citation_markers,
+    numbered_sources_offered,
 )
 from app.agent.graph.loop_guards import (
     consecutive_repeat_count,
@@ -29,6 +32,9 @@ from app.agent.graph.loop_guards import (
 from app.agent.graph.messages import (
     GATEWAY_REFUSAL_KEY,
     context_gap_original,
+    current_turn_messages,
+    human_text,
+    last_human_message,
     tool_ran_this_turn,
 )
 from app.agent.graph.output_checks import ROUTED_TIERS, CheckContext, run_checks
@@ -254,6 +260,20 @@ def graph_node_check_output(
         shown, shown_used = drop_all_citation_markers(shown), []
         message_update["messages"] = [last.model_copy(update={"content": shown})]
 
+    # A marker with nothing at all behind it is dropped too, not sent back: there is no source the model could be asked to use. Counted first, so
+    # `ungrounded_claims_count` still says the model invented one.
+    ungrounded = count_ungrounded_claims(shown, citations)
+    if enforce_citations:
+        turn = current_turn_messages(state["messages"])
+        said = [human_text(last_human_message(turn)), *(str(m.content) for m in turn if isinstance(m, ToolMessage))]
+        cleaned = drop_tool_citations(shown, tool_names)
+        if not numbered_sources_offered(citations, said):
+            cleaned = drop_dangling_citation_markers(cleaned)
+        if cleaned != shown:
+            metrics.agent_dangling_citations_total.inc()
+            shown = cleaned
+            message_update["messages"] = [last.model_copy(update={"content": shown})]
+
     findings = run_checks(
         CheckContext(
             content=content,
@@ -285,7 +305,7 @@ def graph_node_check_output(
     return {
         **message_update,
         "used_citations": shown_used,
-        "ungrounded_claims_count": count_ungrounded_claims(shown, citations),
+        "ungrounded_claims_count": ungrounded,
         "output_findings": findings,
         "last_retry_reason": reason,
         "retry_reason_repeat_count": repeat_count,

@@ -3,17 +3,22 @@ narrated-instead-of-acting (`defers_instead_of_acting`), fabricated tool output
 (`fabricates_tool_output`), a fabricated reference-list footer
 (`strip_fabricated_reference_footer`), a closing offer after a complete answer
 (`strip_closing_offer`), a skipped skill-required tool
-(`skipped_required_sandbox_after_skill`) and a system-prompt leak (`reveals_system_prompt`). Which of
-them wins, and what each says to the model, is `graph/output_checks.py`'s registry; the grounding
-checks are in `graph/citations.py`.
+(`skipped_required_sandbox_after_skill`), a requested or relied-on step that never ran
+(`skipped_step`) and a system-prompt leak (`reveals_system_prompt`). Which of them wins, and what
+each says to the model, is `graph/output_checks.py`'s registry; the grounding checks are in
+`graph/citations.py`.
 """
 import re
+from collections.abc import Sequence
+from typing import Any
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage
 
 from app.agent.graph.messages import (
     content_words,
     current_turn_messages,
+    human_text,
+    last_human_message,
     sentence_spans,
 )
 from app.agent.graph.skill_guards import pending_skill_required_tool
@@ -146,7 +151,12 @@ def strip_closing_offer(content: str) -> str:
             break
     if first_offer is None:
         return content
-    body = content[: spans[first_offer][0]].rstrip()
+    # Only from the LINE the offer starts on. A list has no full stops, so every line of it is part of the "sentence" that ends in the offer's "?".
+    start, end = spans[first_offer]
+    cue = _PERMISSION_SEEKING_RE.search(content, start, end)
+    if cue is not None:
+        start = max(start, content.rfind("\n", start, cue.start()) + 1)
+    body = content[:start].rstrip()
     if (
         not body
         or body.endswith(("?", ":"))
@@ -282,6 +292,50 @@ def skipped_required_sandbox_after_skill(messages: list[BaseMessage], required_t
     content = getattr(last, "content", "") if last else ""
     if isinstance(content, str) and _DOLLAR_FIGURE_RE.search(content):
         return pending_tool
+    return None
+
+
+# What a person asks for, in words, that only one tool does. Narrow on purpose: an instruction ("Remember that ..."), never a question about memory
+# ("Do you remember ...?", "Remember what I said ...") or about a person who happens to be a researcher. Each entry: the tool to ask for, every
+# call that counts as having done it (a note also saves what it is told to remember), and the words.
+_REQUESTED_STEPS: tuple[tuple[str, frozenset[str], re.Pattern[str]], ...] = (
+    (
+        "remember",
+        frozenset({"remember", "add_note"}),
+        re.compile(r"\A\s*(?:(?:please|also|and|hey)[,\s]+)*remember\b(?!\s+(?:what|when|how|where|who|which|if|whether|the))(?![^\n]*\?\s*\Z)", re.IGNORECASE),
+    ),
+    ("run_subagent", frozenset({"run_subagent"}), re.compile(r"\b(?:have|ask|get)\s+(?:a|an|the)\s+(?:[\w-]+\s+){0,2}researcher\b", re.IGNORECASE)),
+)
+# An answer that says it did NOT do the thing is honest, and stands.
+_DECLINES_RE = re.compile(r"\b(?:can(?:'t|not| not)|could(?:n't| not)|won't|will not|unable|not able|did(?:n't| not))\b", re.IGNORECASE)
+# "No team notes on record": a claim about documents, so it needs a document search. Not "no open tickets found", which another tool answers.
+_NO_DOCUMENTS_RE = re.compile(
+    r"\bno\b[^.\n]{0,40}\b(?:notes?|documents?|docs?|polic(?:y|ies)|articles?)\b[^.\n]{0,30}\b(?:on record|on file|found|available)\b", re.IGNORECASE
+)
+
+
+def _already_remembered(request: str, citations: Sequence[dict[str, Any]]) -> bool:
+    """Does a recalled memory (titled "memory") already hold what the person asks to have remembered?"""
+    asked = content_words(request) - {"remember", "please"}
+    return any(c.get("title") == "memory" and asked and len(asked & content_words(c.get("text", ""))) / len(asked) >= 0.75 for c in citations)
+
+
+def skipped_step(messages: list[BaseMessage], answer: str, tool_names: frozenset[str], citations: Sequence[dict[str, Any]] = ()) -> str | None:
+    """The tool this answer needed and never called, or None. Two shapes, both found live on qwen2.5:7b:
+    - the person asked for what only that tool does, and the answer says it was done ("I will remember that") or makes up what it would have found;
+    - a skill loaded this turn asked for a document search, and the answer reports that nothing is on record without having made one.
+    A call that was made and refused or failed counts as made: the turn then has something true to report. So does a memory already saved."""
+    turn = current_turn_messages(messages)
+    called = {call["name"] for message in turn if isinstance(message, AIMessage) for call in message.tool_calls}
+    request = human_text(last_human_message(messages))
+    if not _DECLINES_RE.search(answer):
+        for tool, done_by, asked_for in _REQUESTED_STEPS:
+            if tool in tool_names and not called & done_by and asked_for.search(request):
+                if tool == "remember" and _already_remembered(request, citations):
+                    continue
+                return tool
+    if "search_docs" in tool_names and "search_docs" not in called and _NO_DOCUMENTS_RE.search(answer):
+        return pending_skill_required_tool(turn, ("search_docs",))
     return None
 
 

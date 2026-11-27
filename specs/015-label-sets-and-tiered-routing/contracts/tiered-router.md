@@ -27,7 +27,7 @@ code that only knows `local` and `strong` reads `medium` as "not strong", i.e. l
 | `ROUTER_MAX_TIER` | `strong` | the ceiling: no turn is routed above it (one operator-wide value; per-tenant is a disclosed gap) |
 | `ROUTER_LABELSET` | `route-topics` | the label set asked for the label signal; empty = rules only |
 | `ROUTER_LONG_PROMPT_CHARS` | `1500` | the `long_prompt` rule's threshold (>= 200) |
-| `ROUTER_TIMEOUT_SECONDS` | `0.5` | the label call's deadline; a miss leaves the rules to decide |
+| `ROUTER_TIMEOUT_SECONDS` | `1.5` | the label call's deadline; a miss leaves the rules to decide |
 
 **Fail fast at import.** `ROUTER_MODE` other than the three values; `shadow` or `on` with neither a medium nor a strong alias; two tiers sharing an
 alias (the local one included). Messages

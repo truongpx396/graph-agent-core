@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
+from ml_service.settings import Settings as MlServiceSettings
 
 ROUTER_VARIABLES = (
     "ROUTER_MODE", "ROUTER_MAX_TIER", "ROUTER_LABELS", "ROUTER_LONG_PROMPT_CHARS", "ROUTER_TIMEOUT_SECONDS",
@@ -24,7 +25,17 @@ def test_the_router_is_off_and_names_no_routed_model_by_default():
 
     assert (settings.router_mode, settings.medium_chat_model, settings.strong_chat_model) == ("off", "", "")
     assert (settings.router_max_tier, settings.router_labels) == ("strong", True)
-    assert (settings.router_long_prompt_chars, settings.router_timeout_seconds) == (1500, 0.5)
+    assert (settings.router_long_prompt_chars, settings.router_timeout_seconds) == (1500, 1.5)
+
+
+def test_the_app_waits_longer_than_the_classifier_can_take():
+    """Real failure, found live: 7 of 11 turns in one session logged `label_timeout` and stayed local. The service gives each of its two models the
+    deadline in turn, and the app's whole wait was exactly twice that (0.5 s against 250 ms), so nothing was left for the answer to travel; a model
+    that had been idle for 30 s took 524 ms on its first call."""
+    per_model = MlServiceSettings.from_env({}).classify_deadline_ms / 1000
+
+    assert per_model >= 0.6
+    assert Settings(_env_file=None).router_timeout_seconds >= 2 * per_model + 0.25
 
 
 @pytest.mark.parametrize("mode", ["shadow", "on"])

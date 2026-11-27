@@ -91,6 +91,32 @@ def test_a_call_that_leaves_a_nullable_argument_out_is_accepted_as_null_though_t
     assert set(nullable) <= set(args_schema.model_json_schema()["required"])
 
 
+@pytest.mark.parametrize("written", ["null", "None", " NULL ", ""])
+def test_a_nullable_argument_written_as_the_word_null_is_null(written):
+    """Real bug, found live: qwen2.5:7b sent `{"department": "null"}` for "any department", the call failed validation, and the answer opened with
+    an account of the error. On a free-text argument the word was worse: `escalation_reason: "null"` handed an ordinary ticket to a person."""
+    assert QueryEmployeesArgs(department=written, name_contains=written).model_dump() == {"department": None, "name_contains": None}
+    assert SearchDocsArgs(query="hours", topic=written, doc_ids=written).doc_ids is None
+    assert CreateTicketArgs(subject="s", description="d", tool_call_id="t", escalation_reason=written).escalation_reason is None
+
+
+def test_the_word_null_is_left_alone_where_the_argument_cannot_be_null():
+    assert SearchDocsArgs(query="null").query == "null"
+
+
+async def test_the_tool_itself_receives_none_not_the_word(monkeypatch):
+    seen = {}
+
+    @tool(args_schema=QueryEmployeesArgs)
+    async def probe(department: str | None = None, name_contains: str | None = None) -> str:
+        """Records what the function was handed."""
+        seen.update(department=department, name_contains=name_contains)
+        return "ok"
+
+    await probe.ainvoke({"department": "null", "name_contains": "Priya Nair"})
+    assert seen == {"department": None, "name_contains": "Priya Nair"}
+
+
 def test_a_ticket_left_without_a_priority_is_normal_and_the_schema_still_requires_one():
     assert CreateTicketArgs(subject="s", description="d", tool_call_id="t").priority is TicketPriority.normal
     assert "priority" in CreateTicketArgs.model_json_schema()["required"]

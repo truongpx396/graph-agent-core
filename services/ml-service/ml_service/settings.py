@@ -43,11 +43,11 @@ class Settings:
     embed_max_chars: int = 8000
     embed_batch_size: int = 32
     # The decision endpoint's bounds (named ML_CLASSIFY_* because they bounded /classify first; the names are operators' to keep). The deadline is the time ONE model may take before the request moves to the next one. It is not a bound on the
-    # request: with a primary and a fallback that both overrun, the service can spend twice this, which is the app's whole 0.5 s timeout, so on a
-    # loaded machine the app's timer can fire before the service answers "none" (both degrade to the rules; only the outcome label differs).
-    # A request over the character limit is rejected, never truncated.
+    # request: with a primary and a fallback that both overrun, the service can spend twice this, and the app's ROUTER_TIMEOUT_SECONDS (1.5 s) must
+    # stay above that (tests/core/test_router_settings.py). It was 250 ms against the app's 0.5 s, and a model idle for 30 s took 524 ms on its
+    # first call, so a chat's routing mostly timed out. A request over the character limit is rejected, never truncated.
     classify_max_chars: int = 4000
-    classify_deadline_ms: float = 250.0
+    classify_deadline_ms: float = 600.0
     labelset_dir: Path = DEFAULT_LABELSET_DIR
 
     @classmethod
@@ -68,6 +68,6 @@ class Settings:
             embed_max_chars=int(env.get("ML_EMBED_MAX_CHARS", "8000")),
             embed_batch_size=int(env.get("ML_EMBED_BATCH_SIZE", "32")),
             classify_max_chars=int(env.get("ML_CLASSIFY_MAX_CHARS", "4000")),
-            classify_deadline_ms=float(env.get("ML_CLASSIFY_DEADLINE_MS", "250")),
+            classify_deadline_ms=float(env.get("ML_CLASSIFY_DEADLINE_MS", "600")),
             labelset_dir=Path(env["LABELSET_DIR"]) if env.get("LABELSET_DIR") else DEFAULT_LABELSET_DIR,
         )

@@ -429,6 +429,8 @@ class TestCheckOutput:
             "citations": [],
         }
         result = ecorp.graph_node_check_output(state)
+        # Counted, and no longer shown: with no source at all the marker points at nothing (pattern 104).
+        assert result.pop("messages")[0].content == "This is backed by, trust me."
         assert result == {
             "used_citations": [],
             "ungrounded_claims_count": 1,
@@ -647,7 +649,8 @@ class TestCheckOutput:
             "[1]: [Link to the book or resource]\n"
             "[2]: [Link to the book or resource]"
         )
-        state = {"messages": [AIMessage(content=content)], "citations": []}
+        # Offered sources: without any, the inline markers would be dangling ones and go too.
+        state = {"messages": [AIMessage(content=content)], "citations": [{"marker": "[1]", "text": ""}, {"marker": "[2]", "text": ""}]}
         result = ecorp.graph_node_check_output(state)
         assert result["messages"][0].content == (
             "By following these principles, you can build a robust and "
@@ -669,7 +672,7 @@ class TestCheckOutput:
         bracket — a real inline marker that just happens to start a new
         line/paragraph must survive untouched."""
         content = "Some setup text.\n[3] continues the same sentence's source."
-        state = {"messages": [AIMessage(content=content)], "citations": []}
+        state = {"messages": [AIMessage(content=content)], "citations": [{"marker": "[3]", "text": ""}]}
         result = ecorp.graph_node_check_output(state)
         assert "messages" not in result
 
@@ -1445,7 +1448,7 @@ class TestOutputCheckRegistry:
 
     def test_the_priority_order(self):
         """Leaked prompt (the only reason with a security dimension) > too short > fabricated > tool call written as text > skipped required
-        tool > context gap > deferred > uncited. (A marker its source does not support is not a reason: it is dropped, pattern 104.)
+        tool > skipped step > context gap > deferred > uncited. (A marker its source does not support is not a reason: it is dropped, pattern 104.)
         """
         assert [c.code for c in output_checks.CHECKS] == [
             "leaked_prompt",
@@ -1453,6 +1456,7 @@ class TestOutputCheckRegistry:
             "fabricated",
             "call_as_text",
             "skipped_tool",
+            "skipped_step",
             "context_gap",
             "deferred",
             "uncited",

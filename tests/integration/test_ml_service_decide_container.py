@@ -94,7 +94,7 @@ def test_the_shipped_route_topics_set_is_served_by_the_real_container_and_matche
     answers: list[dict] = []
     for sentence in sentences:
         body: dict = {}
-        for _ in range(30):  # the first request after start-up can overrun the service's 250 ms deadline and be answered 503
+        for _ in range(30):  # the first request after start-up can overrun the service's per-model deadline and be answered 503
             response = decide(ml_service_url, sentence)
             body = response.json()
             if response.status_code == 200 and body.get("x_served_by") == "primary":
@@ -138,8 +138,8 @@ async def test_the_whole_label_call_from_the_app_is_measured_and_answers_nearly_
     record_property("label_p95_ms", round(p95, 1))
     print(f"label() over {len(timings)} sequential calls: p50={p50:.1f} ms p95={p95:.1f} ms")
     # No call may be an error: the service is reachable and speaks the contract. A "timeout" and a "no_answer" are both the designed answer
-    # of a slow machine, not a defect: the service gives each model 250 ms, so a primary and a fallback that both overrun can spend the app's
-    # whole 0.5 s, and the app's timer then fires first. The first CI run saw 7 of 200 (p50 149 ms, p95 426 ms on a shared runner, against 2-3 ms
+    # of a slow machine, not a defect: this test gives the call 0.5 s, which a primary that overruns its own deadline can spend whole, and the
+    # app's timer then fires first. The first CI run saw 7 of 200 (p50 149 ms, p95 426 ms on a shared runner, against 2-3 ms
     # in-process), and asserting zero timeouts asserted the runner's speed, which this docstring says it does not. Together they may be at most
     # one call in ten; the latency itself is recorded above, not judged.
     assert "error" not in outcomes and outcomes.count("labelled") >= 180
