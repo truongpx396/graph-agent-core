@@ -20,7 +20,7 @@ needs a worker serving its domain, or its turn gets the "is an agent-worker runn
 `run()` runs up to `_MAX_CONCURRENCY` turns at once across all its domains (a semaphore-bounded task per job).
 Different thread_ids
 are safe: a turn holds no in-process state a sibling could corrupt (state is in Postgres via the checkpointer,
-`bind_request_id`'s `ContextVar` is copied per task).
+`log_context`'s `ContextVar` is copied per task).
 
 The SAME thread_id is not: two jobs would read the same checkpoint as parent and the last commit would
 silently win. `process_request` therefore takes `streams.py::acquire_thread_lock` first (across tasks and
