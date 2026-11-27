@@ -1,5 +1,5 @@
-"""OpenTelemetry metrics SDK wiring: installs the MeterProvider every Counter/Histogram in app/core/metrics.py
-records against.
+"""OpenTelemetry SDK wiring: installs the MeterProvider every Counter/Histogram in app/core/metrics.py records
+against, and the TracerProvider behind app/core/spans.py.
 
 Push, not pull: every instrumented process (the API and each scaled agent_worker.py/ingest_worker.py replica,
 pattern 43) pushes metrics via OTLP to a shared otel-collector, which exposes one aggregated Prometheus
@@ -20,12 +20,17 @@ import logging
 
 from opentelemetry import metrics as metrics_api
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
 from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
-from app.core.config import OTEL_EXPORTER_OTLP_ENDPOINT
+from app.core import spans
+from app.core.config import OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_TRACES_SAMPLE_RATIO
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +53,7 @@ _FIRST_TOKEN_BUCKETS_SECONDS = (0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0,
 
 _configured = False
 _provider: MeterProvider | None = None
+_tracer_provider: TracerProvider | None = None
 
 
 def configure_telemetry(service_name: str) -> None:
@@ -64,7 +70,7 @@ def configure_telemetry(service_name: str) -> None:
     otel-collector anywhere nearby to receive anything (see that
     setting's own comment, app/core/config.py) — not something a real
     deployment would ever set."""
-    global _configured, _provider
+    global _configured, _provider, _tracer_provider
     if _configured:
         return
     _configured = True
@@ -75,6 +81,9 @@ def configure_telemetry(service_name: str) -> None:
 
     _provider = _build_provider(service_name)
     metrics_api.set_meter_provider(_provider)
+    # Ours alone, never `trace.set_tracer_provider` (app/core/spans.py).
+    _tracer_provider = _build_tracer_provider(service_name)
+    spans.install(_tracer_provider.get_tracer("agent-core"))
     logger.info(
         "telemetry_configured",
         extra={
@@ -128,6 +137,16 @@ def _build_provider(service_name: str) -> MeterProvider:
     )
 
 
+def _build_tracer_provider(service_name: str) -> TracerProvider:
+    """Spans, batched on a background thread so an unreachable collector never slows a request. The sampling decision is the
+    request's (`ParentBased`): a worker follows what the API decided, so a trace is exported whole or not at all."""
+    provider = TracerProvider(
+        resource=Resource.create({"service.name": service_name}), sampler=ParentBased(TraceIdRatioBased(OTEL_TRACES_SAMPLE_RATIO))
+    )
+    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=f"{OTEL_EXPORTER_OTLP_ENDPOINT.rstrip('/')}/v1/traces")))
+    return provider
+
+
 def shutdown_telemetry() -> None:
     """Push whatever has been recorded, then stop the exporter. For a
     short-lived process (a cron job): the exporter pushes on a 15 s timer, so a
@@ -135,8 +154,14 @@ def shutdown_telemetry() -> None:
     that matter most from an unattended job are its failures (spec 008, B22).
     Idempotent, a no-op if telemetry was never configured, and never raises: an
     unreachable collector must not turn a finished job into a failed one."""
-    global _provider
+    global _provider, _tracer_provider
     provider, _provider = _provider, None
+    tracer_provider, _tracer_provider = _tracer_provider, None
+    if tracer_provider is not None:
+        try:
+            tracer_provider.shutdown()  # flushes what is batched
+        except Exception as exc:  # noqa: BLE001 - same reason as the metrics below: never fail a finished job
+            logger.warning("telemetry_shutdown_failed", extra={"error_class": type(exc).__name__})
     if provider is None:
         return
     try:

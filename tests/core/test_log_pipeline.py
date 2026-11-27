@@ -56,7 +56,8 @@ def test_the_log_dashboard_hides_no_level_by_default():
 
 def test_the_id_in_a_line_links_to_the_dashboard_that_shows_its_request():
     datasources = yaml.safe_load(_text("observability/grafana/provisioning/datasources/datasources.yml"))["datasources"]
-    (link,) = next(source for source in datasources if source["uid"] == "loki")["jsonData"]["derivedFields"]
+    fields = next(source for source in datasources if source["uid"] == "loki")["jsonData"]["derivedFields"]
+    link = next(field for field in fields if field["name"] == "request_id")
     assert re.search(link["matcherRegex"], '{"request_id": "abc123", "message": "x"}').group(1) == "abc123"
     assert link["url"].startswith(f"/d/{_dashboard()['uid']}?var-request_id=")
 
@@ -77,3 +78,44 @@ def test_no_log_of_either_front_door_skips_the_redaction(entry):
     # The server's own lines (a failed upstream's request) are filtered, and a site declares no log of its own.
     assert re.search(r"log default \{\s*import \.\./\.\./shared/caddy/redacted-format\.caddyfile", text)
     assert len(re.findall(r"^\s*log\b", text, re.MULTILINE)) == 1
+
+
+# --- Traces (RUNTIME_PATTERNS.md 113) ---
+
+
+def _yaml(path: str) -> dict:
+    return yaml.safe_load(_text(path))
+
+
+def test_the_collectors_carry_spans_to_tempo():
+    gateway, agent = _yaml("observability/otel-collector/config.yaml"), _yaml("observability/otel-collector/config.agent.yaml")
+    assert gateway["service"]["pipelines"]["traces"] == {"receivers": ["otlp"], "processors": ["batch"], "exporters": ["otlp_http/tempo"]}
+    assert agent["service"]["pipelines"]["traces"]["exporters"] == ["otlp_http/gateway"]
+    listens = _yaml("observability/tempo/tempo.yaml")["distributor"]["receivers"]["otlp"]["protocols"]["http"]["endpoint"]
+    assert gateway["exporters"]["otlp_http/tempo"]["endpoint"] == f"http://tempo:{listens.rsplit(':', 1)[1]}"
+
+
+@pytest.mark.parametrize("env", ["dev", "prod"])
+def test_each_observability_project_runs_tempo_unpublished(env):
+    tempo = _yaml(f"deploy/{env}/observability.yml")["services"]["tempo"]
+    assert "ports" not in tempo, "only the collector writes to it and only Grafana reads it"
+    assert "./observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro" in tempo["volumes"]
+
+
+def test_a_trace_is_kept_as_long_as_the_lines_that_name_it():
+    tempo = _yaml("observability/tempo/tempo.yaml")["backend_worker"]["compaction"]["block_retention"]
+    assert tempo == _yaml("observability/loki/loki-config.yaml")["limits_config"]["retention_period"]
+
+
+def test_a_line_opens_its_trace_and_a_trace_its_lines():
+    sources = {s["uid"]: s for s in _yaml("observability/grafana/provisioning/datasources/datasources.yml")["datasources"]}
+    link = next(field for field in sources["loki"]["jsonData"]["derivedFields"] if field["name"] == "trace_id")
+    assert link["datasourceUid"] == "tempo"
+    assert re.search(link["matcherRegex"], '{"trace_id": "' + "a" * 32 + '"}').group(1) == "a" * 32
+    back = sources["tempo"]["jsonData"]["tracesToLogsV2"]
+    assert back["datasourceUid"] == "loki"
+    assert "__trace.traceId" in back["query"]
+
+
+def test_the_front_door_records_the_trace_the_api_started():
+    assert "log_append trace_id {http.response.header.X-Trace-Id}" in _text("deploy/shared/caddy/gateway.caddyfile")

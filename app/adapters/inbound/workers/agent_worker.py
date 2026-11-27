@@ -122,7 +122,7 @@ from app.agent.runtime.stream import (
     cancel_run,
 )
 from app.bootstrap import close_adapters, verify_wired, wire
-from app.core import log_context, metrics
+from app.core import log_context, metrics, spans
 from app.core.config import (
     AGENT_WORKER_DOMAINS,
     AGENT_WORKER_MAX_CONCURRENCY,
@@ -209,6 +209,11 @@ def _log_ids(payload: dict[str, Any]) -> dict[str, str | None]:
     ctx = payload.get("ctx")
     ctx = ctx if isinstance(ctx, dict) else {}
     return {"thread_id": payload.get("thread_id"), "tenant": ctx.get("tenant"), "principal": ctx.get("principal")}
+
+
+def _span_ids(ids: dict[str, str | None]) -> dict[str, str]:
+    """The ids a trace is searched by. Never the principal: it may be an email."""
+    return {f"agent.{name}": str(value) for name, value in ids.items() if value and name != "principal"}
 
 
 async def _publish_events(client: redis.Redis, request_id: str, events: AsyncGenerator[dict[str, Any], None], release_lock: ReleaseLock) -> None:
@@ -392,7 +397,14 @@ async def process_request(client: redis.Redis, entry_id: str, fields: dict[str, 
             renewal.cancel()
         await release_thread_lock(client, thread_id, lock_token)
 
-    with log_context.scope(request_id=request_id, domain=domain, **_log_ids(payload)), bind_domain(domain):
+    ids = _log_ids(payload)
+    traced = spans.job_span(
+        f"agent_job {kind}",
+        payload,
+        retried=bool(payload.get(RECLAIM_ATTEMPTS_FIELD)),
+        attributes={"agent.job.kind": str(kind), "agent.domain": domain, "agent.request_id": str(request_id), **_span_ids(ids)},
+    )
+    with traced as job, log_context.scope(request_id=request_id, domain=domain, **ids), bind_domain(domain):
         started = time.monotonic()
         logger.info("agent_job_started", extra={"kind": kind})
         try:
@@ -416,6 +428,7 @@ async def process_request(client: redis.Redis, entry_id: str, fields: dict[str, 
             finally:
                 await release_lock()
         except Exception as exc:  # noqa: BLE001 - the queue must keep moving regardless
+            spans.failed(job, exc)
             logger.warning(
                 "agent_worker_turn_failed",
                 extra={

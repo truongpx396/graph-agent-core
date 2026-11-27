@@ -21,7 +21,7 @@ from typing import Any, cast
 
 import redis.asyncio as redis
 
-from app.core import metrics
+from app.core import metrics, spans
 from app.core.errors import ErrorCode, ErrorEnvelope
 from app.core.security import SecurityCtx
 from app.platform.redis_client import UNAVAILABLE_ERRORS, StreamReadResponse, get_client
@@ -37,6 +37,13 @@ from app.ports.outbound.jobs import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def encode_job(job: dict[str, Any]) -> str:
+    """A job as it goes on a stream, with the W3C context of the request that published it, so the worker's spans join that request's trace
+    (app/core/spans.py). Nothing is added when no request is being traced."""
+    carrier = spans.carrier()
+    return json.dumps({**job, spans.CARRIER_KEY: carrier} if carrier else job)
 
 
 async def _remember_request_thread(client: redis.Redis, request_id: str, thread_id: str) -> None:
@@ -82,7 +89,7 @@ async def publish_request(
     graph was built from that domain's tools; `X-Domain` keeps all three calls for one conversation aimed
     alike.
     """
-    payload = json.dumps(
+    payload = encode_job(
         {
             "kind": "turn",
             "request_id": request_id,
@@ -114,7 +121,7 @@ async def publish_resume_request(
     pool can pick it up: the checkpoint lives in Postgres, not worker
     memory (see `publish_request`'s docstring for why `domain` must match
     the original turn's)."""
-    payload = json.dumps(
+    payload = encode_job(
         {
             "kind": "resume",
             "request_id": request_id,
@@ -137,7 +144,7 @@ async def publish_cancel_request(
     the cancel-flag mechanism below; this is a no-op in that case
     (`cancel_run` returns False). `POST /chat/cancel` always does both: set
     the flag AND publish this, so whichever mechanism applies handles it."""
-    payload = json.dumps(
+    payload = encode_job(
         {"kind": "cancel", "request_id": request_id, "thread_id": thread_id, "ctx": ctx, "enqueued_at": time.time()}
     )
     await _remember_request_thread(client, request_id, thread_id)

@@ -1,4 +1,6 @@
-"""The process-wide Langfuse client.
+"""The process-wide Langfuse client: LLM tracing, what the MODEL was sent and answered.
+
+Not distributed tracing (`spans.py`: where a request's time goes). Both use one id, the W3C trace id (RUNTIME_PATTERNS.md 113).
 
 Every turn used to build its own `Langfuse()` (`_open_trace`) and, at its end, another one just to call
 `.flush()`. A client is not cheap: construction starts three background threads (ingestion consumer(s) and

@@ -732,7 +732,7 @@ hand, in order (`psql -U langfuse -d appdata -f postgres-init/NN-….sql`).
 
 - 📝 **Logs:** JSON from the API and the workers, each line carrying `request_id` (the response's `X-Request-Id`), `thread_id`, tenant, principal and domain, with one access line per request; no secret in a line. The `Agent Core Logs` dashboard follows one request or conversation by id ([RUNTIME_PATTERNS.md](docs/RUNTIME_PATTERNS.md) 112).
 - 📈 **Metrics:** 70+ OpenTelemetry counters and histograms (`app/core/metrics.py`), **pushed** over OTLP by the API and every worker replica to one otel-collector (pattern 11).
-- 🔭 **Traces:** Langfuse, grouped by `thread_id`.
+- 🔭 **Traces:** OpenTelemetry spans in Tempo (where a turn's time went: API, queue, worker, each node, model and tool call), and Langfuse (what the model saw), grouped by `thread_id`. One id for both: `trace_id` in the logs, `X-Trace-Id` on the response ([RUNTIME_PATTERNS.md](docs/RUNTIME_PATTERNS.md) 113).
 - 💵 **Cost:** one usage event per model call (tenant- and principal-scoped, with the concrete model behind each alias) is what the dollar caps sum ([COST_GOVERNANCE.md](docs/COST_GOVERNANCE.md), patterns 38, 51).
 
 `make obs-up` starts the backends and the agents that feed them (the OTel collector, Promtail, node-exporter, cAdvisor), all in
@@ -748,6 +748,7 @@ drops it; config in [`observability/`](observability/); prod runs the backends o
 | Pyroscope | Continuous CPU profiles pushed by the API and each worker (`PYROSCOPE_SERVER_ADDRESS`, [`app/platform/profiling.py`](app/platform/profiling.py)); flame graphs in Grafana, Explore, Pyroscope, tagged by `domain` and `replica`. On in dev, **off in production until tried on the droplet** |
 | Alertmanager | Routes [`alerts.yml`](observability/prometheus/alerts.yml) (error rate, p95 latency, tool errors, tenant budget, moderation and webhook spikes, degradation, checkpoints, unreachable workers). Locally **no notification channel is wired**. Production mounts `alertmanager.prod.yml` (Slack, severity-routed) and **refuses to start** without `ALERTMANAGER_SLACK_WEBHOOK_URL`, so a deployment can't be quietly alert-deaf |
 | Loki + Promtail | Ship the app containers' JSON logs |
+| Tempo | Distributed traces, seven days; open one from a log line's `trace_id` or Grafana, Explore, Tempo (`OTEL_TRACES_SAMPLE_RATIO`) |
 | Grafana | Seven provisioned dashboards: **Agent Core Overview**, **Infra**, **Logs**, **Credit Billing**, Docker/host, Postgres, Redis |
 
 * * *
@@ -910,7 +911,7 @@ evals/ scripts/model_eval/   the model-evaluation harness and its frozen dataset
 specs/ .specify/          Spec Kit specs 001–023 and the constitution
 web/                      the built-in web page: a React + TypeScript client built with Vite; the API serves web/dist (web/README.md)
 deploy/                   dev/ and prod/ (compose parts, Caddyfile, LiteLLM config, env example), shared/caddy/ (the front door's routing), images/ (sandbox builds), terraform/{prod,dev}/ (DigitalOcean droplets); deploy/README.md is the runbook
-observability/            Prometheus (+ alerts.yml), Alertmanager, Loki, Promtail, otel-collector, Grafana
+observability/            Prometheus (+ alerts.yml), Alertmanager, Loki, Promtail, otel-collector, Tempo, Grafana
 postgres-init/            numbered SQL schema (fresh volumes only)
 tests/                    mirrors app/ (adapters/inbound, adapters/outbound, services/, scripts/); fakes/ (in-memory ports); integration/, live/, deepeval/ are the marked tiers
 packages/billing/         the independent billing package: src, tests, schema, alerts, docs, specs

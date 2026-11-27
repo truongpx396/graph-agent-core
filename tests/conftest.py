@@ -139,10 +139,10 @@ def no_real_tracing(monkeypatch):
     """The default suite never builds a real Langfuse client (it starts threads, tries the network, and registers
     an atexit flush that took ~90 s to give up when Langfuse was down).
     """
-    from app.core import tracing
+    from app.core import llm_tracing
 
-    monkeypatch.setattr(tracing, "_client", None)
-    monkeypatch.setattr(tracing, "_settled", True)
+    monkeypatch.setattr(llm_tracing, "_client", None)
+    monkeypatch.setattr(llm_tracing, "_settled", True)
 
 
 @pytest.fixture(autouse=True)

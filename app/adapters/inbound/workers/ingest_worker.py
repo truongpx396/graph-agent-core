@@ -60,7 +60,7 @@ from app.adapters.inbound.workers.streams import (
     trim_stale_entries,
 )
 from app.bootstrap import close_adapters, verify_wired, wire
-from app.core import log_context, metrics
+from app.core import log_context, metrics, spans
 from app.core.config import (
     INGEST_WORKER_MAX_CONCURRENCY,
     INGEST_WORKER_RECLAIM_IDLE_SECONDS,
@@ -125,7 +125,13 @@ async def process_job(client: redis.Redis, entry_id: str, fields: dict[str, Any]
     observe_queue_wait("ingest", payload)  # how long this job waited for a worker (R17)
     ctx = payload.get("ctx")
     ctx = ctx if isinstance(ctx, dict) else {}
-    with log_context.scope(request_id=job_id, job_id=job_id, tenant=ctx.get("tenant"), principal=ctx.get("principal")):
+    traced = spans.job_span(
+        "ingest_job",
+        payload,
+        retried=bool(payload.get(RECLAIM_ATTEMPTS_FIELD)),
+        attributes={"agent.job_id": str(job_id), "agent.tenant": str(ctx.get("tenant") or "")},
+    )
+    with traced as job, log_context.scope(request_id=job_id, job_id=job_id, tenant=ctx.get("tenant"), principal=ctx.get("principal")):
         started = time.monotonic()
         logger.info("ingest_job_started")
         try:
@@ -158,6 +164,7 @@ async def process_job(client: redis.Redis, entry_id: str, fields: dict[str, Any]
             )
             await publish_result(client, job_id, {"type": "done", "chunks": chunks})
         except Exception as exc:  # noqa: BLE001 - the queue must keep moving regardless
+            spans.failed(job, exc)
             # Log the actual message, not just error_class (same truncated-
             # string convention as sandbox_session.py/skills.py) — otherwise
             # the failure reason only lives in the results stream, which

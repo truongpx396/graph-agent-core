@@ -52,7 +52,7 @@ flowchart LR
         sandbox["OpenSandbox<br/>code execution, opt-in"]
     end
 
-    obs["Observability<br/>OTel collector, Prometheus, Loki,<br/>Grafana, Langfuse"]
+    obs["Observability<br/>OTel collector, Prometheus, Loki,<br/>Tempo, Grafana, Langfuse"]
 
     ui --> caddy
     mcpc --> caddy
@@ -320,6 +320,7 @@ flowchart LR
     subgraph obsdrop_sg["Observability droplet"]
         prom["Prometheus and Alertmanager<br/>routes to Slack"]
         loki["Loki"]
+        tempo["Tempo<br/>traces"]
         graf["Grafana"]
     end
 
@@ -338,6 +339,7 @@ flowchart LR
     side -->|"private VPC"| obsdrop_sg
     prom --> graf
     loki --> graf
+    tempo --> graf
 ```
 
 - **The same code runs in dev and prod**; only configuration and the compose file differ ([README](../README.md#-environments)).

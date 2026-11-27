@@ -28,6 +28,27 @@ datasources:
           matcherRegex: '"request_id":\s*"([^"]+)"'
           url: '/d/agent-core-logs?var-request_id=$${__value.raw}&var-service=$$__all&from=now-7d&to=now'
           urlDisplayLabel: All lines of this request
+        # The same line's trace: where its time went (Tempo, below).
+        - name: trace_id
+          matcherRegex: '"trace_id":\s*"([0-9a-f]{32})"'
+          datasourceUid: tempo
+          url: '$${__value.raw}'
+          urlDisplayLabel: Trace
+
+  # Traces (app/core/spans.py, RUNTIME_PATTERNS.md 113). From a span, "Logs for this span" opens every service's lines of that trace.
+  - name: Tempo
+    uid: tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    editable: true
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: -5m
+        spanEndTimeShift: 5m
+        customQuery: true
+        query: '{compose_service=~".+"} |= `$${__trace.traceId}`'
 
   # Flame graphs (specs/022): Explore -> Pyroscope, application `agent-core-api` / `agent-core-agent-worker` / `agent-core-ingest-worker`,
   # profile type process_cpu, filtered by the `domain` and `replica` tags. Nothing else in this stack depends on it being up.

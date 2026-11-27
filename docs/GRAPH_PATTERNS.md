@@ -227,7 +227,7 @@ These are not patterns of the graph. Their numbers are kept so references ("patt
 
 | Patterns | Now in |
 |---|---|
-| 11, 29, 30, 31, 37, 43, 49, 96, 99, 112: metrics, logs, web UI, error envelope, pools, the queue and the workers | [RUNTIME_PATTERNS.md](RUNTIME_PATTERNS.md) |
+| 11, 29, 30, 31, 37, 43, 49, 96, 99, 112, 113: metrics, logs, tracing, web UI, error envelope, pools, the queue and the workers | [RUNTIME_PATTERNS.md](RUNTIME_PATTERNS.md) |
 | 82, 84, 85, 86, 97, 98: the front door, identity, the MCP gateway, production routing | [ACCESS_PATTERNS.md](ACCESS_PATTERNS.md) |
 | 42, 89, 91, 92, 93, 94: the CLI and Telegram | [CHANNEL_PATTERNS.md](CHANNEL_PATTERNS.md) |
 | 21, 28, 32, 50, 78, 87, 108, 110: data tools, MCP, scrubbing, crawl and sandbox, web search, metrics, ticket escalation | [TOOL_PATTERNS.md](TOOL_PATTERNS.md) |

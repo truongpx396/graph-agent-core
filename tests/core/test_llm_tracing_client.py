@@ -18,7 +18,7 @@ import time
 import pytest
 
 from app.agent.runtime import stream as runtime_stream
-from app.core import log_context, tracing
+from app.core import llm_tracing, log_context
 
 
 class _FakeLangfuse:
@@ -51,11 +51,11 @@ class _FakeCallbackHandler:
 
 @pytest.fixture(autouse=True)
 def _fresh_tracing_state():
-    tracing._reset_for_tests()
+    llm_tracing._reset_for_tests()
     _FakeLangfuse.constructed = 0
     yield
-    tracing.shutdown_langfuse()
-    tracing._reset_for_tests()
+    llm_tracing.shutdown_langfuse()
+    llm_tracing._reset_for_tests()
 
 
 @pytest.fixture
@@ -67,8 +67,8 @@ def fake_sdk(monkeypatch):
 
 
 def test_the_client_is_created_once_and_shared(fake_sdk):
-    first = tracing.get_langfuse()
-    second = tracing.get_langfuse()
+    first = llm_tracing.get_langfuse()
+    second = llm_tracing.get_langfuse()
 
     assert first is second and _FakeLangfuse.constructed == 1
 
@@ -76,7 +76,7 @@ def test_the_client_is_created_once_and_shared(fake_sdk):
 def test_twenty_turns_open_traces_through_one_client(fake_sdk):
     for turn in range(20):
         trace, callbacks = runtime_stream._open_trace("chat-turn-stream", f"thread-{turn}", "hello")
-        assert trace is not None and len(callbacks) == 2
+        assert trace is not None and any(isinstance(callback, _FakeCallbackHandler) for callback in callbacks)
 
     assert _FakeLangfuse.constructed == 1, "a client per turn is a thread leak"
 
@@ -118,36 +118,36 @@ def test_tracing_is_optional_a_construction_failure_degrades_to_no_trace(monkeyp
     for _ in range(5):
         trace, callbacks = runtime_stream._open_trace("chat-turn-stream", "thread", "hello")
         assert trace is None
-        assert len(callbacks) == 1, "the metrics handler still rides along"
+        assert [type(callback).__name__ for callback in callbacks] == ["MetricsCallbackHandler", "SpanCallbackHandler"], "ours still ride along"
 
     assert len(attempts) == 1, "a failed construction must not be retried on every turn"
 
 
 def test_shutdown_flushes_and_stops_the_client_once(fake_sdk):
-    client = tracing.get_langfuse()
+    client = llm_tracing.get_langfuse()
 
-    tracing.shutdown_langfuse()
-    tracing.shutdown_langfuse()
+    llm_tracing.shutdown_langfuse()
+    llm_tracing.shutdown_langfuse()
 
     assert client.flushes == 1 and client.shutdowns == 1
 
 
 def test_shutdown_without_a_client_is_a_no_op():
-    tracing.shutdown_langfuse()  # must not raise
+    llm_tracing.shutdown_langfuse()  # must not raise
 
 
 def test_a_client_is_not_resurrected_after_shutdown(fake_sdk):
-    tracing.get_langfuse()
-    tracing.shutdown_langfuse()
+    llm_tracing.get_langfuse()
+    llm_tracing.shutdown_langfuse()
 
-    assert tracing.get_langfuse() is None and _FakeLangfuse.constructed == 1
+    assert llm_tracing.get_langfuse() is None and _FakeLangfuse.constructed == 1
 
 
 def test_a_failing_shutdown_never_raises(fake_sdk):
-    client = tracing.get_langfuse()
+    client = llm_tracing.get_langfuse()
     client.shutdown = lambda: (_ for _ in ()).throw(RuntimeError("queue stuck"))
 
-    tracing.shutdown_langfuse()  # must not raise
+    llm_tracing.shutdown_langfuse()  # must not raise
 
 
 def test_twenty_real_turns_add_one_clients_threads_not_sixty():
@@ -174,11 +174,11 @@ def test_a_flush_that_never_returns_does_not_hold_up_process_exit(monkeypatch, c
     import langfuse
 
     monkeypatch.setattr(langfuse, "Langfuse", _StuckFlush)
-    assert tracing.get_langfuse() is not None
+    assert llm_tracing.get_langfuse() is not None
 
     started = time.monotonic()
-    with caplog.at_level(logging.WARNING, logger="app.core.tracing"):
-        tracing.shutdown_langfuse(timeout_seconds=0.2)
+    with caplog.at_level(logging.WARNING, logger="app.core.llm_tracing"):
+        llm_tracing.shutdown_langfuse(timeout_seconds=0.2)
     waited = time.monotonic() - started
     release.set()
 
@@ -188,9 +188,9 @@ def test_a_flush_that_never_returns_does_not_hold_up_process_exit(monkeypatch, c
 
 
 def test_a_flush_that_finishes_in_time_is_followed_by_the_shutdown(fake_sdk):
-    client = tracing.get_langfuse()
+    client = llm_tracing.get_langfuse()
 
-    tracing.shutdown_langfuse(timeout_seconds=5)
+    llm_tracing.shutdown_langfuse(timeout_seconds=5)
 
     assert (client.flushes, client.shutdowns) == (1, 1)
 

@@ -31,6 +31,10 @@ exporters:
     # unchanged (le="0.5", "1", ... rather than the SDK's own
     # millisecond-scale defaults).
 
+  # Spans (app/core/spans.py) go on to Tempo, in this stack's own network.
+  otlp_http/tempo:
+    endpoint: http://tempo:4318
+
 service:
   telemetry:
     logs:
@@ -40,3 +44,7 @@ service:
       receivers: [otlp]
       processors: [batch]
       exporters: [prometheus]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/tempo]

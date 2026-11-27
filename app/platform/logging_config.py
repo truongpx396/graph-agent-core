@@ -6,7 +6,7 @@ Built on structlog, but no log call site changed: every call already goes throug
 logging.getLogger(__name__)`) with per-call `extra={...}` correlation data. `configure_logging()` wires
 structlog's `ProcessorFormatter` onto the ROOT logger's handler (the standard "structlog processes stdlib
 logging" recipe), so every call site gets JSON rendering, the ids of the request or job in progress
-(app/core/log_context.py), secret scrubbing and exception formatting for free.
+(app/core/log_context.py), `trace_id`/`span_id` (app/core/spans.py), secret scrubbing and exception formatting for free.
 
 Three problems this fixes without changing what's logged:
 1. Plain `logging.basicConfig` silently drops every `extra` field.
@@ -30,7 +30,7 @@ from typing import TextIO
 import structlog
 from structlog.typing import EventDict, Processor, WrappedLogger
 
-from app.core import log_context
+from app.core import log_context, spans
 from app.core.scrubbing import scrub_patterns
 
 # Libraries whose INFO lines are one per outbound call, URL included: noise at best, a leaked token at worst (see the module docstring).
@@ -48,7 +48,7 @@ def _add_context(
     `extra={...}` wins, so this must run AFTER `structlog.stdlib.ExtraAdder`."""
     if _service is not None:
         event_dict.setdefault("service", _service)
-    for name, value in log_context.current().items():
+    for name, value in {**log_context.current(), **spans.current_ids()}.items():
         event_dict.setdefault(name, value)
     return event_dict
 
