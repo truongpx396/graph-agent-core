@@ -73,7 +73,10 @@ session; the pattern documents (`docs/README.md` maps each number to its file) h
 - Three numbers must stay in order: the turn's limit, the conversation lock's lifetime, and the reclaim idle. `Settings` refuses a reclaim idle at or below the longest turn plus 30 s; a deployment that widens `REQUEST_TIMEOUT_SECONDS` sets `AGENT_WORKER_RECLAIM_IDLE_SECONDS` with it. A worker takes its free slots before it reads and asks for that many, so a claimed entry never waits for a slot (pattern 99).
 - The production queue Redis has `noeviction` and a `maxmemory`: when it is full a write is refused (a new turn fails to publish) and nothing is dropped; the answer cache is a different Redis (`SEMANTIC_CACHE_REDIS_URL`) that evicts. Never put the cache back on the queue's Redis, and never turn persistence on for a volume that has data without enabling it in the running server first (docs/ENGINEERING_PATTERNS.md 100).
 - Every wait for a counterparty has a deadline (`read_results(first_event_deadline_seconds=...)`),
-  and a claim that wins but whose publish fails is compensated (`release_submission_claim`).
+  and a claim that wins but whose publish fails is compensated (`release_submission_claim`). The producer's own `queued` status is not the
+  counterparty answering: only a worker's event ends that deadline (RUNTIME_PATTERNS.md 117).
+- The chat stream's event `type`s and the `ErrorCode` values are in the contract: a new one is a break `make openapi-breaking` refuses without a
+  new major version (pattern 117). A new optional field is not.
 
 ## Resilience (`core/resilience.py`)
 

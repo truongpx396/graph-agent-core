@@ -44,6 +44,12 @@ def _reclaim(client, entry_id, fields, *, graph):
     return agent_worker._handle_reclaimed_job(client, entry_id, fields, graph=graph, domain="ecorp")
 
 
+def _published(client, request_id):
+    """What a job's handler published: every event on its results stream but the worker's own "started" (TestTheClientIsToldAWorkerTookTheJob)."""
+    events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key(request_id)]]
+    return [event for event in events if event["type"] != "status"]
+
+
 def _entry(
     kind="turn",
     request_id="r1",
@@ -99,7 +105,7 @@ class TestProcessRequestTurn:
 
         await _process(client, entry_id, fields)
 
-        events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r1")]]
+        events = _published(client, "r1")
         assert events == [
             {"type": "token", "content": "Hel"},
             {"type": "token", "content": "lo"},
@@ -131,7 +137,7 @@ class TestProcessRequestTurn:
 
         await _process(client, entry_id, fields)
 
-        events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r1")]]
+        events = _published(client, "r1")
         assert events == [{"type": "done"}]
 
     async def test_clears_any_stale_cancel_flag_before_starting(self, monkeypatch):
@@ -269,7 +275,7 @@ class TestProcessRequestTurn:
 
         await _process(client, entry_id, fields)
 
-        events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r2")]]
+        events = _published(client, "r2")
         assert len(events) == 1
         error = events[0]
         assert error["type"] == "error"
@@ -302,7 +308,7 @@ class TestProcessRequestTurnContinue:
         await _process(client, entry_id, fields)
 
         assert captured == {"thread_id": "t10", "ctx": ctx}
-        events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r10")]]
+        events = _published(client, "r10")
         assert events == [{"type": "done"}]
         assert client.acked == [entry_id]
 
@@ -317,7 +323,7 @@ class TestProcessRequestTurnContinue:
 
         await _process(client, entry_id, fields)
 
-        events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r11")]]
+        events = _published(client, "r11")
         assert len(events) == 1
         assert events[0]["type"] == "error"
         assert events[0]["code"] == "internal"
@@ -362,7 +368,7 @@ class TestUnattendedJobs:
             "ctx": ctx,
             "require_approval": False,
         }
-        events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r20")]]
+        events = _published(client, "r20")
         assert events == [{"type": "token", "content": "No, I can't do that."}, {"type": "done"}]
         assert client.acked == [entry_id]
 
@@ -385,7 +391,7 @@ class TestUnattendedJobs:
         await _process(client, entry_id, fields)
 
         assert captured["thread_id"] == "telegram:7"
-        events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r21")]]
+        events = _published(client, "r21")
         assert events == [{"type": "done"}]
 
     async def test_a_job_with_no_flag_stays_on_the_attended_path(self, monkeypatch):
@@ -406,7 +412,7 @@ class TestUnattendedJobs:
 
         await _process(client, entry_id, {"payload": json.dumps(payload)})
 
-        events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r22")]]
+        events = _published(client, "r22")
         assert events == [{"type": "approval_required", "tool_calls": []}]
 
     @pytest.mark.parametrize(
@@ -469,7 +475,7 @@ class TestProcessRequestResume:
         await _process(client, entry_id, fields)
 
         assert captured == {"thread_id": "t6", "approved": False, "ctx": ctx}
-        events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r6")]]
+        events = _published(client, "r6")
         assert events == [{"type": "done"}]
         assert client.acked == [entry_id]
 
@@ -529,12 +535,81 @@ class TestProcessRequestResume:
 
         await _process(client, entry_id, fields)
 
-        events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r7")]]
+        events = _published(client, "r7")
         assert len(events) == 1
         assert events[0]["type"] == "error"
         assert events[0]["code"] == "internal"
         assert "checkpoint gone" not in json.dumps(events[0])
         assert client.acked == [entry_id]
+
+
+class TestTheClientIsToldAWorkerTookTheJob:
+    """The "started" status (specs/025): published when a worker takes a turn or a resume, before anything runs."""
+
+    @staticmethod
+    def _all(client, request_id="r1"):
+        return [json.loads(f["payload"]) for _, f in client.streams[results_stream_key(request_id)]]
+
+    @pytest.mark.parametrize(
+        ("kind", "entry_point"),
+        [("turn", "astream_events_turn"), ("turn_continue", "astream_events_continue_turn"), ("resume", "astream_events_resume")],
+    )
+    async def test_started_comes_before_anything_the_job_runs_and_names_no_host(self, monkeypatch, kind, entry_point):
+        client = FakeRedis()
+        seen_when_run = []
+
+        async def fake_stream(*args, **kwargs):
+            seen_when_run.extend(event["type"] for event in self._all(client))
+            yield {"type": "done"}
+
+        monkeypatch.setattr(agent_worker, entry_point, fake_stream)
+
+        await _process(client, *_entry(kind=kind))
+
+        assert seen_when_run == ["status"]
+        started, done = self._all(client)
+        assert (started["type"], started["state"], done["type"]) == ("status", "started", "done")
+        assert started["worker"] == agent_worker.WORKER_LABEL and agent_worker.socket.gethostname() not in started["worker"]
+        assert agent_worker.CONSUMER_NAME.endswith(started["worker"].removeprefix("w-")), "the logs can be matched to what the client was told"
+
+    async def test_a_stop_pressed_the_moment_the_client_is_told_is_not_erased(self, monkeypatch):
+        """A worker clears a stale cancel flag when it takes a job. Told first and cleared after, the stop a client sends on seeing "started"
+        was dropped and the turn ran on."""
+        client = FakeRedis()
+        original = agent_worker.publish_result
+        stopped = []
+
+        async def stop_on_started(redis_client, request_id, event):
+            await original(redis_client, request_id, event)
+            if event.get("state") == "started":
+                await redis_client.set("agent:cancel:t1", "1")
+
+        async def turn(text, thread_id, ctx, require_approval=False, images=None, cancel_check=None):
+            stopped.append(await cancel_check())
+            yield {"type": "done"}
+
+        monkeypatch.setattr(agent_worker, "publish_result", stop_on_started)
+        monkeypatch.setattr(agent_worker, "astream_events_turn", turn)
+
+        await _process(client, *_entry())
+
+        assert stopped == [True]
+
+    async def test_a_cancel_job_has_no_status(self, monkeypatch):
+        monkeypatch.setattr(agent_worker, "cancel_run", AsyncMock(return_value=True))
+        client = FakeRedis()
+
+        await _process(client, *_entry(kind="cancel"))
+
+        assert [event["type"] for event in self._all(client)] == ["error"]
+
+    async def test_a_job_turned_away_from_a_busy_conversation_never_says_started(self, monkeypatch):
+        client = FakeRedis()
+        await streams.acquire_thread_lock(client, "t1", "another-job")
+
+        await _process(client, *_entry())
+
+        assert [(event["type"], event.get("code")) for event in self._all(client)] == [("error", "thread_busy")]
 
 
 class TestTheStreamIsClosedBeforeAPublishFailureIsSeen:
@@ -567,7 +642,8 @@ class TestTheStreamIsClosedBeforeAPublishFailureIsSeen:
                 closed.append(True)
 
         async def failing_publish(client, request_id, event):
-            raise ConnectionError("redis went away")
+            if event["type"] != "status":  # "started" lands; the failure is in the middle of the turn's own events
+                raise ConnectionError("redis went away")
 
         async def release_lock():
             return None
@@ -604,7 +680,7 @@ class TestProcessRequestCancel:
         await _process(client, entry_id, fields)
 
         assert captured == {"thread_id": "t8", "ctx": ctx}
-        events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r8")]]
+        events = _published(client, "r8")
         assert len(events) == 1
         assert events[0]["type"] == "error"
         assert events[0]["code"] == "cancelled"
@@ -625,7 +701,7 @@ class TestProcessRequestCancel:
 
         await _process(client, entry_id, fields)
 
-        events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r9")]]
+        events = _published(client, "r9")
         assert events == [{"type": "done"}]
         assert client.acked == [entry_id]
 
@@ -640,7 +716,7 @@ class TestProcessRequestUnknownKind:
 
         await _process(client, entry_id, fields)
 
-        events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r10")]]
+        events = _published(client, "r10")
         assert len(events) == 1
         assert events[0]["type"] == "error"
         # The worker's own diagnostic ("unknown job kind: ...") is for the operator's logs, not
@@ -736,7 +812,7 @@ class TestRunLoop:
 
         await _run_one_iteration()
 
-        events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r3")]]
+        events = _published(client, "r3")
         assert events == [{"type": "done"}]
 
 
@@ -794,7 +870,7 @@ class TestConcurrentDispatch:
         assert peak == max_concurrency
         assert len(client.acked) == num_jobs
         for i in range(num_jobs):
-            events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key(f"r{i}")]]
+            events = _published(client, f"r{i}")
             assert events == [{"type": "done"}]
 
 
@@ -867,7 +943,7 @@ class TestTheThreadLockIsRenewedWhileAJobRuns:
 
         await _process(client, entry_id, fields)
 
-        events = [json.loads(f["payload"])["type"] for _, f in client.streams[results_stream_key("r-lost")]]
+        events = [e["type"] for e in _published(client, "r-lost")]
         assert events == ["token", "done"]
         assert _count(metrics.agent_thread_lock_lost_total) == lost_before + 1, "once: a lock that is lost is not asked about again"
 
@@ -890,7 +966,7 @@ class TestTheThreadLockIsRenewedWhileAJobRuns:
 
         await _process(client, entry_id, fields)
 
-        assert [json.loads(f["payload"])["type"] for _, f in client.streams[results_stream_key("r-blip")]] == ["done"]
+        assert [e["type"] for e in _published(client, "r-blip")] == ["done"]
         assert len(client.renewals) >= 3, "kept renewing after the failed one"
 
 
@@ -929,13 +1005,13 @@ class TestSameThreadJobsAreSerialized:
         # The second job never even reached the graph — rejected before
         # calling astream_events_turn at all.
         assert calls == [1]
-        r2_events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r2")]]
+        r2_events = _published(client, "r2")
         assert len(r2_events) == 1
         assert r2_events[0]["type"] == "error"
         assert r2_events[0]["code"] == "thread_busy"
         # Still acked — a rejected job must not be redelivered either.
         assert entry_id_2 in client.acked
-        r1_events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r1")]]
+        r1_events = _published(client, "r1")
         assert r1_events == [{"type": "done"}]
 
     async def test_lock_releases_at_the_terminal_event_not_after_trailing_cleanup(self, monkeypatch):
@@ -987,7 +1063,7 @@ class TestSameThreadJobsAreSerialized:
         release_trailing_cleanup.set()
         await first
 
-        r2_events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r2")]]
+        r2_events = _published(client, "r2")
         assert r2_events == [{"type": "done"}], (
             "the second job was rejected while the first was still in its own "
             "trailing cleanup — the lock was released too late"
@@ -1022,7 +1098,7 @@ class TestSameThreadJobsAreSerialized:
         release_handler.set()
         await turn_task
 
-        r2_events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r2")]]
+        r2_events = _published(client, "r2")
         assert r2_events[0]["code"] == "thread_busy"
 
     async def test_a_third_job_proceeds_normally_once_the_lock_is_released(self, monkeypatch):
@@ -1037,7 +1113,7 @@ class TestSameThreadJobsAreSerialized:
         await _process(client, entry_id_1, fields_1)  # runs and releases
         await _process(client, entry_id_2, fields_2)  # lock is free again
 
-        r2_events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r2")]]
+        r2_events = _published(client, "r2")
         assert r2_events == [{"type": "done"}]
 
     async def test_different_thread_ids_never_contend(self, monkeypatch):
@@ -1055,7 +1131,7 @@ class TestSameThreadJobsAreSerialized:
         )
 
         for rid in ("r1", "r2"):
-            events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key(rid)]]
+            events = _published(client, rid)
             assert events == [{"type": "done"}]
 
 
@@ -1283,7 +1359,7 @@ class TestHandleReclaimedJob:
 
         await _reclaim(client, entry_id, fields, graph=graph)
 
-        events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r2b")]]
+        events = _published(client, "r2b")
         assert events[0]["code"] == "worker_lost"
         dead = client.streams[dead_letter_stream_key(REQUESTS_STREAM)]
         assert len(dead) == 1
@@ -1306,7 +1382,7 @@ class TestHandleReclaimedJob:
 
         await _reclaim(client, entry_id, fields, graph=FakeGraph())
 
-        events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r3")]]
+        events = _published(client, "r3")
         assert events[0]["code"] == "worker_lost"
         assert len(client.streams[dead_letter_stream_key(REQUESTS_STREAM)]) == 1
 
@@ -1374,7 +1450,7 @@ class TestReclaimLoop:
         stop_event.set()
         await asyncio.wait_for(task, timeout=1)
 
-        events = [json.loads(f["payload"]) for _, f in client.streams[results_stream_key("r5")]]
+        events = _published(client, "r5")
         assert events[0]["code"] == "worker_lost"
         assert entry_id in client.acked
 
@@ -1848,7 +1924,7 @@ class TestARedisBlipDoesNotEndTheWorker:
 
         await harness.run_until(lambda: entry_id in client.acked)
 
-        assert [json.loads(f["payload"])["type"] for _, f in client.streams[results_stream_key("r-blip")]] == ["done"]
+        assert [e["type"] for e in _published(client, "r-blip")] == ["done"]
         assert _count(metrics.agent_worker_queue_read_failed_total, queue="agent") == before + 2
 
     @pytest.mark.parametrize("error", [redis_module.TimeoutError("timed out"), ConnectionResetError("reset"), TimeoutError("socket")], ids=lambda e: type(e).__name__)

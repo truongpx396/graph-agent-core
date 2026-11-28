@@ -40,6 +40,11 @@ three; `"turn_continue"` comes only from this module's reclaim path.
 - `"turn_continue"`: a crashed `"turn"` reclaimed mid-flight, continued with `astream_events_continue_turn`
   (see its docstring for why that is safe).
 
+## Status
+
+The producer writes "queued" with a turn or resume job; the worker that takes one publishes "started" before it runs anything (`_take_job`), again if
+the job is reclaimed. A cancel has neither: it is answered by its outcome.
+
 ## Ack and crash reclaim
 
 A job publishes every event to the results stream, then acks, which is `streams.py::ack_and_delete`: `XACK` alone leaves the entry in the stream for
@@ -149,6 +154,7 @@ from app.ports.outbound.jobs import (
     TERMINAL_EVENT_TYPES,
     THREAD_LOCK_TTL_SECONDS,
     requests_stream_key,
+    status_event,
 )
 
 logger = logging.getLogger(__name__)
@@ -156,7 +162,10 @@ logger = logging.getLogger(__name__)
 # Frees the thread lock; a handler calls it just before it publishes its terminal event (see `process_request`).
 ReleaseLock: TypeAlias = Callable[[], Awaitable[None]]
 
-CONSUMER_NAME = f"{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
+_PROCESS_ID = uuid.uuid4().hex[:8]
+CONSUMER_NAME = f"{socket.gethostname()}-{_PROCESS_ID}"
+# What a client is told in the "started" status: the same random suffix, so it can be matched to this process's logs, without the host name.
+WORKER_LABEL = f"w-{_PROCESS_ID}"
 _MAX_CONCURRENCY = AGENT_WORKER_MAX_CONCURRENCY  # concurrent turns per worker
 # process — bounds both the semaphore in run() and how many entries one
 # xreadgroup call pulls, so this process never claims more than it's
@@ -244,12 +253,19 @@ async def _publish_events(client: redis.Redis, request_id: str, events: AsyncGen
             await publish_result(client, request_id, event)
 
 
+async def _take_job(client: redis.Redis, request_id: str, thread_id: str) -> None:
+    """The first thing a turn, resume or continue job does: forget a stale cancel flag, then tell the client a worker has it. In that order: a client
+    may press stop the moment it is told, and a clear afterwards would erase that. If the publish fails the job fails with nothing run."""
+    await clear_cancel_flag(client, thread_id)
+    await publish_result(client, request_id, status_event("started", worker=WORKER_LABEL))
+
+
 async def _process_turn(client: redis.Redis, request_id: str, payload: dict[str, Any], release_lock: ReleaseLock) -> None:
     thread_id = payload["thread_id"]
     # A stale flag from an EARLIER turn on this thread_id (e.g. /chat/cancel
     # raced with that turn already finishing on its own) must not
     # spuriously cancel this brand-new one.
-    await clear_cancel_flag(client, thread_id)
+    await _take_job(client, request_id, thread_id)
 
     async def cancel_check() -> bool:
         return await is_cancelled(client, thread_id)
@@ -289,7 +305,7 @@ async def _process_turn_continue(client: redis.Redis, request_id: str, payload: 
     `HumanMessage` checkpointed); kept on the payload rather than stripped,
     since `streams.py::republish_job` mutates only `kind`/the retry counter."""
     thread_id = payload["thread_id"]
-    await clear_cancel_flag(client, thread_id)  # see _process_turn's own comment on this
+    await _take_job(client, request_id, thread_id)  # see _process_turn's own comment on this
 
     async def cancel_check() -> bool:
         return await is_cancelled(client, thread_id)
@@ -311,7 +327,7 @@ async def _process_resume(client: redis.Redis, request_id: str, payload: dict[st
     # its own) must not cancel the approval the user has since given — the
     # later action is the user's intent. A cancel pressed after this point is
     # set after the clear and is seen by the polling below.
-    await clear_cancel_flag(client, thread_id)
+    await _take_job(client, request_id, thread_id)
 
     async def cancel_check() -> bool:
         return await is_cancelled(client, thread_id)

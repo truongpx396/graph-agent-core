@@ -473,6 +473,17 @@ class TestTappingAButton:
 
         assert len(door.resumes) == 2 and api.sent_texts()[-1] == "Saved."
 
+    async def test_a_connection_lost_after_the_decision_was_queued_does_not_offer_it_again(self):
+        """"queued" means the resume job is published: the decision will be applied, so putting the buttons back would invite a second one."""
+        dropped = [{"type": "status", "state": "queued"}, {"type": "error", "content": "The connection was lost before the reply finished."}]
+        bot, api, door, store = make_bot(FakeDoor(resumes=[dropped]))
+        token = await pending_token(bot, door, store)
+
+        await bot.handle_update(tap(token))
+
+        assert await store.for_thread(THREAD) is None
+        assert "connection was lost" in api.sent_texts()[-1]
+
     async def test_a_decision_the_agent_could_not_apply_is_reported_and_not_offered_again(self):
         gone = [{"type": "error", "content": "checkpoint_lost: no paused run found", "code": "internal"}]
         bot, api, door, store = make_bot(FakeDoor(resumes=[gone]))

@@ -75,7 +75,7 @@ async def test_a_turn_goes_in_and_the_workers_events_come_back_through_the_real_
     events = await collect(world.door("p-1").stream_turn("hello", "t1", unattended=True))
     await world.http.aclose()
 
-    assert [e["type"] for e in events] == ["token", "done"]
+    assert [e["type"] for e in events] == ["status", "token", "done"]  # "queued" is the API's own; the fake worker sends no "started"
     (job,) = world.redis.jobs()
     assert (job["text"], job["thread_id"], job["unattended"], job["require_approval"]) == ("hello", "t1", True, False)
     assert job["ctx"]["principal"] == "p-1", "the caller is the one the door named, not anything in the body"
@@ -89,7 +89,7 @@ async def test_a_redelivered_update_is_one_job_and_the_first_attempts_events_com
     await world.http.aclose()
 
     assert len(world.redis.jobs()) == 1
-    assert first == again and [e["type"] for e in again] == ["token", "done"]
+    assert first == again and [e["type"] for e in again] == ["status", "token", "done"]
 
 
 async def test_the_telegram_channel_can_claim_its_own_conversation_and_nobody_can_claim_it_for_them(world):
@@ -97,7 +97,7 @@ async def test_the_telegram_channel_can_claim_its_own_conversation_and_nobody_ca
     squatter = await collect(world.door("someone-else").stream_turn("hi", "telegram:abc-123:777", unattended=True))
     await world.http.aclose()
 
-    assert [e["type"] for e in mine] == ["token", "done"]
+    assert [e["type"] for e in mine] == ["status", "token", "done"]
     assert squatter == [{"type": "error", "content": "That conversation was not found."}]
     assert "telegram:abc-123:777" not in world.sessions.rows
     assert [j["thread_id"] for j in world.redis.jobs()] == ["telegram:abc-123:555"]

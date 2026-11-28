@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Graph Agent Core API",
-    "description": "A multi-tenant, multi-domain LangGraph RAG agent. A client starts a turn, reads its events as they stream, answers an approval the\nagent asks for, and lists its own past sessions. One graph serves every domain; `X-Domain` picks which (default `ecorp`).\n\n**Who is calling.** Behind the front door (the authlimit service) a client sends `Authorization: Bearer <access token>`; the door\nverifies it and gives the API a signed identity, so the tenant and person are never taken from a header or a body. Only a deployment run\nwith `AUTH_MODE=headers` (a developer's machine, the tests) reads `X-Tenant-Id` and `X-Principal-Id` as sent. Everything a caller reads or\nchanges is scoped to its tenant and person.\n\n**Errors.** A refusal the application makes is the canonical envelope `{\"code\", \"message\", \"details\"}`; switch on `code`, not on the\ntext. A turn's own failures arrive as an `error` event on its stream, in the same shape.\n\n**Streams.** `POST /chat/stream/queued` and `GET /ingest/stream/{job_id}` answer with server-sent events, which OpenAPI describes only\nas a `text/event-stream` body; the event vocabulary is in the first route's description.\n",
-    "version": "3.5.1"
+    "description": "A multi-tenant, multi-domain LangGraph RAG agent. A client starts a turn, reads its events as they stream, answers an approval the\nagent asks for, and lists its own past sessions. One graph serves every domain; `X-Domain` picks which (default `ecorp`).\n\n**Who is calling.** Behind the front door (the authlimit service) a client sends `Authorization: Bearer <access token>`; the door\nverifies it and gives the API a signed identity, so the tenant and person are never taken from a header or a body. Only a deployment run\nwith `AUTH_MODE=headers` (a developer's machine, the tests) reads `X-Tenant-Id` and `X-Principal-Id` as sent. Everything a caller reads or\nchanges is scoped to its tenant and person.\n\n**Errors.** A refusal the application makes is the canonical envelope `{\"code\", \"message\", \"details\"}`; switch on `code`, not on the\ntext. A turn's own failures arrive as an `error` event on its stream, in the same shape.\n\n**Streams.** `POST /chat/stream/queued` and `GET /ingest/stream/{job_id}` answer with server-sent events, which OpenAPI describes only\nas a `text/event-stream` body; the event vocabulary is in the first route's description.\n\n**Compatibility.** Ignore an event `type`, an error `code` or a status value you do not know: a later version may add one.\n",
+    "version": "4.0.0"
   },
   "servers": [
     {
@@ -91,7 +91,7 @@
           "chat"
         ],
         "summary": "Chat Stream Queued",
-        "description": "Same SSE event vocabulary an in-process `astream_events_turn` would\nproduce (token, tool_start, tool_end, retry, compacted, citations,\nfollowups, approval_required, error, done), but this process never runs the graph\nitself — it publishes the turn onto a shared Redis Stream and streams\nback whatever a separate `agent_worker.py` process publishes to this\nturn's results stream (pattern 43, app/adapters/outbound/redis/queue.py).\n\nThis makes the SSE-serving tier and agent-executing tier independently\nscalable: more `uvicorn` processes scale concurrent SSE connections,\nmore `agent_worker.py` processes scale concurrent turns. Needs at least\none worker running (`make agent-worker`) to ever produce a reply.\n\nA real `approval_required` pause here IS actionable (the worker no\nlonger auto-declines it), resumed via `POST /chat/resume` below.\n\n`domain` (`X-Domain` header, see `get_domain`) picks which domain's\nrequests stream this is published onto — only a worker serving that\ndomain (`AGENT_WORKER_DOMAINS`) reads it, letting one API process serve\nevery running domain.\n\nDeduplicated against an identical (`thread_id`, `message`, `images`)\nresubmission within `CHAT_SUBMIT_DEDUP_TTL_SECONDS`\n(`queue.py::claim_or_get_existing_submission`) — a client's own retry\nof this exact call reuses the first attempt's `request_id` and SSE\nstream rather than publishing (and running) a second, independent\nturn. See that function's own docstring for why the thread lock alone\ndoesn't already cover this.",
+        "description": "Same SSE event vocabulary an in-process `astream_events_turn` would\nproduce (token, tool_start, tool_end, retry, compacted, citations,\nfollowups, system_note, approval_required, error, done), after a\n`status` event for `queued` (written here, with the job) and one for\n`started` (the worker that took it). But this process never runs the graph\nitself — it publishes the turn onto a shared Redis Stream and streams\nback whatever a separate `agent_worker.py` process publishes to this\nturn's results stream (pattern 43, app/adapters/outbound/redis/queue.py).\n\nThis makes the SSE-serving tier and agent-executing tier independently\nscalable: more `uvicorn` processes scale concurrent SSE connections,\nmore `agent_worker.py` processes scale concurrent turns. Needs at least\none worker running (`make agent-worker`) to ever produce a reply.\n\nA real `approval_required` pause here IS actionable (the worker no\nlonger auto-declines it), resumed via `POST /chat/resume` below.\n\n`domain` (`X-Domain` header, see `get_domain`) picks which domain's\nrequests stream this is published onto — only a worker serving that\ndomain (`AGENT_WORKER_DOMAINS`) reads it, letting one API process serve\nevery running domain.\n\nDeduplicated against an identical (`thread_id`, `message`, `images`)\nresubmission within `CHAT_SUBMIT_DEDUP_TTL_SECONDS`\n(`queue.py::claim_or_get_existing_submission`) — a client's own retry\nof this exact call reuses the first attempt's `request_id` and SSE\nstream rather than publishing (and running) a second, independent\nturn. See that function's own docstring for why the thread lock alone\ndoesn't already cover this.",
         "operationId": "chat_stream_queued_chat_stream_queued_post",
         "parameters": [
           {
@@ -188,6 +188,9 @@
                       "contentSchema": {
                         "oneOf": [
                           {
+                            "$ref": "#/components/schemas/StatusEvent"
+                          },
+                          {
                             "$ref": "#/components/schemas/TokenEvent"
                           },
                           {
@@ -209,6 +212,12 @@
                             "$ref": "#/components/schemas/FollowupsEvent"
                           },
                           {
+                            "$ref": "#/components/schemas/SystemNoteEvent"
+                          },
+                          {
+                            "$ref": "#/components/schemas/UsageEvent"
+                          },
+                          {
                             "$ref": "#/components/schemas/ApprovalRequiredEvent"
                           },
                           {
@@ -221,6 +230,7 @@
                         "discriminator": {
                           "propertyName": "type",
                           "mapping": {
+                            "status": "#/components/schemas/StatusEvent",
                             "token": "#/components/schemas/TokenEvent",
                             "tool_start": "#/components/schemas/ToolStartEvent",
                             "tool_end": "#/components/schemas/ToolEndEvent",
@@ -228,6 +238,8 @@
                             "compacted": "#/components/schemas/CompactedEvent",
                             "citations": "#/components/schemas/CitationsEvent",
                             "followups": "#/components/schemas/FollowupsEvent",
+                            "system_note": "#/components/schemas/SystemNoteEvent",
+                            "usage": "#/components/schemas/UsageEvent",
                             "approval_required": "#/components/schemas/ApprovalRequiredEvent",
                             "done": "#/components/schemas/DoneEvent",
                             "error": "#/components/schemas/ErrorEvent"
@@ -374,6 +386,9 @@
                       "contentSchema": {
                         "oneOf": [
                           {
+                            "$ref": "#/components/schemas/StatusEvent"
+                          },
+                          {
                             "$ref": "#/components/schemas/TokenEvent"
                           },
                           {
@@ -395,6 +410,12 @@
                             "$ref": "#/components/schemas/FollowupsEvent"
                           },
                           {
+                            "$ref": "#/components/schemas/SystemNoteEvent"
+                          },
+                          {
+                            "$ref": "#/components/schemas/UsageEvent"
+                          },
+                          {
                             "$ref": "#/components/schemas/ApprovalRequiredEvent"
                           },
                           {
@@ -407,6 +428,7 @@
                         "discriminator": {
                           "propertyName": "type",
                           "mapping": {
+                            "status": "#/components/schemas/StatusEvent",
                             "token": "#/components/schemas/TokenEvent",
                             "tool_start": "#/components/schemas/ToolStartEvent",
                             "tool_end": "#/components/schemas/ToolEndEvent",
@@ -414,6 +436,8 @@
                             "compacted": "#/components/schemas/CompactedEvent",
                             "citations": "#/components/schemas/CitationsEvent",
                             "followups": "#/components/schemas/FollowupsEvent",
+                            "system_note": "#/components/schemas/SystemNoteEvent",
+                            "usage": "#/components/schemas/UsageEvent",
                             "approval_required": "#/components/schemas/ApprovalRequiredEvent",
                             "done": "#/components/schemas/DoneEvent",
                             "error": "#/components/schemas/ErrorEvent"
@@ -545,6 +569,9 @@
                       "contentSchema": {
                         "oneOf": [
                           {
+                            "$ref": "#/components/schemas/StatusEvent"
+                          },
+                          {
                             "$ref": "#/components/schemas/TokenEvent"
                           },
                           {
@@ -566,6 +593,12 @@
                             "$ref": "#/components/schemas/FollowupsEvent"
                           },
                           {
+                            "$ref": "#/components/schemas/SystemNoteEvent"
+                          },
+                          {
+                            "$ref": "#/components/schemas/UsageEvent"
+                          },
+                          {
                             "$ref": "#/components/schemas/ApprovalRequiredEvent"
                           },
                           {
@@ -578,6 +611,7 @@
                         "discriminator": {
                           "propertyName": "type",
                           "mapping": {
+                            "status": "#/components/schemas/StatusEvent",
                             "token": "#/components/schemas/TokenEvent",
                             "tool_start": "#/components/schemas/ToolStartEvent",
                             "tool_end": "#/components/schemas/ToolEndEvent",
@@ -585,6 +619,8 @@
                             "compacted": "#/components/schemas/CompactedEvent",
                             "citations": "#/components/schemas/CitationsEvent",
                             "followups": "#/components/schemas/FollowupsEvent",
+                            "system_note": "#/components/schemas/SystemNoteEvent",
+                            "usage": "#/components/schemas/UsageEvent",
                             "approval_required": "#/components/schemas/ApprovalRequiredEvent",
                             "done": "#/components/schemas/DoneEvent",
                             "error": "#/components/schemas/ErrorEvent"
@@ -713,6 +749,9 @@
                       "contentSchema": {
                         "oneOf": [
                           {
+                            "$ref": "#/components/schemas/StatusEvent"
+                          },
+                          {
                             "$ref": "#/components/schemas/TokenEvent"
                           },
                           {
@@ -734,6 +773,12 @@
                             "$ref": "#/components/schemas/FollowupsEvent"
                           },
                           {
+                            "$ref": "#/components/schemas/SystemNoteEvent"
+                          },
+                          {
+                            "$ref": "#/components/schemas/UsageEvent"
+                          },
+                          {
                             "$ref": "#/components/schemas/ApprovalRequiredEvent"
                           },
                           {
@@ -746,6 +791,7 @@
                         "discriminator": {
                           "propertyName": "type",
                           "mapping": {
+                            "status": "#/components/schemas/StatusEvent",
                             "token": "#/components/schemas/TokenEvent",
                             "tool_start": "#/components/schemas/ToolStartEvent",
                             "tool_end": "#/components/schemas/ToolEndEvent",
@@ -753,6 +799,8 @@
                             "compacted": "#/components/schemas/CompactedEvent",
                             "citations": "#/components/schemas/CitationsEvent",
                             "followups": "#/components/schemas/FollowupsEvent",
+                            "system_note": "#/components/schemas/SystemNoteEvent",
+                            "usage": "#/components/schemas/UsageEvent",
                             "approval_required": "#/components/schemas/ApprovalRequiredEvent",
                             "done": "#/components/schemas/DoneEvent",
                             "error": "#/components/schemas/ErrorEvent"
@@ -2069,6 +2117,7 @@
           "checkpoint_lost",
           "checkpoint_incompatible",
           "pending_approval",
+          "approval_superseded",
           "unattended_pause",
           "cancelled",
           "cost_ceiling_exceeded",
@@ -2606,6 +2655,69 @@
         ],
         "title": "SessionSummary"
       },
+      "StatusEvent": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "status",
+            "title": "Type"
+          },
+          "state": {
+            "type": "string",
+            "title": "State",
+            "description": "`queued` or `started`. Ignore a value you do not know.",
+            "x-extensible-enum": [
+              "queued",
+              "started"
+            ]
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "worker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker",
+            "description": "On `started`: an opaque label of the worker that took the job."
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "state",
+          "at"
+        ],
+        "title": "StatusEvent",
+        "description": "Not terminal. Where a turn's job is: `queued` the moment it is accepted, `started` when a worker takes it, before anything runs. A turn and a\nresume have both, `started` again if a crashed worker's job is run again; a cancel has neither. A turn without `started` is waiting for a worker."
+      },
+      "SystemNoteEvent": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "system_note",
+            "title": "Type"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "content"
+        ],
+        "title": "SystemNoteEvent",
+        "description": "Not terminal. Something about the conversation rather than this answer: for example, an earlier approval pause that an app update made unresumable."
+      },
       "TokenEvent": {
         "properties": {
           "type": {
@@ -2711,6 +2823,94 @@
           "args"
         ],
         "title": "ToolStartEvent"
+      },
+      "UsageEvent": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "usage",
+            "title": "Type"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model",
+            "description": "The model that wrote the answer."
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route",
+            "description": "The tier that served it. Ignore a value you do not know.",
+            "x-extensible-enum": [
+              "local",
+              "medium",
+              "strong"
+            ]
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd",
+            "description": "Null when any of the turn's calls has no known price."
+          },
+          "model_calls": {
+            "type": "integer",
+            "title": "Model Calls"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "model",
+          "route",
+          "input_tokens",
+          "output_tokens",
+          "cost_usd",
+          "model_calls"
+        ],
+        "title": "UsageEvent",
+        "description": "Just before `done`: what this turn's model calls used, subagents' included. Declared in 4.0.0 and not sent yet. Null means unknown, never zero."
       },
       "UsageResponse": {
         "properties": {

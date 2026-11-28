@@ -96,6 +96,10 @@ def _refusal(status: int, retry_after: str | None) -> tuple[str, str]:
     return "other", f"The request was refused ({status})."
 
 
+# A turn is accepted well before its first words (the "queued" status), and it runs on a worker whether or not anyone is still reading.
+_LOST_MESSAGE = "The connection was lost before the reply finished. Your request was received and may still be running."
+
+
 class Door:
     def __init__(self, auth: Auth, *, channel: str, domain: str, http: httpx.AsyncClient, base_url: str | None = None) -> None:
         self._auth = auth
@@ -109,6 +113,7 @@ class Door:
         return {"type": "error", "content": content}
 
     async def _stream(self, path: str, body: dict[str, Any], *, read_body: bool = True) -> AsyncGenerator[dict[str, Any], None]:
+        accepted = False  # an event arrived, so the API has the request: a later failure cannot claim nothing was sent
         for attempt in (0, 1):
             try:
                 headers = {**await self._auth.headers(), "X-Domain": self._domain, "Accept": "text/event-stream"}
@@ -134,11 +139,12 @@ class Door:
                             logger.warning("channel_bad_sse_frame")
                             continue
                         if isinstance(event, dict):
+                            accepted = True
                             yield event
                     return
             except httpx.HTTPError as exc:
                 logger.warning("channel_door_unreachable", extra={"error_class": type(exc).__name__})
-                yield self._error("unreachable", "The front door is unreachable, so nothing was sent. Try again shortly.")
+                yield self._error("unreachable", _LOST_MESSAGE if accepted else "The front door is unreachable, so nothing was sent. Try again shortly.")
                 return
 
     async def stream_turn(

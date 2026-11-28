@@ -22,6 +22,7 @@ from app.core import metrics
 from app.platform import redis_client
 from app.ports.outbound import jobs
 from tests.conftest import TEST_CTX, metric_value
+from tests.openapi_conformance import event_schema, load, validator
 
 
 def _assert_stamped_just_now(stamp):
@@ -150,6 +151,10 @@ class FakeRedis:
             if entries:
                 result.append((key, entries))
         return result
+
+    async def xrange(self, name, min="-", max="+", count=None):
+        """Only the whole stream from its start, the one form the reader asks for."""
+        return self.streams.get(name, [])[:count]
 
     async def xreadgroup(self, group, consumer, streams: dict, count=None, block=None):
         result = []
@@ -387,6 +392,37 @@ class TestPublishCancelRequest:
             "thread_id": "t1",
             "ctx": {"tenant": "ecorp", "principal": "p1", "claims": {}},
         }
+
+
+class TestQueuedStatus:
+    """The producer says a turn is queued (specs/025): the client can tell "no worker has this yet" from "the model is thinking"."""
+
+    @pytest.mark.parametrize("publish", ["turn", "resume"])
+    async def test_a_turn_and_a_resume_write_queued_in_the_same_transaction_as_the_job(self, publish):
+        client = FakeRedis()
+        calls = {
+            "turn": lambda: queue.publish_request(client, request_id="r1", text="hi", thread_id="t1", ctx=TEST_CTX),
+            "resume": lambda: queue.publish_resume_request(client, request_id="r1", thread_id="t1", approved=True, ctx=TEST_CTX),
+        }
+
+        await calls[publish]()
+
+        # One MULTI, the status before the job: a worker can only write after it reads the job, so nothing can precede "queued".
+        assert client.pipeline_runs == [(True, ["set", "xadd", "expire", "xadd"])]
+        ((_, fields),) = client.streams[jobs.results_stream_key("r1")]
+        event = json.loads(fields["payload"])
+        assert (event["type"], event["state"], "worker" in event) == ("status", "queued", False)
+        assert client.expiries[jobs.results_stream_key("r1")] == jobs.RESULTS_STREAM_TTL_SECONDS
+        document = load("openapi.json")
+        validator(document, event_schema(document, "/chat/stream/queued", "post")).validate(event)
+
+    async def test_a_cancel_has_no_status_it_is_answered_by_its_outcome(self):
+        client = FakeRedis()
+
+        await queue.publish_cancel_request(client, request_id="r1", thread_id="t1", ctx=TEST_CTX)
+
+        assert jobs.results_stream_key("r1") not in client.streams
+        assert len(client.streams[jobs.requests_stream_key("ecorp")]) == 1
 
 
 class TestCancelFlag:
@@ -1014,4 +1050,4 @@ class TestWhoOwnsARequestId:
 
         assert await queue.RedisTurnQueue().thread_of_request("r1") == "t-9"
         pairs = [pair async for pair in queue.RedisTurnQueue().read_results_from("r1")]
-        assert [event["type"] for _, event in pairs] == ["done"]
+        assert [event["type"] for _, event in pairs] == ["status", "done"]

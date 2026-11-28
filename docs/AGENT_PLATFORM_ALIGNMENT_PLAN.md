@@ -7,6 +7,10 @@ the same way it drives Claude Code, Codex or OpenCode.
 
 Written 2026-11-22, against `main` at `49f2d69` (API 3.4.0).
 
+**Update 2026-11-28:** being built as [specs/025](../specs/025-agent-runtime-contract/plan.md), one pull request at a time. Three things below no
+longer hold, and the spec's plan has the reasons: the spec number is 025 (024 was taken); rule 1's "each change is a minor version" is not possible
+for a new event type or error code, which oasdiff reports as breaking, so **4.0.0 declares them all at once**; and the web work is in `web/`.
+
 ---
 
 ## Contents

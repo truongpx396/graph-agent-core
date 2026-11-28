@@ -11,8 +11,8 @@ const published = (path: string, method: string): string[] =>
 
 // `Record<union, true>`: the compiler rejects a missing or extra key, so these lists cannot drift from the types.
 const CHAT: Record<ChatEvent["type"], true> = {
-  token: true, tool_start: true, tool_end: true, retry: true, compacted: true, citations: true, followups: true,
-  approval_required: true, done: true, error: true, system_note: true,
+  status: true, token: true, tool_start: true, tool_end: true, retry: true, compacted: true, citations: true, followups: true,
+  system_note: true, usage: true, approval_required: true, done: true, error: true,
 };
 const INGEST: Record<IngestEvent["type"], true> = { started: true, progress: true, done: true, error: true };
 
@@ -22,8 +22,7 @@ describe("the stream contract", () => {
     ["/chat/resume", "post"],
     ["/chat/cancel", "post"],
   ])("handles every event %s publishes", (path, method) => {
-    // system_note is sent but not published (see types.ts); nothing else may differ.
-    expect(Object.keys(CHAT).toSorted()).toEqual([...published(path, method), "system_note"].toSorted());
+    expect(Object.keys(CHAT).toSorted()).toEqual(published(path, method).toSorted());
   });
 
   it("handles every ingest event", () => {

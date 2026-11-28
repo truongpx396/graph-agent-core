@@ -102,8 +102,9 @@ async def test_a_turn_request_round_trips_from_producer_through_a_real_consumer_
 
         return [event async for event in queue.read_results(client, request_id)]
 
-    events = await _run()
+    queued, *events = await _run()
 
+    assert (queued["type"], queued["state"]) == ("status", "queued"), "written with the job, so first on a real server too"
     assert events == [{"type": "token", "content": "42"}, {"type": "done"}]
 
 
@@ -247,6 +248,18 @@ async def test_the_queue_gauges_read_a_real_servers_lag_and_pending_and_ack_and_
     assert metrics.agent_queue_lag is not None  # set without raising against the real reply shape
 
 
+async def test_a_reader_that_only_saw_queued_is_told_when_no_worker_takes_the_job_on_a_real_server():
+    """The deadline of a re-read asks the stream itself whether a worker wrote to it (`XRANGE ... COUNT 2`): the reply's real shape matters."""
+    client = queue.get_client()
+    request_id = f"queued-{uuid.uuid4().hex}"
+    await queue.publish_request(client, request_id=request_id, text="hi", thread_id="t-queued", ctx=TEST_CTX)
+    [(queued_id, _)] = await client.xrange(jobs.results_stream_key(request_id))
+
+    waiting = queue.read_results_from(client, request_id, after=queued_id, block_ms=100, first_event_deadline_seconds=0.2)
+
+    assert [event["code"] async for _, event in waiting] == ["worker_unreachable"]
+
+
 async def test_a_conversation_is_busy_exactly_while_a_worker_holds_its_real_lock_and_asking_does_not_take_it():
     """`is_thread_busy` against the lock the workers really take (`SET NX EX`, compare-and-delete on release): the delete of a conversation reads it
     (PRODUCTION_REVIEW.md R11) and must never be the one to hold or free it."""
@@ -279,7 +292,7 @@ async def test_a_dropped_reader_picks_the_turn_up_after_the_last_real_entry_id_i
     assert [event.get("content") for _, event in seen if event["type"] == "token"] == ["a", "b", "c"]
     assert all("-" in entry_id for entry_id, _ in seen), "a real server's ids, the shape the Last-Event-ID header is validated against"
 
-    later = [pair async for pair in queue.read_results_from(client, request_id, after=seen[1][0])]  # the connection dropped after "b"
+    later = [pair async for pair in queue.read_results_from(client, request_id, after=seen[2][0])]  # the connection dropped after "b"
     assert [event.get("content") for _, event in later if event["type"] == "token"] == ["c"]
     assert later[-1][1] == {"type": "done"}
 

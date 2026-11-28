@@ -86,7 +86,9 @@ export interface paths {
          * Chat Stream Queued
          * @description Same SSE event vocabulary an in-process `astream_events_turn` would
          *     produce (token, tool_start, tool_end, retry, compacted, citations,
-         *     followups, approval_required, error, done), but this process never runs the graph
+         *     followups, system_note, approval_required, error, done), after a
+         *     `status` event for `queued` (written here, with the job) and one for
+         *     `started` (the worker that took it). But this process never runs the graph
          *     itself — it publishes the turn onto a shared Redis Stream and streams
          *     back whatever a separate `agent_worker.py` process publishes to this
          *     turn's results stream (pattern 43, app/adapters/outbound/redis/queue.py).
@@ -652,7 +654,7 @@ export interface components {
          * ErrorCode
          * @enum {string}
          */
-        ErrorCode: "timeout" | "moderation_blocked" | "checkpoint_lost" | "checkpoint_incompatible" | "pending_approval" | "unattended_pause" | "cancelled" | "cost_ceiling_exceeded" | "tenant_budget_exceeded" | "personal_budget_exceeded" | "budget_check_unavailable" | "insufficient_credits" | "provider_budget_exceeded" | "model_unpriced" | "embedding_identity_mismatch" | "thread_busy" | "no_progress" | "worker_lost" | "worker_unreachable" | "unauthenticated" | "forbidden" | "rate_limited" | "auth_unavailable" | "internal";
+        ErrorCode: "timeout" | "moderation_blocked" | "checkpoint_lost" | "checkpoint_incompatible" | "pending_approval" | "approval_superseded" | "unattended_pause" | "cancelled" | "cost_ceiling_exceeded" | "tenant_budget_exceeded" | "personal_budget_exceeded" | "budget_check_unavailable" | "insufficient_credits" | "provider_budget_exceeded" | "model_unpriced" | "embedding_identity_mismatch" | "thread_busy" | "no_progress" | "worker_lost" | "worker_unreachable" | "unauthenticated" | "forbidden" | "rate_limited" | "auth_unavailable" | "internal";
         /**
          * ErrorEvent
          * @description Terminal. `code`, `message` and `details` are the canonical error envelope (app/core/errors.py): switch on `code`. Every error the API and the
@@ -951,6 +953,46 @@ export interface components {
             last_active_at: string;
         };
         /**
+         * StatusEvent
+         * @description Not terminal. Where a turn's job is: `queued` the moment it is accepted, `started` when a worker takes it, before anything runs. A turn and a
+         *     resume have both, `started` again if a crashed worker's job is run again; a cancel has neither. A turn without `started` is waiting for a worker.
+         */
+        StatusEvent: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "status";
+            /**
+             * State
+             * @description `queued` or `started`. Ignore a value you do not know.
+             */
+            state: string;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /**
+             * Worker
+             * @description On `started`: an opaque label of the worker that took the job.
+             */
+            worker?: string | null;
+        };
+        /**
+         * SystemNoteEvent
+         * @description Not terminal. Something about the conversation rather than this answer: for example, an earlier approval pause that an app update made unresumable.
+         */
+        SystemNoteEvent: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "system_note";
+            /** Content */
+            content: string;
+        };
+        /**
          * TokenEvent
          * @description A piece of the answer. A `retry` event discards every token before it.
          */
@@ -1002,6 +1044,38 @@ export interface components {
              * @description Set when the call happened inside a subagent's nested run.
              */
             subagent?: string | null;
+        };
+        /**
+         * UsageEvent
+         * @description Just before `done`: what this turn's model calls used, subagents' included. Declared in 4.0.0 and not sent yet. Null means unknown, never zero.
+         */
+        UsageEvent: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "usage";
+            /**
+             * Model
+             * @description The model that wrote the answer.
+             */
+            model: string | null;
+            /**
+             * Route
+             * @description The tier that served it. Ignore a value you do not know.
+             */
+            route: string | null;
+            /** Input Tokens */
+            input_tokens: number | null;
+            /** Output Tokens */
+            output_tokens: number | null;
+            /**
+             * Cost Usd
+             * @description Null when any of the turn's calls has no known price.
+             */
+            cost_usd: number | null;
+            /** Model Calls */
+            model_calls: number;
         };
         /**
          * UsageResponse

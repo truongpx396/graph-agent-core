@@ -1,25 +1,5 @@
-GET /chat/sessions the endpoint no longer allows anonymous access and now only accepts `bearerAuth` [api-security-anonymous-access-removed]. This endpoint inherits the API's top-level security requirements.
-GET /chat/sessions/{thread_id}/messages the endpoint no longer allows anonymous access and now only accepts `bearerAuth` [api-security-anonymous-access-removed]. This endpoint inherits the API's top-level security requirements.
-GET /chat/sessions/{thread_id}/pending_approval the endpoint no longer allows anonymous access and now only accepts `bearerAuth` [api-security-anonymous-access-removed]. This endpoint inherits the API's top-level security requirements.
-GET /ingest/stream/{job_id} removed the media type `application/json` for the response with the status `200`
-GET /ingest/stream/{job_id} the endpoint no longer allows anonymous access and now only accepts `bearerAuth` [api-security-anonymous-access-removed]. This endpoint inherits the API's top-level security requirements.
-GET /metrics removed the media type `application/json` for the response with the status `200`
-GET /usage the endpoint no longer allows anonymous access and now only accepts `bearerAuth` [api-security-anonymous-access-removed]. This endpoint inherits the API's top-level security requirements.
-POST /chat/cancel removed the media type `application/json` for the response with the status `200`
-POST /chat/cancel the endpoint no longer allows anonymous access and now only accepts `bearerAuth` [api-security-anonymous-access-removed]. This endpoint inherits the API's top-level security requirements.
-POST /chat/resume removed the media type `application/json` for the response with the status `200`
-POST /chat/resume the endpoint no longer allows anonymous access and now only accepts `bearerAuth` [api-security-anonymous-access-removed]. This endpoint inherits the API's top-level security requirements.
-POST /chat/stream/queued removed the media type `application/json` for the response with the status `200`
-POST /chat/stream/queued the endpoint no longer allows anonymous access and now only accepts `bearerAuth` [api-security-anonymous-access-removed]. This endpoint inherits the API's top-level security requirements.
-POST /ingest/upload the endpoint no longer allows anonymous access and now only accepts `bearerAuth` [api-security-anonymous-access-removed]. This endpoint inherits the API's top-level security requirements.
-POST /v1/decide added required request body
-POST /v1/embeddings added required request body
-POST /chat/cancel the `thread_id` request property's maxLength was set to `200`
-POST /chat/cancel the `thread_id` request property's minLength was set to `1`
-POST /chat/resume the `thread_id` request property's maxLength was set to `200`
-POST /chat/resume the `thread_id` request property's minLength was set to `1`
-POST /chat/stream/queued the `images` request property's maxItems was set to `4`
-POST /chat/stream/queued the `images/items/` request property's maxLength was set to `7000000`
-POST /chat/stream/queued the `message` request property's maxLength was set to `32000`
-POST /chat/stream/queued the `thread_id` request property's maxLength was set to `200`
-POST /chat/stream/queued the `thread_id` request property's minLength was set to `1`
+POST /chat/cancel added `#/components/schemas/StatusEvent, #/components/schemas/SystemNoteEvent, #/components/schemas/UsageEvent` to the `data/contentSchema/` response property `oneOf` list for the response status `200` (item schema)
+POST /chat/resume added `#/components/schemas/StatusEvent, #/components/schemas/SystemNoteEvent, #/components/schemas/UsageEvent` to the `data/contentSchema/` response property `oneOf` list for the response status `200` (item schema)
+POST /chat/stream/queued added `#/components/schemas/StatusEvent, #/components/schemas/SystemNoteEvent, #/components/schemas/UsageEvent` to the `data/contentSchema/` response property `oneOf` list for the response status `200` (item schema)
+GET /chat/stream/{request_id} added `#/components/schemas/StatusEvent, #/components/schemas/SystemNoteEvent, #/components/schemas/UsageEvent` to the `data/contentSchema/` response property `oneOf` list for the response status `200` (item schema)
+DELETE /chat/sessions/{thread_id} added the new `approval_superseded` enum value to the `code` response property for the response status `409`
