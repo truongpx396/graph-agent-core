@@ -18,19 +18,22 @@ Constitution Principles I–IV apply. Use `app/domains/support/tools.py::create_
    add the tool to its `TOOLS` list, and — in a domain — to its `*_POLICY`
    `ActionAllowlistPolicy` set. The domain manifest's `allowed_tools` is derived from `TOOLS`.
    An undeclared tool is treated as `outward`; don't lean on that default.
-2. Pydantic `args_schema` with bounds, closed `Enum`s, and a `_not_blank` validator. Put
+2. Give it a `ToolDisplay` in the domain's `display.py`: a `label`, and for `mutating`/`outward` a `describe(args)` saying in words what
+   it would do, where, who sees it, and `reversible=True` only if it changes nothing or can be undone in this app. The approval card is
+   built from this (pattern 119); `tests/agent/tools/test_display.py` fails without it. `describe` runs on unvalidated arguments.
+3. Pydantic `args_schema` with bounds, closed `Enum`s, and a `_not_blank` validator. Put
    `tool_call_id: Annotated[str, InjectedToolCallId]` in BOTH the schema and the signature.
-3. Body shape, in this order (`ctx_or_refuse`, `NO_CTX_REFUSAL` and `arun_with_timeout` are `app/core/tool_runtime.py`, `idempotent` is
+4. Body shape, in this order (`ctx_or_refuse`, `NO_CTX_REFUSAL` and `arun_with_timeout` are `app/core/tool_runtime.py`, `idempotent` is
    `app/core/tool_idempotency.py`): `ctx_or_refuse(config, "<tool>")` → return `NO_CTX_REFUSAL` if
    `None` → `await idempotent(tool_call_id=..., ctx=..., config=..., tool_name=..., fn=lambda:
    arun_with_timeout(_impl, ...))`. Put the real work in `_<tool>_impl`.
-4. Take `tenant`/`principal` from `ctx`, never from an argument the model can set.
-5. Never catch the `TimeoutError` from `arun_with_timeout` and retry in the tool body.
+5. Take `tenant`/`principal` from `ctx`, never from an argument the model can set.
+6. Never catch the `TimeoutError` from `arun_with_timeout` and retry in the tool body.
    `idempotent()` turns it into `MutatingToolTimedOutError`; a retry there mints a new
    `tool_call_id` that dedup cannot see. Don't add a generic retry around a write.
-6. A cron or other unattended job calls the `_impl`/store function directly; it never invokes the
+7. A cron or other unattended job calls the `_impl`/store function directly; it never invokes the
    tool through the agent loop (the approval gate has no unattended bypass, by design).
-7. A best-effort pivot send backing an already-committed write (`app/adapters/outbound/notify/team_channel.py`) never
+8. A best-effort pivot send backing an already-committed write (`app/adapters/outbound/notify/team_channel.py`) never
    raises, but MUST emit a metric and have an alert (see `runtime-reliability.md`).
 
 ## Store layer (`store.py`, `platform/sql_store.py`)

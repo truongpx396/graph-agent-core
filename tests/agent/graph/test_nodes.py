@@ -149,7 +149,8 @@ class TestSuggestFollowups:
 
         result = await suggest_followups(self._state())
 
-        assert result == {"followups": ["What is a MemorySaver?", "How do I resume a run?"]}
+        assert result["followups"] == ["What is a MemorySaver?", "How do I resume a run?"]
+        assert [entry["kind"] for entry in result["turn_usage"]] == ["followups"]  # its call is part of the turn's usage
 
     async def test_no_citations_means_no_followups_and_no_llm_call(self):
         def fail_llm(*a, **kw):

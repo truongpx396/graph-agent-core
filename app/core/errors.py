@@ -30,7 +30,7 @@ class ErrorCode(str, Enum):
     CHECKPOINT_LOST = "checkpoint_lost"
     CHECKPOINT_INCOMPATIBLE = "checkpoint_incompatible"
     PENDING_APPROVAL = "pending_approval"
-    APPROVAL_SUPERSEDED = "approval_superseded"  # a resume answered a pause that has since been replaced (specs/025); declared in 4.0.0, not sent yet
+    APPROVAL_SUPERSEDED = "approval_superseded"  # a resume answered a pause that has since been replaced (specs/025)
     UNATTENDED_PAUSE = "unattended_pause"
     CANCELLED = "cancelled"
     COST_CEILING_EXCEEDED = "cost_ceiling_exceeded"
@@ -52,6 +52,55 @@ class ErrorCode(str, Enum):
     RATE_LIMITED = "rate_limited"
     AUTH_UNAVAILABLE = "auth_unavailable"
     INTERNAL = "internal"
+
+
+class ErrorKind(str, Enum):
+    """What a client should make of an error, sent as `details.kind` (specs/025), so none of them has to know every code."""
+
+    BLOCKED = "blocked"  # a rule said no: policy, a limit, credit, a busy conversation. Shown neutrally, with who can change it
+    FAILED = "failed"  # something went wrong
+    LOST = "lost"  # what was being waited for or answered is gone: saved progress, a worker, a pause
+
+
+# `cancelled` has none: it is none of the three, the person asked for it. Nor have the front door's codes (`unauthenticated`, `forbidden`,
+# `rate_limited`, `auth_unavailable`): the door answers them too, the API must answer exactly as it does, and they arrive as an HTTP status.
+ERROR_KINDS: dict[ErrorCode, ErrorKind] = {
+    **dict.fromkeys(
+        (
+            ErrorCode.MODERATION_BLOCKED,
+            ErrorCode.PENDING_APPROVAL,
+            ErrorCode.UNATTENDED_PAUSE,
+            ErrorCode.COST_CEILING_EXCEEDED,
+            ErrorCode.TENANT_BUDGET_EXCEEDED,
+            ErrorCode.PERSONAL_BUDGET_EXCEEDED,
+            ErrorCode.INSUFFICIENT_CREDITS,
+            ErrorCode.PROVIDER_BUDGET_EXCEEDED,
+            ErrorCode.MODEL_UNPRICED,
+            ErrorCode.THREAD_BUSY,
+        ),
+        ErrorKind.BLOCKED,
+    ),
+    **dict.fromkeys(
+        (
+            ErrorCode.TIMEOUT,
+            ErrorCode.BUDGET_CHECK_UNAVAILABLE,  # refused, but because a dependency failed: nobody's limit was reached
+            ErrorCode.EMBEDDING_IDENTITY_MISMATCH,
+            ErrorCode.NO_PROGRESS,
+            ErrorCode.INTERNAL,
+        ),
+        ErrorKind.FAILED,
+    ),
+    **dict.fromkeys(
+        (
+            ErrorCode.CHECKPOINT_LOST,
+            ErrorCode.CHECKPOINT_INCOMPATIBLE,
+            ErrorCode.APPROVAL_SUPERSEDED,
+            ErrorCode.WORKER_LOST,
+            ErrorCode.WORKER_UNREACHABLE,
+        ),
+        ErrorKind.LOST,
+    ),
+}
 
 
 class TurnCancelledError(Exception):
@@ -105,9 +154,12 @@ class ErrorEnvelope:
     def to_dict(self) -> dict[str, Any]:
         """JSON-safe: `code` (an Enum member) becomes its plain string
         value, so this can be dropped straight into an SSE `data: ...`
-        payload or a Pydantic response field without a custom encoder."""
+        payload or a Pydantic response field without a custom encoder.
+        `details.kind` is added here, the one place every envelope passes."""
         d = asdict(self)
         d["code"] = self.code.value
+        if kind := ERROR_KINDS.get(self.code):
+            d["details"] = {**(d["details"] or {}), "kind": kind.value}
         return d
 
 

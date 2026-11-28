@@ -20,12 +20,14 @@ from app.agent.tools.builtin import (
     search_docs,
     skill_tools_first,
 )
+from app.agent.tools.display import SHARED_TOOL_DISPLAY
 from app.agent.tools.prompt_files import load_prompt
 from app.agent.tools.run_subagent_domain import make_domain_subagent_tool
 from app.core.security import DEFAULT_POLICY, Policy
+from app.domains.ecorp.display import TOOL_DISPLAY as _ECORP_TOOL_DISPLAY
 from app.domains.ecorp.tools import TOOL_CAPABILITIES as _ECORP_TOOL_CAPABILITIES
 from app.domains.ecorp.tools import TOOLS as _ECORP_TOOLS
-from app.ports.outbound.domains import AgentManifest, DomainPlugin
+from app.ports.outbound.domains import AgentManifest, DomainPlugin, ToolDisplay
 
 # Gotchas of prompt.md, found via live testing with qwen2.5:3b (not just
 # inspection) — don't reintroduce these:
@@ -66,11 +68,13 @@ _REUSED_TOOLS = [_SKILL_SEARCH, _USE_SKILL, ask_clarification]
 _ACTION_TOOLS = [_SEARCH_DOCS, calculator, *_ECORP_TOOLS]
 
 _CAPABILITIES: dict[str, str] = {**SHARED_TOOL_CAPABILITIES, **_ECORP_TOOL_CAPABILITIES}
+_DISPLAY: dict[str, ToolDisplay] = {**SHARED_TOOL_DISPLAY, **_ECORP_TOOL_DISPLAY}
 
 _RUN_SUBAGENT = make_domain_subagent_tool(
     domain="ecorp",
     all_tools=[*_ACTION_TOOLS, *_REUSED_TOOLS],
     tool_capabilities=_CAPABILITIES,
+    tool_display=_DISPLAY,
 )
 # None unless Ecorp's subagents/ folder holds an AGENT.md — see
 # make_domain_subagent_tool for why an empty menu means "don't expose the tool at all".
@@ -86,6 +90,9 @@ class _EcorpDomainPlugin:
         if _RUN_SUBAGENT is None:
             capabilities.pop("run_subagent", None)
         return capabilities
+
+    def tool_display(self) -> dict[str, ToolDisplay]:
+        return dict(_DISPLAY)
 
     def policy(self) -> Policy:
         return DEFAULT_POLICY

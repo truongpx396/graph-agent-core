@@ -54,15 +54,15 @@ class StatusEvent(BaseModel):
 
 
 class UsageEvent(BaseModel):
-    """Just before `done`: what this turn's model calls used, subagents' included. Declared in 4.0.0 and not sent yet. Null means unknown, never zero."""
+    """Just before `done`: what this turn's model calls used, over any approval pause, subagents' included. Null means unknown, never zero."""
 
     type: Literal["usage"]
-    model: str | None = Field(description="The model that wrote the answer.")
+    model: str | None = Field(description="The model that wrote the answer. Null when no model did (a cached answer, a refused message).")
     route: str | None = Field(description="The tier that served it. Ignore a value you do not know.", json_schema_extra={"x-extensible-enum": ["local", "medium", "strong"]})
-    input_tokens: int | None
+    input_tokens: int | None = Field(description="Of every call. Null when any call's tokens are unknown.")
     output_tokens: int | None
-    cost_usd: float | None = Field(description="Null when any of the turn's calls has no known price.")
-    model_calls: int
+    cost_usd: float | None = Field(description="Of every call. Null when any call has no known price or reported no usage.")
+    model_calls: int = Field(description="Calls counted. A delegated run that failed is not counted, and makes the other totals null.")
 
 
 class SystemNoteEvent(BaseModel):
@@ -79,17 +79,48 @@ class TokenEvent(BaseModel):
     content: str
 
 
+# How much a call can do, as its domain declares it. Anything not read_only is approved by a person first (constitution Principle II).
+Tier = Literal["read_only", "mutating", "outward"]
+
+
 class ToolStartEvent(BaseModel):
+    """A tool call is starting. `label` and `tier` are the server's: a client shows them and derives nothing from `tool` or `args`."""
+
     type: Literal["tool_start"]
     tool: str
     args: dict[str, Any]
     subagent: str | None = Field(default=None, description="Set when the call happened inside a subagent's nested run.")
+    call_id: str | None = Field(default=None, description="Pairs this with its `tool_end`, also between parallel calls of one tool.")
+    label: str | None = Field(default=None, description='What the tool does, for a person: "Create a support ticket".')
+    tier: Tier | None = None
+    at: datetime | None = None
 
 
 class ToolEndEvent(BaseModel):
     type: Literal["tool_end"]
     tool: str
     subagent: str | None = None
+    call_id: str | None = None
+    outcome: str | None = Field(
+        default=None,
+        description="`ok`, `error` (it failed) or `refused` (it said no). A turn that recovers from either still ends normally.",
+        json_schema_extra={"x-extensible-enum": ["ok", "error", "refused"]},
+    )
+    kind: str | None = Field(default=None, description="On `refused`: `blocked`, as an error's `details.kind`.")
+    duration_ms: int | None = None
+    summary: str | None = Field(default=None, description='One line about the result ("6 results"), when the tool has one to give.')
+
+
+class ApprovalItem(BaseModel):
+    """What one pending call would do, in words."""
+
+    call_id: str
+    tier: Tier
+    title: str
+    effect: str
+    target: str | None = None
+    visible_to: str | None = None
+    reversible: bool = Field(description="False unless the call changes nothing or can be taken back.")
 
 
 class RetryEvent(BaseModel):
@@ -120,10 +151,12 @@ class FollowupsEvent(BaseModel):
 
 
 class ApprovalRequiredEvent(BaseModel):
-    """Terminal for this request: the turn is paused until `POST /chat/resume` approves or rejects the calls."""
+    """Terminal for this request: the turn is paused until `POST /chat/resume` approves or rejects the calls, all of them together."""
 
     type: Literal["approval_required"]
     tool_calls: list[ToolCall]
+    approval_id: str | None = Field(default=None, description="The identity of this pause. Send it with the answer.")
+    items: list[ApprovalItem] = Field(default_factory=list, description="One per tool call, in the same order.")
 
 
 class DoneEvent(BaseModel):
@@ -133,7 +166,8 @@ class DoneEvent(BaseModel):
 
 
 class ErrorEvent(BaseModel):
-    """Terminal. `code`, `message` and `details` are the canonical error envelope (app/core/errors.py): switch on `code`. Every error the API and the
+    """Terminal. `code`, `message` and `details` are the canonical error envelope (app/core/errors.py): switch on `code`, or on `details.kind`
+    (`blocked`: a rule said no; `failed`: something went wrong; `lost`: what was waited for or answered is gone; a cancel has none). Every error the API and the
     workers send carries it (a queued job nobody took is `worker_unreachable`, a resume with nothing to resume is `checkpoint_lost` or
     `checkpoint_incompatible`); the fields stay optional in the schema so a client written before that still validates."""
 

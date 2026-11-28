@@ -21,9 +21,23 @@
 - **Deadline** (`queue.py::read_results_from`): ends at the first event that is not `queued`. A reader resuming from a position asks the stream whether a worker ever wrote to it: before this change no position existed until a worker had written one.
 - **Channels**: all three ignore a type they do not know. The door now says the connection was lost, not that nothing was sent, once the API has answered with an event.
 
+## The rest of phase 1
+
+| Decision | Why |
+|---|---|
+| Tool events are announced by the `tools` node (`graph/tool_node.py`), not read from `astream_events` | Its tool callbacks carry no call id, and a raising tool ends no event |
+| `ToolDisplay` in a `display.py` per domain, on the `DomainPlugin` port | Beside the tools, which are already large files; the plan's `(tier, label)` tuple would have changed every reader of the capabilities |
+| `approval_id` is a digest of the pending calls, not a random id | The pausing node runs again on resume |
+| A resume with no id answers the pause the worker first found for that job | A reclaimed resume could otherwise approve a later pause (Principle II) |
+| `usage` is summed from a new `State.turn_usage` | It must span a pause; the running totals cannot say "unknown". No `STATE_SCHEMA_VERSION` bump: an old checkpoint resumes with an empty list |
+| `details.kind` is added in `ErrorEnvelope.to_dict` | One place. Not on `cancelled`, nor on the four codes the front door also answers |
+| A stop holds the time it was pressed; the worker compares it with the job's `enqueued_at` | Both are the API's clock, and the order survives a reclaimed job |
+
+Reversibility is reported as `false` for every write: this app has no tool that undoes one.
+
 ## Later steps
 
-As the source plan's section 8, with these differences: every PR after step 1 is a minor version; the web phases target `web/` (a `web/DESIGN.md` and a vitest guard replace the `static/` ones, and the ES-module split no longer applies).
+As the source plan's section 8, with these differences: every PR after step 1 is a minor version (phase 1 ends at 4.1.0); the web phases target `web/` (a `web/DESIGN.md` and a vitest guard replace the `static/` ones, and the ES-module split no longer applies).
 
 ## Constitution Check
 

@@ -17,6 +17,7 @@ actually round-trip against a real server, not just this app's own
 in-memory model of them.
 """
 import json
+import time
 import uuid
 
 import pytest
@@ -258,6 +259,32 @@ async def test_a_reader_that_only_saw_queued_is_told_when_no_worker_takes_the_jo
     waiting = queue.read_results_from(client, request_id, after=queued_id, block_ms=100, first_event_deadline_seconds=0.2)
 
     assert [event["code"] async for _, event in waiting] == ["worker_unreachable"]
+
+
+async def test_the_stop_script_keeps_a_stop_sent_after_the_job_was_queued_and_removes_an_older_one_on_a_real_server():
+    """The compare-and-delete is a Lua script (specs/025): its number parsing, its missing-key case and its reply need a real server."""
+    client = queue.get_client()
+    thread = f"stop-{uuid.uuid4().hex}"
+
+    assert await streams.take_cancel_flag(client, thread, time.time()) is False, "no flag at all"
+    queued = time.time()
+    await queue.set_cancel_flag(client, thread)
+    assert 0 < await client.ttl(jobs.cancel_flag_key(thread)) <= jobs.CANCEL_FLAG_TTL_SECONDS
+    assert await streams.take_cancel_flag(client, thread, queued) is True
+    assert await streams.is_cancelled(client, thread) is True, "kept, for the run's own checks"
+
+    assert await streams.take_cancel_flag(client, thread, time.time() + 1) is False, "older than this job"
+    assert await streams.is_cancelled(client, thread) is False
+
+
+async def test_a_resume_jobs_first_pause_is_the_one_remembered_on_a_real_server():
+    client = queue.get_client()
+    request_id = f"resume-{uuid.uuid4().hex}"
+
+    assert await streams.remember_answered_pause(client, request_id, None) is None
+    assert await streams.remember_answered_pause(client, request_id, "apr_first") == "apr_first"
+    assert await streams.remember_answered_pause(client, request_id, "apr_later") == "apr_first"
+    assert await streams.remember_answered_pause(client, request_id, None) == "apr_first"
 
 
 async def test_a_conversation_is_busy_exactly_while_a_worker_holds_its_real_lock_and_asking_does_not_take_it():

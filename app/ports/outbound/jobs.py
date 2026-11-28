@@ -15,6 +15,9 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from app.core.config import (
+    REQUESTS_STREAM_MAX_AGE_SECONDS,
+)
+from app.core.config import (
     THREAD_LOCK_TTL_SECONDS as THREAD_LOCK_TTL_SECONDS,  # re-exported: the API and the workers read the names they share from here
 )
 from app.core.security import SecurityCtx
@@ -24,7 +27,9 @@ CONSUMER_GROUP = "agent-workers"
 # The last event type a turn ever publishes: the reader stops at one, and the worker releases the thread lock the moment it publishes one.
 TERMINAL_EVENT_TYPES = frozenset({"done", "error", "approval_required"})
 RESULTS_STREAM_TTL_SECONDS = 300  # an abandoned results stream, chat or ingest, expires after 5 minutes
-CANCEL_FLAG_TTL_SECONDS = 60  # outlasts the gap between a worker's cancel checks; short, so a flag nobody consumed cannot cancel a later turn
+# The stop flag holds WHEN the person pressed stop, and lives as long as a job can wait in the queue: the worker that takes a job honours a stop sent after the
+# job was queued and removes an older one, so a flag nobody consumed cannot cancel a later turn. It used to live 60 s and to be removed unread.
+CANCEL_FLAG_TTL_SECONDS = REQUESTS_STREAM_MAX_AGE_SECONDS
 # THREAD_LOCK_TTL_SECONDS (imported above, defined in app/core/config.py beside the validator that needs it): how long a conversation's lock lives
 # without being renewed. The worker renews it while the job runs, so it only bounds how long a CRASHED worker's lock keeps the conversation busy.
 
@@ -104,9 +109,11 @@ class TurnQueue(Protocol):
         with a "queued" status, written together with the job."""
         ...
 
-    async def publish_resume_request(self, *, request_id: str, thread_id: str, approved: bool, ctx: SecurityCtx, domain: str = "ecorp") -> None:
-        """Enqueues the approve-or-reject decision for a turn paused at human approval. `domain` must be the original turn's. Says "queued" as a
-        turn does; a cancel does not, being answered by its outcome."""
+    async def publish_resume_request(
+        self, *, request_id: str, thread_id: str, approved: bool, ctx: SecurityCtx, domain: str = "ecorp", approval_id: str | None = None
+    ) -> None:
+        """Enqueues the approve-or-reject decision for a turn paused at human approval. `domain` must be the original turn's. `approval_id` names the
+        pause being answered, when the client says. Says "queued" as a turn does; a cancel does not, being answered by its outcome."""
         ...
 
     async def publish_cancel_request(self, *, request_id: str, thread_id: str, ctx: SecurityCtx, domain: str = "ecorp") -> None:
@@ -114,7 +121,7 @@ class TurnQueue(Protocol):
         ...
 
     async def set_cancel_flag(self, thread_id: str) -> None:
-        """Flags the turn streaming on `thread_id` to stop at its next check. Short-lived."""
+        """Records that the person pressed stop on `thread_id`, now: a running turn stops at its next check, and a job queued before this is not run."""
         ...
 
     async def is_thread_busy(self, thread_id: str) -> bool:

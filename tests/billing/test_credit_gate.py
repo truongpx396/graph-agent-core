@@ -214,7 +214,7 @@ class TestTheRefusal:
 
         assert envelope.code == errors.ErrorCode.INSUFFICIENT_CREDITS
         assert envelope.code.value == "insufficient_credits"
-        assert envelope.to_dict()["details"] == {"scope": "tenant"}
+        assert envelope.to_dict()["details"] == {"scope": "tenant", "kind": "blocked"}
 
     def test_it_does_not_echo_a_balance(self):
         """The balance is GET /usage's to report; an error that echoed it would put it in every log that keeps error text."""

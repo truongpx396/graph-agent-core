@@ -492,13 +492,13 @@ sequenceDiagram
     G->>G: agent proposes a mutating or outward call
     G->>G: graph_edge_route_after_agent sends any non-read_only call to human_approval
     G->>K: interrupt() saves the paused state
-    G-->>W: approval_required with the tool and its arguments
+    G-->>W: approval_required with the calls, what each would do, and the pause's approval_id
     W->>R: release the lock, publish approval_required (terminal), XACK and XDEL
     R-->>A: event
     A-->>C: SSE approval_required, the stream ends
 
     Note over C,T: Phase 2, a person decides, at any time
-    C->>A: POST /chat/resume {thread_id, approved}
+    C->>A: POST /chat/resume {thread_id, approved, approval_id}
     A->>A: ownership check, anyone else's thread is a 404
     A->>R: XADD a resume job on the same domain's stream, with its queued status
     A-->>C: a new SSE stream for the resume job
@@ -506,6 +506,7 @@ sequenceDiagram
     W->>R: acquire the thread lock, publish status started
     W->>W: tenant allowance re-checked, new budget hold
     W->>G: resumability check: paused for real, schema version matches
+    W->>G: the pause waiting is the one answered, else approval_superseded and nothing runs
     alt approved
         W->>G: Command(resume=True)
         G->>T: run the call, wrapped in idempotent() (diagram 11)
@@ -525,6 +526,7 @@ sequenceDiagram
     end
 ```
 
+- **A decision answers one pause** (pattern 119): the client's `approval_id`, or the pause the worker first found for this job, so a job run again after a crash cannot approve a later one.
 - **A new message on a paused thread is refused** with `PENDING_APPROVAL`; it is never auto-cancelled, because the pending call is by construction a write the person may not know about (`app/agent/runtime/stream.py::astream_events_turn`).
 - **Cancel is a third outcome, not a rejection.** A rejection hands the model a message to react to; a cancel ends the run (pattern 36). It is never gated by the budget, so an over-budget tenant can always clear a paused thread.
 - **Unattended callers** (Telegram with approvals off, queue jobs) decline up to a bounded number of pauses, then cancel; nothing ever approves on their behalf (pattern 8). With Telegram buttons only the tap of the person the buttons were shown to approves, once, in time (pattern 92).

@@ -168,8 +168,12 @@ class Door:
         async for event in self._stream("/chat/stream/queued", body):
             yield event
 
-    async def stream_resume(self, thread_id: str, *, approved: bool) -> AsyncGenerator[dict[str, Any], None]:
-        async for event in self._stream("/chat/resume", {"thread_id": thread_id, "approved": approved}):
+    async def stream_resume(self, thread_id: str, *, approved: bool, approval_id: str | None = None) -> AsyncGenerator[dict[str, Any], None]:
+        """`approval_id` is the one the person was shown: if another pause is waiting by now, nothing runs."""
+        body: dict[str, Any] = {"thread_id": thread_id, "approved": approved}
+        if approval_id is not None:
+            body["approval_id"] = approval_id
+        async for event in self._stream("/chat/resume", body):
             yield event
 
     async def cancel_turn(self, thread_id: str, *, wait: bool = False) -> None:

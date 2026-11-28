@@ -15,6 +15,7 @@ from typing import Any, cast
 import redis.asyncio as redis
 
 from app.core import metrics
+from app.core.config import REQUESTS_STREAM_MAX_AGE_SECONDS
 from app.ports.outbound.jobs import (
     CONSUMER_GROUP,
     RESULTS_STREAM_TTL_SECONDS,
@@ -53,11 +54,30 @@ async def is_cancelled(client: redis.Redis, thread_id: str) -> bool:
 
 
 async def clear_cancel_flag(client: redis.Redis, thread_id: str) -> None:
-    """Called right before a worker starts a NEW `"turn"` job for a
-    thread_id — clears any stale flag left from a PRIOR turn (e.g.
-    /chat/cancel raced with that turn finishing on its own) so it can't
-    spuriously cancel this new one."""
     await client.delete(cancel_flag_key(thread_id))
+
+
+# Compare and delete in one step: a stop sent between a read and a delete would be erased. `tonumber` of a missing key is nil.
+_TAKE_CANCEL_FLAG_SCRIPT = """
+local stopped_at = tonumber(redis.call("get", KEYS[1]))
+if stopped_at and stopped_at >= tonumber(ARGV[1]) then
+    return 1
+end
+redis.call("del", KEYS[1])
+return 0
+"""
+
+
+async def take_cancel_flag(client: redis.Redis, thread_id: str, queued_at: float | None) -> bool:
+    """What a worker does with a conversation's stop flag as it takes a job queued at `queued_at`. True: the person pressed stop after that, so the stop is
+    for this job, and the flag stays. False: there is none, or it is older (a stop for an earlier turn that had ended anyway), and it is removed so it
+    cannot stop this one. A job with no stamp (an older API) has every flag treated as old.
+
+    Clearing every flag here, as before, dropped a stop pressed while the turn was still waiting for a worker, and the turn then ran (specs/025)."""
+    if queued_at is None:
+        await clear_cancel_flag(client, thread_id)
+        return False
+    return bool(await client.eval(_TAKE_CANCEL_FLAG_SCRIPT, 1, cancel_flag_key(thread_id), queued_at))
 
 
 # Compare-and-delete, not a bare DEL: a bare delete on the RELEASE side
@@ -109,6 +129,20 @@ async def release_thread_lock(client: redis.Redis, thread_id: str, token: str) -
     a later job already acquired it; this caller no longer holds anything
     worth releasing."""
     await client.eval(_RELEASE_LOCK_SCRIPT, 1, thread_lock_key(thread_id), token)
+
+
+def _answered_pause_key(request_id: str) -> str:
+    return f"agent:answered_pause:{request_id}"
+
+
+async def remember_answered_pause(client: redis.Redis, request_id: str, approval_id: str | None) -> str | None:
+    """Records, once, which pause a resume job found waiting, and returns the recorded one: the first run's, however often the job is run again. None
+    when there was no pause to record (nothing to protect: the resume is then refused as having nothing to resume)."""
+    key = _answered_pause_key(request_id)
+    if approval_id is not None:
+        await client.set(key, approval_id, nx=True, ex=REQUESTS_STREAM_MAX_AGE_SECONDS)
+    recorded = await client.get(key)
+    return None if recorded is None else str(recorded)
 
 
 async def publish_result(client: redis.Redis, request_id: str, event: dict[str, Any]) -> None:

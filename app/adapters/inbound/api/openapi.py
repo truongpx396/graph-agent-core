@@ -14,7 +14,7 @@ API_TITLE = "Graph Agent Core API"
 # The CONTRACT's version, not a release number: nothing else in the repository is versioned. Raise it with every change to the contract
 # (`make openapi-version` fails one that did not) and its major with a break (`make openapi-breaking` fails a break that did not); which
 # step is the author's call. CI's `openapi` job runs both on every pull request.
-API_VERSION = "4.0.0"
+API_VERSION = "4.1.0"
 # 2.0.0: the document was corrected (it said the four streaming routes returned application/json).
 # 2.1.0: the transcript can be read a page at a time (`limit`, `before`, and an `index` on each message).
 # 3.0.0: a chat request is bounded: `message` (32,000 characters), `thread_id` (1 to 200, on chat, resume and cancel), `images` (4, each 7,000,000 characters).
@@ -25,6 +25,8 @@ API_VERSION = "4.0.0"
 # 3.5.0: a citation can say where to read its original document (`source_url`, optional).
 # 4.0.0: three event types join the chat stream (`status`; `system_note`, sent before but never listed; `usage`, listed and not sent yet) and an error code,
 #        `approval_superseded` (not sent yet). Each is a break to a client that rejects an unknown value, so all are declared at once (specs/025).
+# 4.1.0: tool events carry `call_id`, `label`, `tier`, `at`, `outcome`, `kind`, `duration_ms`, `summary`; an approval carries `approval_id` and `items`
+#        (also on `pending_approval`), and a resume may name the `approval_id` it answers. `usage` is sent, and envelopes carry `details.kind`.
 
 API_DESCRIPTION = """\
 A multi-tenant, multi-domain LangGraph RAG agent. A client starts a turn, reads its events as they stream, answers an approval the

@@ -77,7 +77,7 @@ async def test_a_session_with_a_turn_running_is_a_409_with_the_thread_busy_envel
 
     assert response.status_code == 409
     body = response.json()
-    assert body["code"] == "thread_busy" and body["message"] and body["details"] is None
+    assert body["code"] == "thread_busy" and body["message"] and body["details"] == {"kind": "blocked"}
     assert "mine" in store.rows and saver.deleted == []
 
 

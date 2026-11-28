@@ -77,6 +77,9 @@ class Domain:
     def tool_capabilities(self):
         return dict(self._capabilities)
 
+    def tool_display(self):
+        return {}
+
     def policy(self):
         return None
 

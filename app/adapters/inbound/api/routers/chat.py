@@ -164,7 +164,7 @@ async def chat_stream_queued(
 ) -> StreamingResponse:
     """Same SSE event vocabulary an in-process `astream_events_turn` would
     produce (token, tool_start, tool_end, retry, compacted, citations,
-    followups, system_note, approval_required, error, done), after a
+    followups, usage, system_note, approval_required, error, done), after a
     `status` event for `queued` (written here, with the job) and one for
     `started` (the worker that took it). But this process never runs the graph
     itself — it publishes the turn onto a shared Redis Stream and streams
@@ -276,6 +276,9 @@ async def chat_resume(
     must match the original turn's (the caller is expected to keep sending
     the same `X-Domain` for a given thread_id).
 
+    `approval_id` names the pause being answered (`approval_required`'s, or `pending_approval`'s). If another pause is waiting by the time a worker
+    takes the job, nothing runs and the stream says `approval_superseded`.
+
     `ctx` is re-supplied here, not reused from the original pause — see
     `astream_events_resume`'s own docstring for why. It must belong to the
     conversation's owner: `_require_conversation_owner` is checked first, so
@@ -290,6 +293,7 @@ async def chat_resume(
         approved=req.approved,
         ctx=ctx,
         domain=domain,
+        approval_id=req.approval_id,
     )
     return _queued_sse_response(request_id)
 

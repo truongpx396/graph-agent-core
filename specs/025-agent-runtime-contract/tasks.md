@@ -8,9 +8,12 @@ Item codes (A1, B2, C5) are the sections of [AGENT_PLATFORM_ALIGNMENT_PLAN.md](.
   - [x] event models, `approval_superseded`, version, accepted-break entries, web types
   - [x] `queued` with the job, `started` from the worker, deadline keyed on a worker's event
   - [x] tests, pattern, diagrams, README
-- [ ] **PR2** A2 tool `call_id`, `label`, `tier`, `outcome`, `duration_ms`, `summary`, with display metadata beside each domain's tools
-- [ ] **PR3** A3 approval `items` and `approval_id`, `approval_superseded`, `pending_approval` parity, Telegram buttons send the id (after PR2)
-- [ ] **PR4** A4 `usage` event and A8 error `kind`
+- [x] **PR2 to PR4**, one pull request at the owner's request
+  - [x] A2 tool `call_id`, `label`, `tier`, `outcome`, `duration_ms`, `summary`, with a `display.py` beside each domain's tools
+  - [x] A3 approval `items` and `approval_id`, `approval_superseded`, `pending_approval` parity, Telegram and the CLI send the id
+  - [x] A4 `usage` event and A8 error `kind`
+  - [x] a stop pressed while a turn is queued now runs nothing (found building step 1)
+  - [x] a reclaimed resume answers only the pause it first found (found building step 3)
 
 ## Phase 2: web UI, in `web/`
 

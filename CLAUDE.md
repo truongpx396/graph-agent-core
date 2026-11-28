@@ -83,7 +83,7 @@ they delete volumes or kill running processes.
   several domains share, with `SHARED_TOOL_CAPABILITIES`), `idempotency.py`, the skill and subagent catalogs
   (one shared `frontmatter.py` loader) and `run_subagent`. `cost/` is the spend meter and caps
   (`docs/COST_GOVERNANCE.md`). `AgentManifest`/`DomainPlugin` (the plugin contract) are in `app/ports/outbound/domains.py`. Outside `app/agent`, a domain imports only `app.agent.tools` and a driving adapter only `app.agent.runtime` and `app.agent.cost` (`tests/core/test_architecture_layers.py`).
-- `app/domains/{ecorp,support,ops,sales}/` — each is a **module** (`docs/ARCHITECTURE.md`, "The business modules"): `prompt.md` (its system prompt, pattern 114) + `domain.py` + `tools.py` + `store.py` + `ports.py` (its repository port), and
+- `app/domains/{ecorp,support,ops,sales}/` — each is a **module** (`docs/ARCHITECTURE.md`, "The business modules"): `prompt.md` (its system prompt, pattern 114) + `domain.py` + `tools.py` + `display.py` (how a person is told about each tool, pattern 118) + `store.py` + `ports.py` (its repository port), and
   `registry.py` looks them up by name. A module imports no other module (`app/domains/shared/` holds `policy.py`, `sandbox_session.py` and `web_search.py`, which they share), and code outside
   `app/domains/` imports only its `domain` and `usecases` (`tests/core/test_architecture_layers.py`). Ecorp is the default but has no standing in the graph: `build_graph`
   requires a manifest and a domain. A new use case follows that shape; it never forks `build_graph()`. A domain's skills and subagents are

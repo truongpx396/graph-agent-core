@@ -232,7 +232,7 @@ class TestARefusalIsTheAnswer:
             )
         ]
 
-        assert [e["type"] for e in events] == ["token", "done"]
+        assert [e["type"] for e in events] == ["token", "usage", "done"]
         assert events[0]["content"] == CANNOT_HELP_MESSAGE
 
     async def test_it_took_one_call_and_nothing_after_it(self):

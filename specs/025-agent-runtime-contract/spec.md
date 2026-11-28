@@ -1,10 +1,10 @@
 # Feature Specification: a runtime contract an agent platform can drive
 
-**Feature Branch**: one per phase, the first `feat/runtime-status-event`
+**Feature Branch**: `feat/runtime-status-event` (step 1, #317), `feat/runtime-tool-approval-usage` (the rest of phase 1)
 
 **Created**: 2026-11-28
 
-**Status**: In progress. Phase 1 step 1 (the contract and the `status` event) is built; [tasks.md](tasks.md) says what is left.
+**Status**: In progress. Phase 1, the contract, is built; [tasks.md](tasks.md) says what is left.
 
 **Input**: "pls apply this plan": [AGENT_PLATFORM_ALIGNMENT_PLAN.md](../../docs/AGENT_PLATFORM_ALIGNMENT_PLAN.md), Parts A and C, with Part B's web UI work as later phases.
 
@@ -25,6 +25,7 @@ A person who sent a message, or a platform that admitted a job, can tell whether
 1. **Given** no worker serves the domain, **When** a turn is sent, **Then** the stream says `queued` and ends with `worker_unreachable` after the first-response deadline.
 2. **Given** a worker is free, **When** a turn is sent or an approval is answered, **Then** the stream says `queued`, then `started`, before any other event.
 3. **Given** a person presses stop as soon as the stream says `started`, **Then** the turn stops.
+4. **Given** a person presses stop while the turn is still queued, **Then** nothing of it runs when a worker takes it.
 
 ### User Story 2 - A decision is about exactly what was shown (Priority: P1)
 
@@ -131,4 +132,4 @@ A platform adapter is written against recorded turns and one guide, and a change
 
 - Steering a running turn and queued follow-ups: reported as unsupported.
 - A task board, run timeline or org chart: those belong in the platform.
-- A stop pressed while a turn is still **queued** is dropped when a worker takes it (true before this feature; the status event makes the wait visible). Not fixed here.
+- The web page sends no `approval_id` and shows none of the new facts until phase 2.

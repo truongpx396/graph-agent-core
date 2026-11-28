@@ -232,8 +232,8 @@ def make_graph_node_compact_history(
 
         if not new_summary:
             marker = _compaction_marker_message(turns_dropped, summarized=False)
-            return {"messages": [*removals, marker]}
+            return {"messages": [*removals, marker], "turn_usage": [call.usage_entry]}
         marker = _compaction_marker_message(turns_dropped, summarized=True)
-        return {"messages": [*removals, marker], "history_summary": new_summary}
+        return {"messages": [*removals, marker], "history_summary": new_summary, "turn_usage": [call.usage_entry]}
 
     return graph_node_compact_history

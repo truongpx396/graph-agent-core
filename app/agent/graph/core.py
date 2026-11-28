@@ -130,6 +130,7 @@ def graph_node_validate_input(state: State, config: RunnableConfig) -> dict[str,
         # `None` = the reducer's explicit reset marker (see concat_or_reset);
         # writing `[]` through a concatenating reducer would be a no-op.
         "subagent_spend": None,
+        "turn_usage": None,
         # A cancel on one turn must not decide the routing of a LATER turn's
         # approval: `graph_edge_route_after_human_approval` tests `cancelled` before `approved`,
         # and nothing else clears either field. Reset here, never on a resume

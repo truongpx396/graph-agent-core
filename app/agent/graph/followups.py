@@ -72,7 +72,7 @@ def make_graph_node_suggest_followups(llm: ChatModel, model_alias: str = CHAT_MO
                 for line in (response.content or "").split("\n")
                 if line.strip()
             ]
-            return {"followups": lines[:3]}
+            return {"followups": lines[:3], "turn_usage": [call.usage_entry]}
         except Exception as exc:  # noqa: BLE001 - enrichment, never fail the turn
             gateway.note_budget_stop(exc)  # swallowed here, but the backstop firing is still counted
             logger.warning(

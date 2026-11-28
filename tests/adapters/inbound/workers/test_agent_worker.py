@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import signal
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -20,6 +21,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.adapters.inbound.workers import agent_worker, streams
 from app.adapters.inbound.workers.streams import dead_letter_stream_key
+from app.adapters.outbound.redis.queue import set_cancel_flag
 from app.agent.graph.messages import RETRY_ARTIFACT_KEY
 from app.agent.runtime.core import current_domain
 from app.core import metrics
@@ -283,7 +285,7 @@ class TestProcessRequestTurn:
         # raw exception text, with no ErrorCode envelope, forwarded to the caller.
         assert error["code"] == "internal"
         assert "internal-db-host" not in json.dumps(error)
-        assert error["details"] == {"error_class": "RuntimeError"}
+        assert error["details"] == {"error_class": "RuntimeError", "kind": "failed"}
         assert client.acked == [entry_id]
 
 
@@ -463,7 +465,7 @@ class TestProcessRequestResume:
     async def test_dispatches_to_astream_events_resume_with_the_right_args(self, monkeypatch):
         captured = {}
 
-        async def fake_resume(thread_id, *, approved, ctx, cancel_check=None):
+        async def fake_resume(thread_id, *, approved, ctx, approval_id=None, cancel_check=None):
             captured.update(thread_id=thread_id, approved=approved, ctx=ctx)
             yield {"type": "done"}
 
@@ -486,7 +488,7 @@ class TestProcessRequestResume:
 
         captured = {}
 
-        async def fake_resume(thread_id, *, approved, ctx, cancel_check=None):
+        async def fake_resume(thread_id, *, approved, ctx, approval_id=None, cancel_check=None):
             captured["cancel_check"] = cancel_check
             yield {"type": "done"}
 
@@ -511,7 +513,7 @@ class TestProcessRequestResume:
 
         seen_cancelled = []
 
-        async def fake_resume(thread_id, *, approved, ctx, cancel_check=None):
+        async def fake_resume(thread_id, *, approved, ctx, approval_id=None, cancel_check=None):
             seen_cancelled.append(await cancel_check())
             yield {"type": "done"}
 
@@ -525,7 +527,7 @@ class TestProcessRequestResume:
         assert seen_cancelled == [False]
 
     async def test_a_resume_failure_publishes_an_error_and_still_acks(self, monkeypatch):
-        async def failing_resume(thread_id, *, approved, ctx, cancel_check=None):
+        async def failing_resume(thread_id, *, approved, ctx, approval_id=None, cancel_check=None):
             raise RuntimeError("checkpoint gone")
             yield  # pragma: no cover
 
@@ -610,6 +612,140 @@ class TestTheClientIsToldAWorkerTookTheJob:
         await _process(client, *_entry())
 
         assert [(event["type"], event.get("code")) for event in self._all(client)] == [("error", "thread_busy")]
+
+
+def _queued_at(entry, at):
+    """The job as the API publishes it: stamped with when it was queued."""
+    entry_id, fields = entry
+    return entry_id, {"payload": json.dumps({**json.loads(fields["payload"]), "enqueued_at": at})}
+
+
+class TestAStopPressedWhileTheJobWaited:
+    """A worker removed every stop flag as it took a job, so a stop pressed while the turn was still queued did nothing: the turn ran anyway once a
+    worker was free (specs/025). The flag now holds when the stop was pressed."""
+
+    @staticmethod
+    def _stopped_after_queueing(monkeypatch, entry_point):
+        ran = []
+
+        async def fake_stream(*args, **kwargs):
+            ran.append(kwargs)
+            yield {"type": "done"}
+
+        monkeypatch.setattr(agent_worker, entry_point, fake_stream)
+        return ran
+
+    async def test_a_turn_stopped_while_queued_is_not_run_and_ends_cancelled(self, monkeypatch):
+        ran = self._stopped_after_queueing(monkeypatch, "astream_events_turn")
+        client = FakeRedis()
+        queued = time.time()
+        await set_cancel_flag(client, "t1")  # pressed while no worker was free
+        before = _count(metrics.agent_requests_total, outcome="cancelled")
+
+        await _process(client, *_queued_at(_entry(), queued))
+
+        assert ran == []
+        assert [(e["type"], e["code"]) for e in _published(client, "r1")] == [("error", "cancelled")]
+        assert _count(metrics.agent_requests_total, outcome="cancelled") == before + 1
+
+    async def test_a_stop_from_before_the_job_was_queued_is_stale_and_removed(self, monkeypatch):
+        ran = self._stopped_after_queueing(monkeypatch, "astream_events_turn")
+        client = FakeRedis()
+        await set_cancel_flag(client, "t1")
+
+        await _process(client, *_queued_at(_entry(), time.time() + 1))
+
+        assert len(ran) == 1 and await streams.is_cancelled(client, "t1") is False
+
+    async def test_the_message_sent_after_a_stopped_one_runs(self, monkeypatch):
+        """The flag a stopped job left is older than the next job."""
+        ran = self._stopped_after_queueing(monkeypatch, "astream_events_turn")
+        client = FakeRedis()
+        queued = time.time()
+        await set_cancel_flag(client, "t1")
+        await _process(client, *_queued_at(_entry(), queued))
+
+        await _process(client, *_queued_at(_entry(request_id="r2"), time.time() + 1))
+
+        assert len(ran) == 1 and _published(client, "r2") == [{"type": "done"}]
+
+    async def test_a_resume_stopped_while_queued_runs_nothing_and_does_not_leave_the_conversation_paused(self, monkeypatch):
+        ran = self._stopped_after_queueing(monkeypatch, "astream_events_resume")
+        cancel_run = AsyncMock(return_value=True)
+        monkeypatch.setattr(agent_worker, "cancel_run", cancel_run)
+        client = FakeRedis()
+        queued = time.time()
+        await set_cancel_flag(client, "t1")
+
+        await _process(client, *_queued_at(_entry(kind="resume"), queued))
+
+        assert ran == [], "the approved call must not run after the person pressed stop"
+        cancel_run.assert_awaited_once()
+        assert cancel_run.await_args.args[0] == "t1"
+        assert [(e["type"], e["code"]) for e in _published(client, "r1")] == [("error", "cancelled")]
+
+    async def test_a_continued_turn_keeps_the_flag_up_so_its_first_check_stops_it_and_tidies_the_thread(self, monkeypatch):
+        checks = []
+
+        async def fake_continue(thread_id, ctx, cancel_check=None):
+            checks.append(await cancel_check())
+            yield {"type": "done"}
+
+        monkeypatch.setattr(agent_worker, "astream_events_continue_turn", fake_continue)
+        client = FakeRedis()
+        queued = time.time()
+        await set_cancel_flag(client, "t1")
+
+        await _process(client, *_queued_at(_entry(kind="turn_continue"), queued))
+
+        assert checks == [True]
+
+
+class TestAResumeAnswersOnlyThePauseItWasGiven:
+    """A reclaimed resume is run again. If its first run had reached a LATER pause before the worker died, it approved that one, which nobody had been
+    shown (constitution Principle II). The worker remembers which pause the job found."""
+
+    @staticmethod
+    def _resumes(monkeypatch, pending):
+        answered = []
+
+        async def fake_resume(thread_id, *, approved, ctx, approval_id=None, cancel_check=None):
+            answered.append(approval_id)
+            yield {"type": "done"}
+
+        async def get_pending(thread_id):
+            return pending[0] and {"approval_id": pending[0]}
+
+        monkeypatch.setattr(agent_worker, "astream_events_resume", fake_resume)
+        monkeypatch.setattr(agent_worker, "get_pending_approval", get_pending)
+        return answered
+
+    async def test_a_job_run_again_answers_the_pause_it_first_found_not_the_one_waiting_now(self, monkeypatch):
+        pending = ["apr_first"]
+        answered = self._resumes(monkeypatch, pending)
+        client = FakeRedis()
+        await _process(client, *_entry(kind="resume"))
+        pending[0] = "apr_later"  # the first run reached another pause, then the worker died before its ack
+
+        await _process(client, *_entry(kind="resume"))
+
+        assert answered == ["apr_first", "apr_first"]
+
+    async def test_the_clients_own_id_is_the_one_answered(self, monkeypatch):
+        answered = self._resumes(monkeypatch, ["apr_now"])
+        entry_id, fields = _entry(kind="resume")
+        fields["payload"] = json.dumps({**json.loads(fields["payload"]), "approval_id": "apr_shown"})
+
+        await _process(FakeRedis(), entry_id, fields)
+
+        assert answered == ["apr_shown"]
+
+    async def test_with_nothing_pending_there_is_no_id_and_the_resume_says_so_itself(self, monkeypatch):
+        answered = self._resumes(monkeypatch, [None])
+
+        await _process(FakeRedis(), *_entry(kind="resume"))
+
+        assert answered == [None]
 
 
 class TestTheStreamIsClosedBeforeAPublishFailureIsSeen:

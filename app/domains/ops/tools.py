@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.core.security import SecurityCtx, valid_ctx
 from app.core.tool_idempotency import idempotent
-from app.core.tool_runtime import arun_with_timeout
+from app.core.tool_runtime import NO_CTX_REFUSAL, arun_with_timeout
 from app.core.tool_schema import ToolArgs
 from app.core.untrusted import frame_untrusted
 from app.domains.ops.ports import incident_store
@@ -39,11 +39,6 @@ from app.domains.shared.web_search import make_web_search_tool
 from app.ports.outbound.notify import team_channel
 from app.ports.outbound.web import CRAWL_TOOL_TIMEOUT_SECONDS, page_renderer
 
-NO_CTX_REFUSAL = (
-    "Refused: no valid tenant/principal context for this request. "
-    "This isn't something you can work around — it means the request "
-    "never got a security context stamped on it upstream."
-)
 
 def ctx_from_config(config: RunnableConfig | None) -> SecurityCtx | None:
     if not config:

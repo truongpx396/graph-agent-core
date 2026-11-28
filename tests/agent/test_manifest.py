@@ -74,6 +74,9 @@ class _WidgetSupportDomainPlugin:
     def tool_capabilities(self) -> dict[str, str]:
         return {"open_ticket": "mutating"}
 
+    def tool_display(self) -> dict:
+        return {}
+
     def policy(self) -> Policy:
         return _WIDGET_POLICY
 

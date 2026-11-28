@@ -32,6 +32,7 @@ The client in `web/` (React, TypeScript, Vite; [specs/023](../specs/023-web-clie
 ### 30. Canonical error envelope
 One shape, `{code, message, details}`, from one `ErrorCode` enum (`app/core/errors.py`) for every SSE `error` event and CLI error. `internal_error_envelope(exc)` returns a fixed message plus `error_class`, never `str(exc)`.
 - **Bug:** both catch-alls sent `str(exc)`, leaking hosts, SQL and DSNs. Two more events carried no `code` (R24).
+- **`details.kind`** says what to make of it: `blocked` (a rule said no), `failed`, or `lost` (what was waited for or answered is gone). `to_dict` adds it; a new code must be classified. A cancel has none, nor have the four codes the front door also answers (the two must answer alike).
 - **Gap:** the ingest worker's `process_job` still mixes uploader-facing messages with unexpected failures.
 
 ### 31. DB connection pool
@@ -100,6 +101,7 @@ Every line is JSON. The ids of the request or job in progress are bound once (`a
 A turn's or resume's results stream starts with `{"type": "status", "state": "queued"}`, written by the producer in the same `MULTI` as the job, and the worker that takes it publishes `started` (an opaque `w-<hex>`, never the host name) before anything runs. A cancel has neither: it is answered by its outcome. [specs/025](../specs/025-agent-runtime-contract/spec.md) is the contract.
 - **Why:** the first event a client saw was the first thing the model did, so "no worker has this yet" and "the model is thinking" looked the same.
 - **The first-response deadline waits for a worker's event.** `queued` does not end it. A read from a position asks the stream whether a worker ever wrote (`XRANGE ... COUNT 2`): until `queued`, no client could hold a position before one had, and a reconnect with no worker would now wait for ever.
-- **Order in the worker:** forget the stale cancel flag, then say `started`. The other order erases a stop a client sends on seeing it.
+- **Order in the worker:** deal with the stop flag, then say `started`. The other order erases a stop a client sends on seeing it.
+- **Bug:** a stop pressed while the turn was still queued did nothing: the worker removed every stop flag as it took a job, and the turn ran once a worker was free. The flag now holds WHEN stop was pressed and lives as long as a job can wait. A worker keeps and honours a flag newer than the job's `enqueued_at`, and removes an older one, in one Lua script: a queued turn runs nothing, a queued resume runs nothing and ends the pause. Both times are the API's clock.
 - **A new event type is a major API version.** oasdiff reports a member added to a response union, or a value added to a response enum, as breaking. So 4.0.0 declares `status`, `usage`, `system_note` and the code `approval_superseded` together, and a vocabulary that may grow is a string with `x-extensible-enum`.
-- **Gap:** a stop pressed while a turn is still queued is dropped when a worker takes it (it was before). No queue position. No client shows "waiting to start" yet (specs/025, PR6).
+- **Gap:** an unattended turn crashed and continued has no cancel check, so a stop does not reach it. Replicas of the API with clocks apart by more than the time between a send and a stop would judge the order wrongly. No queue position. No client shows "waiting to start" yet (specs/025, PR6).

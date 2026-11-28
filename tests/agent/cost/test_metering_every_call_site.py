@@ -75,7 +75,8 @@ class TestFollowUps:
 
         result = await make_graph_node_suggest_followups(llm)(_grounded_state(), CONFIG)
 
-        assert result == {"followups": ["What next?", "And then?"]}
+        assert result["followups"] == ["What next?", "And then?"]
+        assert [(e["kind"], e["input_tokens"], e["output_tokens"]) for e in result["turn_usage"]] == [("followups", 200, 20)]
         (event,) = usage_event_sink
         assert event["kind"] == "followups"
         assert (event["tenant"], event["thread_id"]) == (TEST_CTX["tenant"], "thread-1")

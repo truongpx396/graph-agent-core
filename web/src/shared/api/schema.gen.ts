@@ -86,7 +86,7 @@ export interface paths {
          * Chat Stream Queued
          * @description Same SSE event vocabulary an in-process `astream_events_turn` would
          *     produce (token, tool_start, tool_end, retry, compacted, citations,
-         *     followups, system_note, approval_required, error, done), after a
+         *     followups, usage, system_note, approval_required, error, done), after a
          *     `status` event for `queued` (written here, with the job) and one for
          *     `started` (the worker that took it). But this process never runs the graph
          *     itself — it publishes the turn onto a shared Redis Stream and streams
@@ -165,6 +165,9 @@ export interface paths {
          *     checkpoint lives in Postgres, not a worker's process memory. `domain`
          *     must match the original turn's (the caller is expected to keep sending
          *     the same `X-Domain` for a given thread_id).
+         *
+         *     `approval_id` names the pause being answered (`approval_required`'s, or `pending_approval`'s). If another pause is waiting by the time a worker
+         *     takes the job, nothing runs and the stream says `approval_superseded`.
          *
          *     `ctx` is re-supplied here, not reused from the original pause — see
          *     `astream_events_resume`'s own docstring for why. It must belong to the
@@ -467,8 +470,34 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * ApprovalItem
+         * @description What one pending call would do, in words.
+         */
+        ApprovalItem: {
+            /** Call Id */
+            call_id: string;
+            /**
+             * Tier
+             * @enum {string}
+             */
+            tier: "read_only" | "mutating" | "outward";
+            /** Title */
+            title: string;
+            /** Effect */
+            effect: string;
+            /** Target */
+            target?: string | null;
+            /** Visible To */
+            visible_to?: string | null;
+            /**
+             * Reversible
+             * @description False unless the call changes nothing or can be taken back.
+             */
+            reversible: boolean;
+        };
+        /**
          * ApprovalRequiredEvent
-         * @description Terminal for this request: the turn is paused until `POST /chat/resume` approves or rejects the calls.
+         * @description Terminal for this request: the turn is paused until `POST /chat/resume` approves or rejects the calls, all of them together.
          */
         ApprovalRequiredEvent: {
             /**
@@ -478,6 +507,16 @@ export interface components {
             type: "approval_required";
             /** Tool Calls */
             tool_calls: components["schemas"]["ToolCall"][];
+            /**
+             * Approval Id
+             * @description The identity of this pause. Send it with the answer.
+             */
+            approval_id?: string | null;
+            /**
+             * Items
+             * @description One per tool call, in the same order.
+             */
+            items?: components["schemas"]["ApprovalItem"][];
         };
         /** Body_ingest_upload_ingest_upload_post */
         Body_ingest_upload_ingest_upload_post: {
@@ -657,7 +696,8 @@ export interface components {
         ErrorCode: "timeout" | "moderation_blocked" | "checkpoint_lost" | "checkpoint_incompatible" | "pending_approval" | "approval_superseded" | "unattended_pause" | "cancelled" | "cost_ceiling_exceeded" | "tenant_budget_exceeded" | "personal_budget_exceeded" | "budget_check_unavailable" | "insufficient_credits" | "provider_budget_exceeded" | "model_unpriced" | "embedding_identity_mismatch" | "thread_busy" | "no_progress" | "worker_lost" | "worker_unreachable" | "unauthenticated" | "forbidden" | "rate_limited" | "auth_unavailable" | "internal";
         /**
          * ErrorEvent
-         * @description Terminal. `code`, `message` and `details` are the canonical error envelope (app/core/errors.py): switch on `code`. Every error the API and the
+         * @description Terminal. `code`, `message` and `details` are the canonical error envelope (app/core/errors.py): switch on `code`, or on `details.kind`
+         *     (`blocked`: a rule said no; `failed`: something went wrong; `lost`: what was waited for or answered is gone; a cancel has none). Every error the API and the
          *     workers send carries it (a queued job nobody took is `worker_unreachable`, a resume with nothing to resume is `checkpoint_lost` or
          *     `checkpoint_incompatible`); the fields stay optional in the schema so a client written before that still validates.
          */
@@ -860,6 +900,16 @@ export interface components {
              * @description False if this checkpoint's state_schema_version no longer matches the running build — approve/reject would be refused; the caller should show it as unresumable, not a working button.
              */
             resumable: boolean;
+            /**
+             * Approval Id
+             * @description Send it with the answer. Null for a pause recorded by an older build.
+             */
+            approval_id?: string | null;
+            /**
+             * Items
+             * @description One per tool call, in order: the same as the `approval_required` event's.
+             */
+            items?: components["schemas"]["ApprovalItem"][];
         };
         /**
          * ReadinessResponse
@@ -897,6 +947,11 @@ export interface components {
              * @description Approve (true) or reject (false) the pending tool call(s).
              */
             approved: boolean;
+            /**
+             * Approval Id
+             * @description Which pause this answers: `approval_id` of the `approval_required` event or of the pending approval. If a different pause is waiting, nothing runs (`approval_superseded`). Omitted, it answers whatever is pending when a worker takes it.
+             */
+            approval_id?: string | null;
         };
         /**
          * RetryEvent
@@ -1025,8 +1080,30 @@ export interface components {
             tool: string;
             /** Subagent */
             subagent?: string | null;
+            /** Call Id */
+            call_id?: string | null;
+            /**
+             * Outcome
+             * @description `ok`, `error` (it failed) or `refused` (it said no). A turn that recovers from either still ends normally.
+             */
+            outcome?: string | null;
+            /**
+             * Kind
+             * @description On `refused`: `blocked`, as an error's `details.kind`.
+             */
+            kind?: string | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /**
+             * Summary
+             * @description One line about the result ("6 results"), when the tool has one to give.
+             */
+            summary?: string | null;
         };
-        /** ToolStartEvent */
+        /**
+         * ToolStartEvent
+         * @description A tool call is starting. `label` and `tier` are the server's: a client shows them and derives nothing from `tool` or `args`.
+         */
         ToolStartEvent: {
             /**
              * @description discriminator enum property added by openapi-typescript
@@ -1044,10 +1121,24 @@ export interface components {
              * @description Set when the call happened inside a subagent's nested run.
              */
             subagent?: string | null;
+            /**
+             * Call Id
+             * @description Pairs this with its `tool_end`, also between parallel calls of one tool.
+             */
+            call_id?: string | null;
+            /**
+             * Label
+             * @description What the tool does, for a person: "Create a support ticket".
+             */
+            label?: string | null;
+            /** Tier */
+            tier?: ("read_only" | "mutating" | "outward") | null;
+            /** At */
+            at?: string | null;
         };
         /**
          * UsageEvent
-         * @description Just before `done`: what this turn's model calls used, subagents' included. Declared in 4.0.0 and not sent yet. Null means unknown, never zero.
+         * @description Just before `done`: what this turn's model calls used, over any approval pause, subagents' included. Null means unknown, never zero.
          */
         UsageEvent: {
             /**
@@ -1057,7 +1148,7 @@ export interface components {
             type: "usage";
             /**
              * Model
-             * @description The model that wrote the answer.
+             * @description The model that wrote the answer. Null when no model did (a cached answer, a refused message).
              */
             model: string | null;
             /**
@@ -1065,16 +1156,22 @@ export interface components {
              * @description The tier that served it. Ignore a value you do not know.
              */
             route: string | null;
-            /** Input Tokens */
+            /**
+             * Input Tokens
+             * @description Of every call. Null when any call's tokens are unknown.
+             */
             input_tokens: number | null;
             /** Output Tokens */
             output_tokens: number | null;
             /**
              * Cost Usd
-             * @description Null when any of the turn's calls has no known price.
+             * @description Of every call. Null when any call has no known price or reported no usage.
              */
             cost_usd: number | null;
-            /** Model Calls */
+            /**
+             * Model Calls
+             * @description Calls counted. A delegated run that failed is not counted, and makes the other totals null.
+             */
             model_calls: number;
         };
         /**

@@ -48,6 +48,8 @@ Flow control lives in explicit state (`iterations`, `context`, ...).
 - **Bug:** a rejection's `ToolMessage` had no `name`, so a skill's required tool still counted as unsatisfied. `reject_tool_calls` sets it on every path.
 - **Bug:** declining only once left a re-requested write paused and every later message refused as "pending approval".
 
+- **An approval answers one pause** (119).
+
 ### 9. Parallel tool execution
 `ToolNode` runs several calls from one LLM turn concurrently; no fan-out node is needed.
 
@@ -185,7 +187,7 @@ Turns took 26-40 s for answers that took seconds to write. **Measured:** Ollama 
 After `POST /chat/cancel` and a new question, the model saw both and ran the script the person had stopped.
 - **Fix:** `runtime/cancelled_turn.discard_cancelled_turn`, on `TurnCancelledError` only, removes the turn's messages with `aupdate_state(as_node=START)`. A timeout or error keeps the question for a retry. If a TOOL already ran, the turn stays, closed with an assistant line (forgetting a filed ticket invites filing it again under a new id).
 - **Read in LangGraph 0.2.76, still so in 1.0.1:** `update_state` without `as_node` raises "Ambiguous update" when it cannot tell which node wrote last.
-- **Gaps:** `cancel_run` (paused at approval) is unchanged; text already streamed stays on the page until reload.
+- **Gaps:** `cancel_run` (paused at approval) is unchanged; text already streamed stays on the page until reload. A stop pressed while the turn is still queued runs nothing at all (RUNTIME_PATTERNS.md 117).
 
 ### 81. A tool that failed is not a promise unkept, and a database error is not for the person to read
 - **Bug:** the deferral check could not tell a promise from an account of a failure (the model counted a log by hand after the sandbox failed, and the correct answer was replaced). `_deferred` does not fire when a `ToolMessage` with `status="error"` is in the turn.
@@ -241,6 +243,21 @@ Each domain wrote its whole prompt, so a rule common to all of them was only in 
 Found in one Ecorp session on `qwen2.5:7b` (2026-11-27), each answered with no tool call: "Remember that I prefer short, bulleted answers" got "I will provide short, bulleted answers in the future" (nothing was saved); "Have a researcher ... what our docs say" was answered directly, with one invented bullet; the onboarding brief skipped its skill's `search_docs` step and reported "No team notes on record".
 - **Check:** `skipped_step` (`output_guardrails.skipped_step`). An instruction to remember needs `remember` or `add_note`; "have/ask/get a ... researcher" needs `run_subagent`; a loaded skill that names `search_docs` needs it before the answer says no notes, documents or policies are on record. Only a tool this domain has, and a call that was refused counts as made. An answer that says it could not do it stands. Two rounds, then "a step it needed did not run": the answer is never shown on exhaustion.
 - **Gaps:** English cue shapes, and only these requests. A claim about an action the person did not ask for in these words ("Ticket created", "I've saved that") is not caught. A skill step left out of a brief that does not say "nothing on record" is not caught either.
+
+### 118. The tools node says what each call is, and what became of it
+`graph/tool_node.AnnouncingToolNode` announces `tool_start` and `tool_end` with the call's id, the domain's label for the tool, its tier, the outcome (`ok`, `error`, `refused`), the duration and an optional summary. A subagent's calls are announced the same way and tagged. Every domain declares a `ToolDisplay` per tool (`display.py`): **the server states these facts and no client parses arguments or guesses a risk**. Text from arguments or results is scrubbed and bounded.
+- **Why not `astream_events`' tool callbacks:** `on_tool_start` carries no tool call id, so two parallel calls of one tool could not be paired.
+- **Bug:** a tool that raised emitted no end event at all (LangChain calls `on_tool_error`, which the event stream has no handler for), so a client showed it running until the answer.
+- **Private API:** it overrides `ToolNode._arun_one`; `tests/agent/graph/test_tool_events.py` fails if an upgrade stops calling it.
+- **Changed:** the raw MCP call a sandbox tool makes inside itself is no longer shown as a call of its own.
+- **Gaps:** a call rejected before it runs (a declined approval, a bad batch) has no events. `refused` is recognised only for the shared `NO_CTX_REFUSAL`. The web page ignores the new fields until specs/025's UI steps.
+
+### 119. An approval answers one pause
+A pause carries `approval_id` and one item per call (title, effect, target, who sees it, reversible), stored with the interrupt. A resume may name the id; if another pause is waiting, nothing runs and the stream says `approval_superseded`. The id is a digest of the pending calls' ids and arguments: LangGraph runs the pausing node again on resume, so a random one would not hold.
+- **Bug:** a reclaimed `resume` job is run again. If the first run had reached a LATER pause before the worker died, the re-run approved it: a write nobody had been shown. A worker now remembers, under the job's id, which pause the job first found, and answers only that one (`streams.remember_answered_pause`).
+- **Telegram and the CLI send the id.** A client that does not (the web page until specs/025 PR7) still answers whatever is pending when a worker takes its job, so an old tab can approve a newer pause.
+- **A call nothing describes is shown cautiously:** its name as words, "Runs with the details below", not reversible. A `describe` that raises costs the words, never the pause.
+- **All or nothing:** one decision for every call of a pause, and no editing of arguments. A pause checkpointed by an older build has no id.
 
 ### Where the other numbers live
 These are not patterns of the graph. Their numbers are kept so references ("pattern 58") resolve.

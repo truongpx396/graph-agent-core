@@ -16,14 +16,14 @@ import re
 import time
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 
-from app.agent.cost import pricing
+from app.agent.cost import metering, pricing
 from app.agent.graph.build import GraphDeps, build_subagent_graph
 from app.agent.graph.state import MAX_SUBAGENT_ITERATIONS, MAX_SUBAGENT_TOKENS_PER_RUN
 from app.agent.graph.utils import make_llm
@@ -38,7 +38,7 @@ from app.core.config import (
 from app.core.scrubbing import scrub
 from app.core.security import DEFAULT_POLICY, Policy, valid_ctx
 from app.core.tool_runtime import NO_CTX_REFUSAL, arun_with_timeout, ctx_from_config
-from app.ports.outbound.domains import AgentManifest
+from app.ports.outbound.domains import AgentManifest, ToolDisplay
 
 # --- Subagents (app/agent/tools/subagent_catalog.py, GRAPH_PATTERNS.md pattern 46) -------
 # run_subagent delegates to a fresh, ISOLATED nested agent run (a genuinely
@@ -187,12 +187,16 @@ class _SubagentDomainPlugin:
     """
 
     _tools: list[Any]
+    _display: Mapping[str, ToolDisplay] = field(default_factory=dict)
 
     def tools(self) -> list[BaseTool]:
         return list(self._tools)
 
     def tool_capabilities(self) -> dict[str, str]:
         return {t.name: "read_only" for t in self._tools}
+
+    def tool_display(self) -> Mapping[str, ToolDisplay]:
+        return self._display
 
     def policy(self) -> Policy:
         return DEFAULT_POLICY
@@ -210,6 +214,7 @@ class SubagentResult:
     answer: str
     total_tokens: int
     total_cost_usd: float
+    usage: tuple[dict[str, Any], ...] = ()  # the nested run's `State.turn_usage`, which the parent turn adds to its own (specs/025)
 
 
 async def run_subagent_impl(
@@ -221,6 +226,7 @@ async def run_subagent_impl(
     registry: dict[str, tuple[Any, ...]],
     tools_by_name: Mapping[str, Any],
     llm: Any = None,
+    display: Mapping[str, ToolDisplay] | None = None,
     use_cache: bool = False,
 ) -> SubagentResult:
     """Build and run one nested, isolated agent turn; return its final answer plus its own usage. Full design:
@@ -280,7 +286,7 @@ async def run_subagent_impl(
         nested_llm = llm if llm is not None else make_llm(nested_tools, model=record.model or CHAT_MODEL)
 
         nested_manifest = AgentManifest(name=record.name, system_prompt=nested_system_prompt)
-        nested_domain = _SubagentDomainPlugin(nested_tools)
+        nested_domain = _SubagentDomainPlugin(nested_tools, display or {})
 
         nested_graph = build_subagent_graph(
             # model_alias: price this run's calls by the specialist's own model
@@ -348,12 +354,14 @@ async def run_subagent_impl(
             _timeout_seconds=SUBAGENT_TIMEOUT_SECONDS,
         )
     except TimeoutError:
+        metering.note_lost_usage()  # what the run spent is in the usage events, but no state hands it back
         metrics.agent_subagent_run_total.labels(subagent=record.name, outcome="timeout").inc()
         metrics.agent_subagent_duration_seconds.labels(subagent=record.name).observe(
             time.monotonic() - started
         )
         raise
     except Exception:
+        metering.note_lost_usage()
         metrics.agent_subagent_run_total.labels(subagent=record.name, outcome="error").inc()
         metrics.agent_subagent_duration_seconds.labels(subagent=record.name).observe(
             time.monotonic() - started
@@ -412,4 +420,4 @@ async def run_subagent_impl(
             "duration_ms": round(duration * 1000, 1),
         },
     )
-    return SubagentResult(answer, total_tokens, total_cost_usd)
+    return SubagentResult(answer, total_tokens, total_cost_usd, tuple(result_state.get("turn_usage") or ()))
