@@ -50,12 +50,12 @@ authlimit-keys: authlimit-build  ## Manage the signing keys outside the repo: AR
 authlimit-up: front-door-up  ## Alias of front-door-up (Casdoor, authlimit x2, the MCP gateway, an echo stub, Caddy)
 
 # specs/018. Needs `make up`, `make front-door-bootstrap` and `make front-door-ca`; web UI https://api.localhost:8443/.
-authlimit-up-app: front-door-secrets front-door-init-data authlimit-keys-ensure  ## Like authlimit-up, with the real API (identity mode) and a worker behind the door instead of the echo stub
-	AUTH_MODE=identity AUTHLIMIT_UPSTREAM=api:8000 $(GATEWAY_COMPOSE) --profile app up -d --build --no-deps casdoor-db casdoor authlimit authlimit-echo mcp-gateway api agent-worker caddy-gateway
+authlimit-up-app: front-door-secrets front-door-init-data authlimit-keys-ensure  ## Like authlimit-up, with the real API (identity mode), the web client and a worker behind the door instead of the echo stub
+	AUTH_MODE=identity AUTHLIMIT_UPSTREAM=api:8000 WEB_UPSTREAM=web:8080 $(GATEWAY_COMPOSE) --profile app up -d --build --no-deps casdoor-db casdoor authlimit authlimit-echo mcp-gateway api web agent-worker caddy-gateway
 
 # The next `--profile app up` brings the API back in header mode.
 authlimit-down-app: front-door-secrets  ## Stop what authlimit-up-app started, the API and its worker included
-	$(GATEWAY_COMPOSE) --profile app rm -sf caddy-gateway authlimit authlimit-echo mcp-gateway casdoor casdoor-db api agent-worker
+	$(GATEWAY_COMPOSE) --profile app rm -sf caddy-gateway authlimit authlimit-echo mcp-gateway casdoor casdoor-db api web agent-worker
 
 authlimit-down: front-door-down  ## Stop the authlimit stack's containers (same as front-door-down)
 

@@ -66,11 +66,11 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Before anything on a droplet changes: a missing image would otherwise be found after the new config was already synced.
-      - name: All three images were published for this commit
+      - name: All four images were published for this commit
         env:
           OWNER: ${{ github.repository_owner }}
         run: |
-          for image in graph-agent-core graph-agent-core-ml-service graph-agent-core-authlimit; do
+          for image in graph-agent-core graph-agent-core-ml-service graph-agent-core-authlimit graph-agent-core-web; do
             docker buildx imagetools inspect "ghcr.io/$OWNER/$image:$IMAGE_TAG" > /dev/null
           done
 

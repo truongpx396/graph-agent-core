@@ -1,0 +1,64 @@
+# The web client's own server (web/Dockerfile, RUNTIME_PATTERNS.md 116): the built page and its bundle, the page's sign-in settings written from this container's
+# environment (server/agent-auth.tmpl), and the API paths the page calls, so this one port is a whole app on one origin. Behind the front door only `/` and
+# `/static/*` reach it; the API paths go to the API through authlimit there (deploy/shared/caddy/gateway.caddyfile).
+{
+	admin off
+	auto_https off
+	persist_config off
+	# A sign-in returns to `/?code=...&state=...`: an error line must not keep the query or the headers (RUNTIME_PATTERNS.md 112). There is no access log.
+	log default {
+		format filter {
+			wrap json
+			fields {
+				request>uri regexp \?.* ?REDACTED
+				request>headers delete
+				resp_headers delete
+			}
+		}
+	}
+}
+
+:8080 {
+	root * /srv
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		# Nobody may frame the page (an approval is one click); it embeds no plugin and no other base.
+		Content-Security-Policy "frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
+		-Server
+	}
+
+	handle /healthz {
+		respond "ok"
+	}
+
+	# The same paths `make web-dev` proxies (vite.config.ts; a test holds the two equal). SSE must not be buffered.
+	@api path /chat /chat/* /ingest /ingest/* /health /health/* /usage /usage/*
+	handle @api {
+		reverse_proxy {$API_UPSTREAM:api:8000} {
+			flush_interval -1
+		}
+	}
+
+	handle_path /static/assets/* {
+		root * /srv/assets
+		# A bundle file's name carries a hash of its content, so it never changes. Only for a file that is there: a cached 404 would stay.
+		@present file
+		header @present Cache-Control "public, max-age=31536000, immutable"
+		encode zstd gzip
+		file_server
+	}
+
+	handle / {
+		rewrite * /index.html
+		header Cache-Control no-cache
+		templates
+		encode zstd gzip
+		file_server
+	}
+
+	handle {
+		respond "not found" 404
+	}
+}

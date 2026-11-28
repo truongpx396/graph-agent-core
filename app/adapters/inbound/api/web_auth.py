@@ -1,10 +1,14 @@
 """The built-in web page, server side (pattern 29; specs/023): where the built web client is, and what it is told about sign-in (specs/018).
 
-The page is the React application in `web/`, built to static files (`make web-build`; the Dockerfile builds it into the image). `/` is its
-`index.html` and `/static/assets/` its bundle, both public at the front door. The page needs to know whether the API is in `identity` mode
+The page is the React application in `web/`, built to static files. Two things serve it: in containers its own image (web/Dockerfile, the `web`
+service, RUNTIME_PATTERNS.md 116), and on the host this module (`make web-build`, then `make serve`). `/` is its `index.html` and `/static/assets/` its
+bundle, both public at the front door. The page needs to know whether the API is in `identity` mode
 (a token is needed, the Tenant and Principal pickers are meaningless) or `headers` mode, and in identity mode where the authorization server
 is. The smallest way to tell it is a <meta> tag the server writes into the page it serves: no extra request before the first, no route to
 classify, no cache.
+
+The container writes the same tag from a template (web/server/agent-auth.tmpl): a change here is a change there, and web/server/testdata/agent-auth.json
+holds the two to one answer.
 
 The tag carries no secret: the authorization server's address, the audience, the scope and the prefix of a tenant's client id. The value is
 HTML-escaped, so a setting containing a quote can't break out of the attribute.
@@ -22,7 +26,7 @@ from app.core.config import settings
 # so), which is how the page finds the client of the organization a person types without being told every tenant's id in advance.
 CLIENT_ID_PREFIX = "api-"
 PLACEHOLDER = "__AGENT_AUTH__"
-# The same relative place in a checkout and in the image (/app/web/dist).
+# A checkout's build. The app image has none, so there `/` answers 503.
 WEB_DIST = Path(__file__).resolve().parents[4] / "web" / "dist"
 
 

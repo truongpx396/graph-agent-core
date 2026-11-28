@@ -47,6 +47,7 @@ import argparse
 import asyncio
 import base64
 import hashlib
+import html
 import itertools
 import json
 import os
@@ -602,7 +603,7 @@ async def stage_api(d: Door, keys_dir: Path) -> None:
         return
     page = await d.call("GET", "/", None)
     check("the page is public and tells the browser the API is in identity mode",
-          page.status_code == 200 and 'name="agent-auth"' in page.text and "&quot;mode&quot;:&quot;identity&quot;" in page.text, f"{page.status_code} {page.text[:100]}")
+          page.status_code == 200 and 'name="agent-auth"' in page.text and '"mode":"identity"' in html.unescape(page.text), f"{page.status_code} {page.text[:100]}")
     bundle = re.search(r'src="(/static/assets/[^"]+\.js)"', page.text)
     script = await d.call("GET", bundle.group(1), None) if bundle else None
     check("its script is public too, sign-in included (it must load before anyone can sign in)",

@@ -4,8 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Graph Agent Core</title>
-    <!-- Sign-in (specs/018). The server replaces the placeholder with the mode it runs in (app/adapters/inbound/api/web_auth.py);
-         src/features/auth/config.ts reads it. Unreplaced (the Vite dev server) means header mode. -->
+    <!-- Sign-in (specs/018). Whoever serves the page replaces the placeholder with the mode it runs in (server/agent-auth.tmpl in the container,
+         app/adapters/inbound/api/web_auth.py on the host); src/features/auth/config.ts reads it. Unreplaced (the Vite dev server) means header mode. -->
     <meta name="agent-auth" content="__AGENT_AUTH__" />
   </head>
   <body>

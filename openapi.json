@@ -3,7 +3,7 @@
   "info": {
     "title": "Graph Agent Core API",
     "description": "A multi-tenant, multi-domain LangGraph RAG agent. A client starts a turn, reads its events as they stream, answers an approval the\nagent asks for, and lists its own past sessions. One graph serves every domain; `X-Domain` picks which (default `ecorp`).\n\n**Who is calling.** Behind the front door (the authlimit service) a client sends `Authorization: Bearer <access token>`; the door\nverifies it and gives the API a signed identity, so the tenant and person are never taken from a header or a body. Only a deployment run\nwith `AUTH_MODE=headers` (a developer's machine, the tests) reads `X-Tenant-Id` and `X-Principal-Id` as sent. Everything a caller reads or\nchanges is scoped to its tenant and person.\n\n**Errors.** A refusal the application makes is the canonical envelope `{\"code\", \"message\", \"details\"}`; switch on `code`, not on the\ntext. A turn's own failures arrive as an `error` event on its stream, in the same shape.\n\n**Streams.** `POST /chat/stream/queued` and `GET /ingest/stream/{job_id}` answer with server-sent events, which OpenAPI describes only\nas a `text/event-stream` body; the event vocabulary is in the first route's description.\n",
-    "version": "3.5.0"
+    "version": "3.5.1"
   },
   "servers": [
     {
@@ -22,7 +22,7 @@
           "web"
         ],
         "summary": "Ui",
-        "description": "The built-in web UI (pattern 29): the web client in `web/`, built to\nstatic files, with no third-party script. It talks only to the published\nchat, session and ingest endpoints. 503 when the client has not been\nbuilt (`make web-build`; the Docker image builds it). Read from disk per\nrequest (not cached), so a rebuild and a refresh is enough during\ndevelopment — this isn't a hot path.",
+        "description": "The web UI (pattern 29) for an API run on the host: the web client in\n`web/`, built to static files, with no third-party script. It talks only to\nthe published chat, session and ingest endpoints. 503 when the client has\nnot been built (`make web-build`). In containers the page is not the API's:\nthe `web` service serves it. Read from disk per request (not cached), so a\nrebuild and a refresh is enough during development.",
         "operationId": "ui__get",
         "responses": {
           "200": {

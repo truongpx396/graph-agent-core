@@ -41,6 +41,11 @@
 	}
 }
 
+# The web client's server (the `web` service): the page and its bundle.
+(web_proxy) {
+	reverse_proxy web:8080
+}
+
 # The Telegram bot's own listener (the `telegram-bot` service, profile `telegram`). Until it runs, its two routes answer 502 and nothing else changes.
 (telegram_proxy) {
 	reverse_proxy telegram-bot:8081

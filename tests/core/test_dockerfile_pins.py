@@ -14,7 +14,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON_DOCKERFILES = [ROOT / "Dockerfile", ROOT / "services" / "ml-service" / "Dockerfile"]
 # Every image production runs that this repository builds.
-DOCKERFILES = [*PYTHON_DOCKERFILES, ROOT / "services" / "authlimit" / "Dockerfile"]
+DOCKERFILES = [*PYTHON_DOCKERFILES, ROOT / "services" / "authlimit" / "Dockerfile", ROOT / "web" / "Dockerfile"]
 PIN = re.compile(r"^FROM (\S+) AS (base|uv)\s*$", re.MULTILINE)
 DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
 

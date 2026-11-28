@@ -30,7 +30,7 @@ ENVIRONMENTS = {
 SET_ELSEWHERE = {
     "dev": {
         "AUTHLIMIT_UID", "AUTHLIMIT_GID", "AUTHLIMIT_KEYS_DIR", "CASDOOR_INIT_DIR",  # the Makefile's GATEWAY_ENV: the host user and where `make authlimit-keys` made the keys, and where `make front-door-bootstrap` writes Casdoor's init file
-        "AUTHLIMIT_UPSTREAM",  # chosen per make target (the echo stub, or the API behind the door)
+        "AUTHLIMIT_UPSTREAM", "WEB_UPSTREAM",  # chosen per make target (the echo stub, or the API and the web client behind the door)
         "TELEGRAM_UPSTREAM", "TELEGRAM_CA_FILE",  # `make telegram-up`: Caddy's upstream for /telegram/*, and the root certificate it exports for the bot to trust
         "CASDOOR_DB_PASSWORD", "CASDOOR_ADMIN_PASSWORD",  # generated once by `make front-door-up` into a second --env-file outside the repo
         "HOME",  # the shell's

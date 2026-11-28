@@ -1,0 +1,34 @@
+[
+  {
+    "name": "header mode says nothing about an authorization server",
+    "env": { "AUTH_MODE": "headers", "WEB_AUTH_ISSUER": "https://unused.example.test" },
+    "page": { "mode": "headers" }
+  },
+  {
+    "name": "identity mode is the default, with Settings' own defaults",
+    "env": {},
+    "page": {
+      "mode": "identity",
+      "issuer": "https://auth.localhost:8443",
+      "audience": "https://api.localhost:8443",
+      "scope": "api:chat",
+      "client_id_prefix": "api-"
+    }
+  },
+  {
+    "name": "trailing slashes go, and a value cannot break out of the attribute",
+    "env": {
+      "AUTH_MODE": "identity",
+      "WEB_AUTH_ISSUER": "https://auth.example.test/",
+      "WEB_AUTH_AUDIENCE": "https://api.example.test/",
+      "WEB_AUTH_SCOPE": "api:chat \"><script>alert(1)</script>"
+    },
+    "page": {
+      "mode": "identity",
+      "issuer": "https://auth.example.test",
+      "audience": "https://api.example.test",
+      "scope": "api:chat \"><script>alert(1)</script>",
+      "client_id_prefix": "api-"
+    }
+  }
+]

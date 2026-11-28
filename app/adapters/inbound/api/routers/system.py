@@ -13,19 +13,19 @@ router = APIRouter()
 
 @router.get("/", response_class=HTMLResponse, tags=["web"])
 def ui() -> str:
-    """The built-in web UI (pattern 29): the web client in `web/`, built to
-    static files, with no third-party script. It talks only to the published
-    chat, session and ingest endpoints. 503 when the client has not been
-    built (`make web-build`; the Docker image builds it). Read from disk per
-    request (not cached), so a rebuild and a refresh is enough during
-    development — this isn't a hot path.
+    """The web UI (pattern 29) for an API run on the host: the web client in
+    `web/`, built to static files, with no third-party script. It talks only to
+    the published chat, session and ingest endpoints. 503 when the client has
+    not been built (`make web-build`). In containers the page is not the API's:
+    the `web` service serves it. Read from disk per request (not cached), so a
+    rebuild and a refresh is enough during development.
     """
     try:
         page = (web_auth.WEB_DIST / "index.html").read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=503,
-            detail="The web client is not built. Run `make web-build` (needs Node 22); the Docker image builds it.",
+            detail="The web client is not built here. For `make serve` run `make web-build` (needs Node 22); in containers the `web` service serves the page.",
         ) from exc
     return web_auth.render(page)
 

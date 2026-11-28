@@ -1,7 +1,7 @@
 .venv/
 **/node_modules/
-# The image builds the web client itself (Dockerfile's `web` stage): never copy in a build from this machine.
-web/dist/
+# The web client is its own image, built from its own directory (web/Dockerfile).
+web/
 __pycache__/
 *.pyc
 .git/

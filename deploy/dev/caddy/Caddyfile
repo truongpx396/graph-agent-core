@@ -24,6 +24,12 @@
 	}
 }
 
+# The page and its bundle: the web client's own server (`web:8080`, set by the same make targets), or the same stub by default so `make authlimit-smoke` sees what it was
+# given.
+(web_proxy) {
+	reverse_proxy {$WEB_UPSTREAM:authlimit-echo:8000}
+}
+
 # The Telegram bot's own listener (TELEGRAM_LISTEN_PORT, default 8081). By default the bot runs on the host (`make telegram`; it binds loopback unless TELEGRAM_LISTEN_HOST=0.0.0.0,
 # which a container reaching it as host.docker.internal needs); `make telegram-up` runs it as a container and sets TELEGRAM_UPSTREAM=telegram-bot:8081. Resolved by compose's `:-`,
 # as AUTHLIMIT_UPSTREAM is, because Caddy's own default only fires on an UNSET variable.

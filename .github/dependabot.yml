@@ -3,7 +3,7 @@
 # with our secrets), but it also never updates itself: without this file the pins freeze at
 # today's versions and quietly miss security fixes in the actions themselves.
 #
-# github-actions, docker, authlimit's Go modules and the web client's npm lock. The docker entry reads the three Dockerfiles' pinned `FROM` lines (the
+# github-actions, docker, authlimit's Go modules and the web client's npm lock. The docker entry reads the four Dockerfiles' pinned `FROM` lines (the
 # base images and uv, each pinned by digest, ENGINEERING_PATTERNS.md pattern 76) and proposes a new digest weekly: that is what keeps a pinned base
 # image fresh. authlimit's was not listed until 2026-11-26, and its image had fallen behind two standard-library security releases. The compose files are NOT read (the `docker-compose` ecosystem would also propose postgres major versions); the LiteLLM
 # image digest there is bumped by hand, with `make gateway-check`. The pip ecosystem is left out on purpose:
@@ -73,6 +73,7 @@ updates:
       - /
       - /services/ml-service
       - /services/authlimit
+      - /web
     schedule:
       interval: weekly
     # The intent: a release has to be two weeks old before it is proposed (uv's 0.13 line was days old when the pin was chosen, and a base

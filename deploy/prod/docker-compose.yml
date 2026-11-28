@@ -3,7 +3,7 @@
 #
 # One compose project made of the parts under `include`, named as dev's are:
 #   infra.yml       Postgres, PgBouncer, the queue's Redis and the answer cache's, Qdrant, LiteLLM
-#   app.yml         the ML service, the API, the two workers, the MCP gateway and the opt-in Telegram bot
+#   app.yml         the ML service, the API, the web client, the two workers, the MCP gateway and the opt-in Telegram bot
 #   gateway.yml     the front door: Caddy, authlimit, Casdoor (as dev's; the routing is deploy/shared/caddy/gateway.caddyfile)
 #   collectors.yml  the exporters and agents that feed the observability droplet
 #
@@ -14,7 +14,7 @@
 #
 # A domain is REQUIRED: identity needs an https issuer (pattern 98; specs/018 T069).
 #
-# CI builds the three images and publishes them to GHCR; .github/workflows/deploy.yml rsyncs these files with deploy/prod/caddy/, deploy/shared/caddy/, litellm-config.yaml, postgres-init/ and
+# CI builds the four images and publishes them to GHCR; .github/workflows/deploy.yml rsyncs these files with deploy/prod/caddy/, deploy/shared/caddy/, litellm-config.yaml, postgres-init/ and
 # observability/ to /opt/graph-agent-core, and runs `deploy/prod/release.sh <sha>`, which pulls and `up -d`s through `deploy/prod/compose.sh` (compose.sh is `docker compose --project-directory . -f deploy/prod/docker-compose.yml`, plus the crawler overlay if enabled). Services use `image:`, never `build:`, so the
 # droplet never compiles onnxruntime's dependency chain. The droplet's .env is made once by hand (deploy/prod/prod.env.example); CI never touches it.
 #

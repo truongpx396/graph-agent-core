@@ -3,9 +3,14 @@
 The browser UI of Graph Agent Core: React, TypeScript, Vite, Tailwind, TanStack Query (server state), Zustand (client state), oxlint and
 Vitest. It talks only to the HTTP API in [`openapi.json`](../openapi.json), and renders only the documented stream events.
 
-It is the page the API serves ([specs/023](../specs/023-web-client/plan.md)): `GET /` is `dist/index.html`, with the sign-in mode written
-into its `<meta name="agent-auth">` tag by `app/adapters/inbound/api/web_auth.py`, and the bundle is under `/static/assets/` (public at
-the front door). The Docker image builds it; on the host, `make web-build` before `make serve`.
+It has **its own image and container** ([Dockerfile](Dockerfile), the `web` service; RUNTIME_PATTERNS.md 116). `make up-app` serves it at
+http://localhost:8085; behind the front door (`make up-all`, production) it is https://api.localhost:8443/ or the API's domain.
+
+`GET /` is the built `index.html`, with the sign-in mode written into its `<meta name="agent-auth">` tag, and the bundle is under
+`/static/assets/` (public at the front door). In the container Caddy writes the tag from `AUTH_MODE` and `WEB_AUTH_*`
+([server/agent-auth.tmpl](server/agent-auth.tmpl)); on the host the API does both (`app/adapters/inbound/api/web_auth.py`): `make web-build`
+before `make serve`. Change one writer and the other with it: [server/testdata/agent-auth.json](server/testdata/agent-auth.json) holds both
+to one answer (`make web-image-check`, and `tests/core/test_web_container.py`).
 
 ## Run it
 
@@ -18,7 +23,8 @@ make web-dev            # http://localhost:5173, hot reload; proxies /chat, /ing
 `WEB_API_TARGET=http://host:port make web-dev` points at another API. An API in `identity` mode answers the dev server with 401: sign-in
 redirects to the front door's own address, so it can only be tried there.
 
-`make web-check` runs what CI runs: the generated API types are fresh, lint, type check, tests, build.
+`make web-check` runs what CI runs: the generated API types are fresh, lint, type check, tests, build. `make web-image-check` builds the
+image and checks what it serves.
 
 ## Layout
 
@@ -29,7 +35,7 @@ src/
   features/
     auth/             sign-in (authorization code with PKCE) and the Authorization header
     chat/             the live conversation: model/ (messages, event reducer, turn store), ui/
-    sessions/         the conversation list, history pages, restoring a pause
+    sessions/         the sidebar's conversation list (grouped by last activity), history pages, restoring a pause
     theme/            light and dark
     uploads/          documents for the knowledge base, with per-file progress
     workspace/        tenant, principal, domain, and each domain's text

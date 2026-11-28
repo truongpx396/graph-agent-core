@@ -21,12 +21,13 @@ OpenTelemetry counters and histograms (`app/core/metrics.py`) give the "how ofte
 - **Gap:** a SIGKILL loses unflushed metrics.
 
 ### 29. Built-in web UI
-The client in `web/` (React, TypeScript, Vite; [specs/023](../specs/023-web-client/plan.md)), built to static files: the API serves `index.html` at `GET /` and the bundle under `/static/assets/` (both public at the front door), with no third-party script. It talks only to the published endpoints and renders only the documented stream events, with types generated from `openapi.json`. It uses `fetch()`, not `EventSource`, because the endpoint is POST and needs identity headers.
+The client in `web/` (React, TypeScript, Vite; [specs/023](../specs/023-web-client/plan.md)), built to static files: `index.html` at `GET /` and the bundle under `/static/assets/` (both public at the front door), with no third-party script. In containers its own image serves them (pattern 116); under `make serve` the API does. It talks only to the published endpoints and renders only the documented stream events, with types generated from `openapi.json`. It uses `fetch()`, not `EventSource`, because the endpoint is POST and needs identity headers.
 - **Bug:** sync checkpointer calls raised `asyncio.InvalidStateError` on a live server; they are `aupdate_state`/`aget_state` now. A `MemorySaver` suite could not have caught it.
 - **Bug:** a transcript was read whole. `GET .../messages` takes `limit` (1-500) and `before`, and the page loads the last 50 (R27).
 - **Bug:** one hand-written 2,000-line HTML file could not be type-checked or unit-tested, and seven bugs sat in state shared between its handlers (an approval pause left the rest of the answer styled as a draft; events from a left conversation ended the next one's turn; the full list is in [specs/023/plan.md](../specs/023-web-client/plan.md)). The turn is now a pure event reducer inside feature modules whose imports a test checks.
 - **Gap:** a dropped stream is not read on with `Last-Event-ID`.
-- **Gap:** bundle file names carry a content hash, so while several API replicas are being replaced a page from a new one can ask an old one for a file it does not have (not observed; no deploy has run).
+- **Gap:** bundle file names carry a content hash, so while the server of the page is being replaced a page from a new one can ask an old one for a file it does not have (not observed; no deploy has run).
+- **Bug:** the transcript jumped to the end on every token, so a reader could not scroll up while an answer streamed. It follows only while the reader is at the end, and reads the position before each update too: a token can arrive between a scroll and its event.
 
 ### 30. Canonical error envelope
 One shape, `{code, message, details}`, from one `ErrorCode` enum (`app/core/errors.py`) for every SSE `error` event and CLI error. `internal_error_envelope(exc)` returns a fixed message plus `error_class`, never `str(exc)`.
@@ -87,3 +88,9 @@ Every line is JSON. The ids of the request or job in progress are bound once (`a
 - **Never mixed:** a later run in the same request sends Langfuse no name or input (upsert on id); a job run again after a crash gets its own trace, linked; a client's `traceparent` is ignored; the LiteLLM proxy is never sent `trace_id` or `existing_trace_id`, which would merge its per-call records into ours and count each call twice. Its own records keep its own ids.
 - **Metadata only.** Names, counts, ids and an error's class: `record_exception` is off, and our `TracerProvider` is not the global one, so a library's spans are not exported.
 - **Gap:** the trace starts at the API (not Caddy or authlimit) and has no spans for outbound HTTP, Postgres or Redis; their time is inside the node that called them. [specs/024](../specs/024-distributed-tracing/spec.md) has the decisions.
+
+### 116. The web client is its own container
+`web/Dockerfile` (Vite builds with Node, Caddy serves) and the `web` service, in the dev stack and production. The front door sends it `/` and `/static/*`; everything else goes to the API as before. In the dev stack its port is a whole app on one origin (http://localhost:8085): it passes on the paths the client requests. What the page is told about sign-in is written per request from the container's environment (`web/server/agent-auth.tmpl`), so one image serves every environment. `web_auth.page_config` writes the same for `make serve`, and `web/server/testdata/agent-auth.json` holds the two to one answer.
+- **Why:** the page was a stage of the API's image: nothing showed a web app running, a style change rebuilt the API, and the Python process served static files.
+- **Bug (building it):** the official Caddy binary carries a file capability, and under `cap_drop: ALL` the kernel refuses to execute it (`operation not permitted`, as root too). The image removes the capability. `scripts/checks/web_image.py` runs the built image under the same hardening, which a build alone does not show.
+- **Gap:** no access log (a sign-in returns to `/?code=...`; the front door's redacted log covers the page there), no `script-src` policy, and one replica in production.
