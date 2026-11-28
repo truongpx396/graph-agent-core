@@ -80,10 +80,8 @@ MAX_SUBAGENT_TOKENS_PER_RUN = 4000
 STATE_SCHEMA_VERSION = 1
 
 
-def concat_or_reset(
-    current: list[tuple[int, float]] | None, update: list[tuple[int, float]] | None
-) -> list[tuple[int, float]]:
-    """Reducer for `State.subagent_spend`: list-concatenate, or reset on `None`.
+def concat_or_reset(current: list[Any] | None, update: list[Any] | None) -> list[Any]:
+    """Reducer for `State.subagent_spend` and `State.turn_usage`: list-concatenate, or reset on `None`.
 
     Why not plain `operator.add`: ToolNode runs a turn's tool calls
     CONCURRENTLY, so several `run_subagent` calls each append one entry via
@@ -128,6 +126,11 @@ class State(TypedDict):
     # Reset every turn by validate_input (it writes `None`, which
     # `concat_or_reset` turns into []), same as total_tokens/
     # total_cost_usd — unlike history_summary, must NOT accumulate turn over turn.
+    turn_usage: Annotated[list[dict[str, Any]], concat_or_reset]  # One entry per model
+    # call this turn (`metering.MeteredCall.usage_entry`), subagents' included: what the `usage` event is
+    # summed from (specs/025). Appended by every node that calls a model (some run in parallel, hence the
+    # reducer); reset by validate_input, so it covers the turn across an approval pause. Nothing routes on
+    # it. No STATE_SCHEMA_VERSION bump: a checkpoint without the key resumes with an empty list.
     require_approval: bool  # Opt-in: gate tool calls behind human_approval.
     approved: bool  # Set by human_approval; read by graph_edge_route_after_human_approval. Reset
     # every turn by validate_input (it is not re-run on a resume, so a pause's

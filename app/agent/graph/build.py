@@ -38,7 +38,6 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 
 from app.agent.graph.agent_node import make_graph_node_agent
@@ -96,7 +95,9 @@ from app.agent.graph.stream_events import (
     replaced_the_answer,
     trimmed_the_history,
 )
+from app.agent.graph.tool_display import approval_request
 from app.agent.graph.tool_guards import graph_node_tool_batch_guard
+from app.agent.graph.tool_node import AnnouncingToolNode
 from app.agent.graph.utils import (
     NodeFn,
     RouterFn,
@@ -347,7 +348,8 @@ def build_graph(
     # from one AIMessage concurrently — no extra wiring needed. Wrapped in a function so it gets
     # the same lifecycle logging as every other node (pattern 14); the ToolNode does the work and
     # its result (messages, or Commands from a tool like run_subagent) is returned unchanged.
-    tool_node = ToolNode(domain_tools, handle_tool_errors=friendly_tool_error)
+    tool_display = domain.tool_display()
+    tool_node = AnnouncingToolNode(domain_tools, capabilities=tool_capabilities, display=tool_display, handle_tool_errors=friendly_tool_error)
 
     async def graph_node_tools(state: State, config: RunnableConfig) -> Any:
         return await tool_node.ainvoke(state, config)
@@ -374,7 +376,8 @@ def build_graph(
     # same bug (pattern 7).
     add("agent", graph_node_agent, retry_policy=AGENT_RETRY_POLICY)
     add("tools", graph_node_tools)
-    add("human_approval", make_graph_node_human_approval(deps.interrupt or interrupt))
+    approval_facts = functools.partial(approval_request, capabilities=tool_capabilities, display=tool_display)
+    add("human_approval", make_graph_node_human_approval(deps.interrupt or interrupt, approval_facts))
     add("tool_batch_guard", graph_node_tool_batch_guard_bound)
     # These four announce what the client should see (`stream_events.py`) instead of the runtime recognising them by name.
     add("check_output", announcing(graph_node_check_output_bound, judged_the_answer))

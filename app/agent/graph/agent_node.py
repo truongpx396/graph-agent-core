@@ -376,6 +376,7 @@ def make_graph_node_agent(
             "iterations": state.get("iterations", 0) + 1,
             "total_tokens": total_tokens,
             "total_cost_usd": total_cost_usd,
+            "turn_usage": [call.usage_entry],
         }
 
     return graph_node_agent

@@ -218,9 +218,15 @@ class FakeRedis:
         return sum(1 for key in keys if key in self.kv or key in self.streams)
 
     async def eval(self, script, numkeys, *keys_and_args):
-        """Only ever called with streams.py's own two lock scripts: `_RELEASE_LOCK_SCRIPT` (compare-and-delete) and `_RENEW_LOCK_SCRIPT` (compare-and-
-        extend). Reimplements just those, not a real Lua interpreter, same "just enough" scope as every other method here."""
+        """Only ever called with streams.py's own scripts: `_RELEASE_LOCK_SCRIPT` (compare-and-delete), `_RENEW_LOCK_SCRIPT` (compare-and-extend) and
+        `_TAKE_CANCEL_FLAG_SCRIPT` (keep a stop newer than the job, else delete). Reimplements just those, not a real Lua interpreter, same "just
+        enough" scope as every other method here; tests/integration/test_queue_real_redis.py runs the real ones."""
         key, token = keys_and_args[0], keys_and_args[1]
+        if script == streams._TAKE_CANCEL_FLAG_SCRIPT:
+            if key in self.kv and float(self.kv[key]) >= float(token):
+                return 1
+            self.kv.pop(key, None)
+            return 0
         if self.kv.get(key) != token:
             return 0
         if script == streams._RENEW_LOCK_SCRIPT:

@@ -25,17 +25,22 @@ from app.agent.tools.builtin import (
     search_docs,
     skill_tools_first,
 )
+from app.agent.tools.display import SHARED_TOOL_DISPLAY
 from app.agent.tools.prompt_files import load_prompt
 from app.agent.tools.run_subagent_domain import make_domain_subagent_tool
 from app.core.security import Policy
+from app.domains.sales.display import TOOL_DISPLAY as _SALES_TOOL_DISPLAY
 from app.domains.sales.tools import SALES_POLICY
 from app.domains.sales.tools import TOOL_CAPABILITIES as _SALES_TOOL_CAPABILITIES
 from app.domains.sales.tools import TOOLS as _SALES_TOOLS
-from app.ports.outbound.domains import AgentManifest, DomainPlugin
+from app.domains.shared.display import SANDBOX_DISPLAY, WEB_SEARCH_DISPLAY
+from app.ports.outbound.domains import AgentManifest, DomainPlugin, ToolDisplay
 
 _SKILL_SEARCH, _USE_SKILL = make_skill_tools("sales")
 
 _REUSED_READ_ONLY_TOOLS = [search_docs, _SKILL_SEARCH, _USE_SKILL, ask_clarification]
+
+_DISPLAY: dict[str, ToolDisplay] = {**SHARED_TOOL_DISPLAY, **WEB_SEARCH_DISPLAY, **SANDBOX_DISPLAY, **_SALES_TOOL_DISPLAY}
 
 _RUN_SUBAGENT = make_domain_subagent_tool(
     domain="sales",
@@ -47,6 +52,7 @@ _RUN_SUBAGENT = make_domain_subagent_tool(
         "use_skill": SHARED_TOOL_CAPABILITIES["use_skill"],
         "ask_clarification": SHARED_TOOL_CAPABILITIES["ask_clarification"],
     },
+    tool_display=_DISPLAY,
 )
 # None unless sales/subagents/ holds an AGENT.md.
 
@@ -69,6 +75,9 @@ class _SalesDomainPlugin:
         if _RUN_SUBAGENT is not None:
             merged["run_subagent"] = SHARED_TOOL_CAPABILITIES["run_subagent"]
         return merged
+
+    def tool_display(self) -> dict[str, ToolDisplay]:
+        return dict(_DISPLAY)
 
     def policy(self) -> Policy:
         return SALES_POLICY

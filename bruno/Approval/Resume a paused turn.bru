@@ -26,5 +26,6 @@ assert {
 }
 
 docs {
-  Approves the pending tool call; `"approved": false` rejects it. Send the same `X-Domain` as the original turn.
+  Approves the pending tool call; `"approved": false` rejects it. Send the same `X-Domain` as the original turn. Add `"approval_id"` (from the
+  `approval_required` event or the pending approval) to answer only that pause: if another is waiting, nothing runs (`approval_superseded`).
 }

@@ -39,6 +39,7 @@ from app.agent.graph.stream_events import STREAM_EVENT
 from app.agent.runtime import cancelled_turn
 from app.agent.runtime import core as runtime_module
 from app.agent.runtime.held_answer import HeldAnswer
+from app.agent.runtime.usage import usage_event
 from app.core import gateway, llm_tracing, log_context, metrics, spans
 from app.core.config import (
     REQUEST_TIMEOUT_SECONDS,
@@ -323,8 +324,9 @@ async def _run_graph_stream(graph: AgentGraph, graph_input: dict[str, Any] | Com
     """Shared core of astream_events_turn/astream_events_resume: drives one `graph.astream_events()` call,
     translates events into typed shapes, and yields exactly one terminal event.
 
-    - `{"type": "approval_required", "tool_calls": [...]}`: paused at human_approval's interrupt
+    - `{"type": "approval_required", "tool_calls": [...], "approval_id": ..., "items": [...]}`: paused at human_approval's interrupt
       (graph/hitl.py); resume via `astream_events_resume`.
+    - `{"type": "tool_start"}` / `{"type": "tool_end"}`: announced by the tools node (graph/tool_node.py), a subagent's calls included and tagged.
     - `{"type": "retry"}` (NOT terminal): discard everything streamed so far, because it was rejected or
       replaced (else old and retried answers render concatenated). A NODE announces it (`graph/stream_events.py`,
       `adispatch_custom_event`), and this function forwards the announcement without knowing which node it was:
@@ -346,6 +348,7 @@ async def _run_graph_stream(graph: AgentGraph, graph_input: dict[str, Any] | Com
       ran, and said so the same way. Informational; fires only when it trimmed something.
     - `{"type": "citations", "items": [...]}` / `{"type": "followups", "items": [...]}`: just before "done",
       when the answer cited something / suggest_followups (pattern 27) produced any.
+    - `{"type": "usage", ...}`: after those, what the turn's model calls used (runtime/usage.py).
     - `{"type": "done"}`: the turn finished.
     - `{"type": "error", "content": "<message>"}`: also a user-initiated stop (TurnCancelledError), a terminal
       envelope like any error (pattern 30).
@@ -359,6 +362,7 @@ async def _run_graph_stream(graph: AgentGraph, graph_input: dict[str, Any] | Com
     used_citations: list[dict[str, Any]] = []
     ungrounded_claims_count = 0
     followups: list[str] = []
+    usage: dict[str, Any] | None = None
     synthetic_token = ""
     # A failed model call emits on_chat_model_start and some on_chat_model_stream but never on_chat_model_end,
     # a finished one always does: so a start while a call is still open, one that had sent tokens, is a retry.
@@ -422,34 +426,18 @@ async def _run_graph_stream(graph: AgentGraph, graph_input: dict[str, Any] | Com
                     open_call_streamed = True
                     yield answer_token(released)
 
-            elif kind == "on_tool_start":
-                payload = {
-                    "type": "tool_start",
-                    "tool": event["name"],
-                    "args": event["data"].get("input", {}),
-                }
-                subagent_name = event.get("metadata", {}).get("subagent_name")
-                if subagent_name:
-                    # Tool call happened inside a run_subagent's nested run
-                    # (tagged via nested_config["metadata"]); tag the
-                    # payload so the UI attributes it to the subagent rather
-                    # than a top-level tool call.
-                    payload["subagent"] = subagent_name
-                yield payload
-
-            elif kind == "on_tool_end":
-                payload = {"type": "tool_end", "tool": event["name"]}
-                subagent_name = event.get("metadata", {}).get("subagent_name")
-                if subagent_name:
-                    payload["subagent"] = subagent_name
-                yield payload
-
-            elif kind == "on_custom_event" and event["name"] == STREAM_EVENT and not event_metadata.get("subagent_name"):
+            elif kind == "on_custom_event" and event["name"] == STREAM_EVENT:
                 # A node announced what the client should see (`graph/stream_events.py`): the runtime no longer recognises nodes by name. A nested
-                # `run_subagent` graph shares the node names and its announcements arrive on THIS stream, tagged `metadata.subagent_name`: they
-                # describe the subagent's own turn, and acting on them cleared the parent's answer and showed the subagent's text as the answer.
+                # `run_subagent` graph shares the node names and its announcements arrive on THIS stream, tagged `metadata.subagent_name`. Its tool
+                # calls are shown, tagged with whose they are. Everything else describes the subagent's own turn: acting on it cleared the parent's
+                # answer and showed the subagent's text as the answer.
                 announced = event["data"]
-                if announced["type"] == "hold":
+                subagent_name = event_metadata.get("subagent_name")
+                if announced["type"] in ("tool_start", "tool_end"):
+                    yield {**announced, "subagent": subagent_name} if subagent_name else announced
+                elif subagent_name:
+                    continue
+                elif announced["type"] == "hold":
                     held.hold(announced["until"])  # from `agent`, before its call; not for the client
                 elif announced["type"] == "release":
                     if released := held.release():
@@ -571,6 +559,8 @@ async def _run_graph_stream(graph: AgentGraph, graph_input: dict[str, Any] | Com
             terminal_event = {
                 "type": "approval_required",
                 "tool_calls": pending["tool_calls"],
+                # Absent from a pause an older build checkpointed.
+                **{key: pending[key] for key in ("approval_id", "items") if key in pending},
             }
         elif state.next:
             # Nodes are still pending, but none is waiting at an interrupt: the stream ended while
@@ -625,6 +615,8 @@ async def _run_graph_stream(graph: AgentGraph, graph_input: dict[str, Any] | Com
                     synthetic_token = skipped_text
             trace.update(output="".join(final_answer))
             await _record_turn_metrics(time.monotonic() - start, _turn_outcome(state.values), state.values)
+            if "turn_usage" in state.values:  # a graph that records no usage has none to report, which is not the same as none used
+                usage = await usage_event(state.values["turn_usage"])
             # Yielded only now, after the turn is recorded: this clause is not covered by the
             # `except` branches above, so a consumer that closed the stream at this yield used
             # to leave a finished turn with a blank trace and no metrics. The client still gets
@@ -653,6 +645,8 @@ async def _run_graph_stream(graph: AgentGraph, graph_input: dict[str, Any] | Com
         # until now — the web UI already had follow-up chips with no
         # event feeding them.
         yield {"type": "followups", "items": followups}
+    if usage is not None:
+        yield usage
     yield terminal_event
 
 
@@ -933,7 +927,7 @@ async def _decline_every_pause(first_run: AsyncGenerator[dict[str, Any], None], 
 
 
 async def astream_events_resume(
-    thread_id: str, *, approved: bool, ctx: SecurityCtx, cancel_check: CancelCheck | None = None, admitted: bool = False
+    thread_id: str, *, approved: bool, ctx: SecurityCtx, approval_id: str | None = None, cancel_check: CancelCheck | None = None, admitted: bool = False
 ) -> AsyncGenerator[dict[str, Any], None]:
     """Resume a turn paused by astream_events_turn(require_approval=True): the streaming counterpart of
     `graph.invoke(Command(resume=approved), config)`. `thread_id` must match the paused turn.
@@ -961,6 +955,11 @@ async def astream_events_resume(
     `admitted=True` skips the check for a resume that is a step of a request which already passed it
     (`astream_events_turn_unattended`'s decline loop), where refusing would strand the conversation at its
     pause.
+
+    `approval_id` names the pause being answered (`approval_required`'s). One that is not the pause waiting now is refused
+    (`approval_superseded`) and nothing runs: a double click, an old tab or a job run again after a crash must not approve what nobody was
+    shown (pattern 119). None answers whatever is pending, as before. The check and the resume are not one step; the worker's per-thread
+    lock is what keeps another job from changing the pause between them.
     """
     refusal = None if admitted else await runtime_module.allowance_refusal(ctx)
     if refusal is not None:
@@ -975,6 +974,13 @@ async def astream_events_resume(
             yield {"type": "error", "content": envelope.message, **envelope.to_dict()}
             yield {"type": "done"}
             return
+        if approval_id is not None:
+            pending = await paused_approval_async(graph, {"configurable": {"thread_id": thread_id}})
+            if pending is None or pending["approval_id"] != approval_id:
+                metrics.agent_human_approval_total.labels(decision="superseded").inc()
+                envelope = ErrorEnvelope(code=ErrorCode.APPROVAL_SUPERSEDED, message="This request was replaced by a newer one, so nothing was decided.")
+                yield {"type": "error", "content": envelope.message, **envelope.to_dict()}
+                return
 
         async with aclosing(
             _run_turn("chat-turn-stream-resume", graph, thread_id, ctx, lambda: Command(resume=approved), f"resume(approved={approved})", cancel_check)

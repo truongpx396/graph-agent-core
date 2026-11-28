@@ -35,6 +35,7 @@ class Pending:
     thread_id: str
     text: str  # what the approval message said, so a refused resume can put the same message (and buttons) back
     message_id: int | None = None
+    approval_id: str | None = None  # the pause these buttons answer: a tap after another has replaced it approves nothing (specs/025)
 
 
 def callback_data(token: str, *, approve: bool) -> str:
@@ -60,14 +61,28 @@ def _shorten(value: object) -> str:
     return text if len(text) <= _ARG_CHARS else text[: _ARG_CHARS - 1] + "…"
 
 
-def render(tool_calls: list[dict[str, Any]]) -> str:
-    """What the person is asked to decide: every pending call, its name and its arguments, clipped."""
+def render(tool_calls: list[dict[str, Any]], items: list[dict[str, Any]] | None = None) -> str:
+    """What the person is asked to decide: every pending call in the server's words (`items`: title, effect, where, who sees it, whether it can be
+    undone), then its arguments, clipped. An API that sends no items gets the call by name."""
     lines = ["⚠️ This needs your approval before it runs:", ""]
-    for call in tool_calls:
+    described: list[dict[str, Any] | None] = list(items) if items and len(items) == len(tool_calls) else [None] * len(tool_calls)
+    for call, item in zip(tool_calls, described, strict=True):
         raw_args = call.get("args")
         args = raw_args if isinstance(raw_args, dict) else {}
         shown = ", ".join(f"{key}={_shorten(value)}" for key, value in args.items())
-        lines.append(f"• {call.get('name', '?')}({shown})")
+        if item is None:
+            lines.append(f"• {call.get('name', '?')}({shown})")
+            continue
+        facts = [
+            item.get("target"),
+            f"seen by: {item['visible_to']}" if item.get("visible_to") else None,
+            None if item.get("reversible") else "cannot be undone",
+        ]
+        lines += [f"• {item.get('title', '?')}", f"  {_shorten(item.get('effect', ''))}"]
+        if any(facts):
+            lines.append("  " + " · ".join(fact for fact in facts if fact))
+        if shown:
+            lines.append(f"  details: {shown}")
     text = "\n".join(lines)
     return text if len(text) <= _TEXT_CHARS else text[: _TEXT_CHARS - 1] + "…"
 
@@ -87,8 +102,8 @@ class ApprovalStore:
     def _thread(self, thread_id: str) -> str:
         return f"telegram:approval-thread:{self._domain}:{thread_id}"
 
-    async def create(self, *, user_id: int, chat_id: int, thread_id: str, text: str) -> Pending:
-        pending = Pending(secrets.token_urlsafe(16), user_id, chat_id, thread_id, text)
+    async def create(self, *, user_id: int, chat_id: int, thread_id: str, text: str, approval_id: str | None = None) -> Pending:
+        pending = Pending(secrets.token_urlsafe(16), user_id, chat_id, thread_id, text, approval_id=approval_id)
         await self._save(pending)
         await self._redis.set(self._thread(thread_id), pending.token, ex=self._ttl)
         return pending

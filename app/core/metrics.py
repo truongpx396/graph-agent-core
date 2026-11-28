@@ -158,7 +158,7 @@ agent_tool_errors_total = Counter(
 
 agent_human_approval_total = Counter(
     "agent_human_approval_total", "HITL approval decisions", ["decision"]
-)  # decision: approved | rejected
+)  # decision: approved | rejected | cancelled | superseded (the pause answered had been replaced)
 
 agent_retry_total = Counter(
     "agent_retry_total", "Output-quality retries triggered by graph_edge_route_after_check_output"

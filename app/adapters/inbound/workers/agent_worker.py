@@ -45,6 +45,11 @@ three; `"turn_continue"` comes only from this module's reclaim path.
 The producer writes "queued" with a turn or resume job; the worker that takes one publishes "started" before it runs anything (`_take_job`), again if
 the job is reclaimed. A cancel has neither: it is answered by its outcome.
 
+## A stop pressed while the job waited
+
+`_take_job` also reads the stop flag. A stop sent after the job was queued is for it: a "turn" runs nothing, a "resume" runs nothing and ends the
+pause, and a "turn_continue" is continued with the flag left up, so its first cancel check stops it and takes the half-done turn out of the thread.
+
 ## Ack and crash reclaim
 
 A job publishes every event to the results stream, then acks, which is `streams.py::ack_and_delete`: `XACK` alone leaves the entry in the stream for
@@ -55,7 +60,7 @@ request pending; `_reclaim_loop` (every worker runs one) sweeps those via `strea
 - `"cancel"`: always (idempotent).
 - `"resume"`: always, because `app/core/tool_idempotency.py` guards every `mutating`/`outward` tool and a
   resume re-invokes the pending calls under the same `tool_call_id`s, so finished ones return their cached
-  result.
+  result. It answers only the pause it was first run against (`_answered_pause`), never a later one.
 - `"turn"`/`"turn_continue"`: `_classify_reclaimed_turn` reads the checkpoint since the last `HumanMessage`:
   - `"dead_letter"`: the checkpoint can't be read; the turn already produced its final answer
     (`reclaimed_turn.turn_already_completed`; a retry would double-record its cost); or it crashed between a real
@@ -95,7 +100,6 @@ from app.adapters.inbound.workers.streams import (
     ack_and_delete,
     acquire_thread_lock,
     claim_free_slots,
-    clear_cancel_flag,
     ensure_consumer_group,
     is_cancelled,
     observe_queue_wait,
@@ -107,8 +111,10 @@ from app.adapters.inbound.workers.streams import (
     release_consumer,
     release_slots,
     release_thread_lock,
+    remember_answered_pause,
     renew_thread_lock,
     republish_job,
+    take_cancel_flag,
     trim_stale_entries,
 )
 from app.agent.runtime import reclaimed_turn
@@ -125,6 +131,7 @@ from app.agent.runtime.stream import (
     astream_events_turn,
     astream_events_turn_unattended,
     cancel_run,
+    get_pending_approval,
 )
 from app.bootstrap import close_adapters, verify_wired, wire
 from app.core import log_context, metrics, spans
@@ -253,19 +260,33 @@ async def _publish_events(client: redis.Redis, request_id: str, events: AsyncGen
             await publish_result(client, request_id, event)
 
 
-async def _take_job(client: redis.Redis, request_id: str, thread_id: str) -> None:
-    """The first thing a turn, resume or continue job does: forget a stale cancel flag, then tell the client a worker has it. In that order: a client
-    may press stop the moment it is told, and a clear afterwards would erase that. If the publish fails the job fails with nothing run."""
-    await clear_cancel_flag(client, thread_id)
+async def _take_job(client: redis.Redis, request_id: str, payload: dict[str, Any]) -> bool:
+    """The first thing a turn, resume or continue job does: deal with the stop flag, then tell the client a worker has it. In that order: a client may
+    press stop the moment it is told, and a clear afterwards would erase that. True when the person already pressed stop while the job waited. If the
+    publish fails the job fails with nothing run."""
+    stopped = await take_cancel_flag(client, payload["thread_id"], payload.get("enqueued_at"))
     await publish_result(client, request_id, status_event("started", worker=WORKER_LABEL))
+    return stopped
+
+
+def _cancelled_event() -> dict[str, Any]:
+    envelope = ErrorEnvelope(code=ErrorCode.CANCELLED, message="Cancelled by user.")
+    return {"type": "error", "content": envelope.message, **envelope.to_dict()}
+
+
+async def _end_stopped_job(client: redis.Redis, request_id: str, release_lock: ReleaseLock) -> None:
+    """The terminal event of a job stopped before it ran, counted like any other cancelled turn."""
+    metrics.agent_streaming_cancellation_total.inc()
+    metrics.agent_requests_total.labels(outcome="cancelled").inc()
+    await release_lock()  # before the terminal event: see _publish_events
+    await publish_result(client, request_id, _cancelled_event())
 
 
 async def _process_turn(client: redis.Redis, request_id: str, payload: dict[str, Any], release_lock: ReleaseLock) -> None:
     thread_id = payload["thread_id"]
-    # A stale flag from an EARLIER turn on this thread_id (e.g. /chat/cancel
-    # raced with that turn already finishing on its own) must not
-    # spuriously cancel this brand-new one.
-    await _take_job(client, request_id, thread_id)
+    if await _take_job(client, request_id, payload):
+        await _end_stopped_job(client, request_id, release_lock)  # nothing of the turn exists yet: not even the question is in the thread
+        return
 
     async def cancel_check() -> bool:
         return await is_cancelled(client, thread_id)
@@ -305,7 +326,8 @@ async def _process_turn_continue(client: redis.Redis, request_id: str, payload: 
     `HumanMessage` checkpointed); kept on the payload rather than stripped,
     since `streams.py::republish_job` mutates only `kind`/the retry counter."""
     thread_id = payload["thread_id"]
-    await _take_job(client, request_id, thread_id)  # see _process_turn's own comment on this
+    # A stop that came while the job waited leaves the flag up: the continued run's first cancel check ends it and tidies the half-done turn.
+    await _take_job(client, request_id, payload)
 
     async def cancel_check() -> bool:
         return await is_cancelled(client, thread_id)
@@ -322,22 +344,35 @@ async def _process_turn_continue(client: redis.Redis, request_id: str, payload: 
 
 async def _process_resume(client: redis.Redis, request_id: str, payload: dict[str, Any], release_lock: ReleaseLock) -> None:
     thread_id = payload["thread_id"]
-    # Same reasoning as `_process_turn`: a flag left from the streaming phase
-    # that led to this pause (a /chat/cancel that raced the turn pausing on
-    # its own) must not cancel the approval the user has since given — the
-    # later action is the user's intent. A cancel pressed after this point is
-    # set after the clear and is seen by the polling below.
-    await _take_job(client, request_id, thread_id)
+    # A flag left from the streaming phase that led to this pause (a /chat/cancel that raced the turn pausing on its own) is older than this job,
+    # so it is removed: the approval the person gave since is the later word. A stop sent after the approval was queued wins over it.
+    if await _take_job(client, request_id, payload):
+        await cancel_run(thread_id, payload["ctx"])  # the approved call never runs, and the conversation is not left paused
+        await _end_stopped_job(client, request_id, release_lock)
+        return
 
     async def cancel_check() -> bool:
         return await is_cancelled(client, thread_id)
 
+    approval_id = await _answered_pause(client, request_id, payload)
     await _publish_events(
         client,
         request_id,
-        astream_events_resume(thread_id, approved=payload["approved"], ctx=payload["ctx"], cancel_check=cancel_check),
+        astream_events_resume(thread_id, approved=payload["approved"], ctx=payload["ctx"], approval_id=approval_id, cancel_check=cancel_check),
         release_lock,
     )
+
+
+async def _answered_pause(client: redis.Redis, request_id: str, payload: dict[str, Any]) -> str | None:
+    """The pause this resume job answers: the one the client named, else the one waiting when a worker first took the job, remembered under the job's id.
+
+    A reclaimed resume is run again. If the first run had reached a LATER pause before it died, resuming blindly approved a write nobody had been shown
+    (constitution Principle II); remembered, the later pause has another id and the job is refused as superseded."""
+    if payload.get("approval_id"):
+        return str(payload["approval_id"])
+    pending = await get_pending_approval(payload["thread_id"])
+    found = (pending or {}).get("approval_id")
+    return await remember_answered_pause(client, request_id, found)
 
 
 async def _process_cancel(client: redis.Redis, request_id: str, payload: dict[str, Any], release_lock: ReleaseLock) -> None:
@@ -345,11 +380,7 @@ async def _process_cancel(client: redis.Redis, request_id: str, payload: dict[st
     here (`cancel_run` reports "nothing to cancel", same as a thread never
     paused at all; see module docstring)."""
     cancelled = await cancel_run(payload["thread_id"], payload["ctx"])
-    if cancelled:
-        envelope = ErrorEnvelope(code=ErrorCode.CANCELLED, message="Cancelled by user.")
-        event = {"type": "error", "content": envelope.message, **envelope.to_dict()}
-    else:
-        event = {"type": "done"}
+    event = _cancelled_event() if cancelled else {"type": "done"}
     await release_lock()  # single-shot job, always terminal — see _publish_events's comment
     await publish_result(client, request_id, event)
 

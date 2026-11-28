@@ -11,6 +11,16 @@ from tests.openapi_conformance import event_schema, load, validator
 
 
 @pytest.fixture(autouse=True)
+def no_pause_is_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A resume job reads which pause is waiting from the graph's checkpoint; these tests drive a fake queue and no graph. A test about it patches this."""
+
+    async def nothing_pending(thread_id):
+        return None
+
+    monkeypatch.setattr(agent_worker, "get_pending_approval", nothing_pending)
+
+
+@pytest.fixture(autouse=True)
 def every_published_event_conforms_to_the_openapi_document(monkeypatch: pytest.MonkeyPatch) -> None:
     document = load("openapi.json")
     for module, path, method in ((agent_worker, "/chat/stream/queued", "post"), (ingest_worker, "/ingest/stream/{job_id}", "get")):

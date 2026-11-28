@@ -1777,7 +1777,7 @@ class TestMakeDomainSubagentTool:
         captured = {}
 
         async def fake_run_subagent_impl(
-            name, task, config, *, domain=None, registry=None, tools_by_name=None, llm=None, use_cache=False
+            name, task, config, *, domain=None, registry=None, tools_by_name=None, llm=None, display=None, use_cache=False
         ):
             captured["tools_by_name"] = tools_by_name
             captured["registry"] = registry

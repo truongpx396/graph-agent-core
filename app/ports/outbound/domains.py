@@ -20,11 +20,33 @@ concrete domains are in `app/domains/<name>/domain.py`; Ecorp is one of them, wi
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
 from app.core.security import Policy
 from app.ports.slot import Slot
+
+
+@dataclass(frozen=True)
+class Effect:
+    """What running one call would do, in words, for the person asked to approve it."""
+
+    text: str
+    target: str | None = None
+    visible_to: str | None = None
+    reversible: bool = False  # err toward caution: True only for a call that changes nothing or can be taken back in this app
+
+
+@dataclass(frozen=True)
+class ToolDisplay:
+    """How a person is told about a tool (specs/025). Code beside the tool, never model output: the runtime states these facts and every client renders
+    them, so none of them shows a tool id, parses arguments or guesses a risk. What a call's arguments or result put into the words is scrubbed and
+    bounded where the event is built (`app/agent/graph/tool_display.py`)."""
+
+    label: str  # "Create a support ticket"
+    describe: Callable[[Mapping[str, Any]], Effect] | None = None  # the call's arguments -> its effect; for every tool a person approves
+    summarize: Callable[[str], str | None] | None = None  # the tool's result -> one line, or None when there is nothing to say
 
 
 class DomainPlugin(Protocol):
@@ -42,6 +64,10 @@ class DomainPlugin(Protocol):
         see `app/agent/tools/builtin.py::SHARED_TOOL_CAPABILITIES`'s comment for the mandatory
         human_approval gate this feeds (`graph_edge_route_after_agent`, unchanged
         regardless of domain)."""
+        ...
+
+    def tool_display(self) -> Mapping[str, ToolDisplay]:
+        """Maps each tool name to how a person is told about it. A name missing here gets a generic label and the cautious effect."""
         ...
 
     def policy(self) -> Policy:

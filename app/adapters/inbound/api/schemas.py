@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, StringConstraints, model_validator
 
+from app.adapters.inbound.api.events import ApprovalItem
 from app.core.config import (
     CHAT_IMAGE_MAX_CHARS,
     CHAT_MAX_IMAGES,
@@ -66,6 +67,15 @@ class ResumeRequest(BaseModel):
     thread_id: str = Field(..., min_length=1, max_length=THREAD_ID_MAX_LENGTH, description="The paused conversation's thread id.")
     approved: bool = Field(
         ..., description="Approve (true) or reject (false) the pending tool call(s)."
+    )
+    approval_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=80,
+        description=(
+            "Which pause this answers: `approval_id` of the `approval_required` event or of the pending approval. If a different pause is waiting, "
+            "nothing runs (`approval_superseded`). Omitted, it answers whatever is pending when a worker takes it."
+        ),
     )
 
 
@@ -176,6 +186,8 @@ class PendingApproval(BaseModel):
         description="False if this checkpoint's state_schema_version no longer matches the running "
         "build — approve/reject would be refused; the caller should show it as unresumable, not a working button.",
     )
+    approval_id: str | None = Field(default=None, description="Send it with the answer. Null for a pause recorded by an older build.")
+    items: list[ApprovalItem] = Field(default_factory=list, description="One per tool call, in order: the same as the `approval_required` event's.")
 
 
 class HealthResponse(BaseModel):

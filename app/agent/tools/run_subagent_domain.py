@@ -16,10 +16,11 @@ from pydantic import BaseModel, Field, field_validator
 from app.agent.tools import run_subagent as subagent_tools_module
 from app.agent.tools.run_subagent import build_subagent_registry
 from app.core.untrusted import frame_untrusted
+from app.ports.outbound.domains import ToolDisplay
 
 
 def make_domain_subagent_tool(
-    domain: str, all_tools: list[BaseTool], tool_capabilities: Mapping[str, str]
+    domain: str, all_tools: list[BaseTool], tool_capabilities: Mapping[str, str], *, tool_display: Mapping[str, ToolDisplay] | None = None
 ) -> BaseTool | None:
     """Builds a `run_subagent` tool scoped to `domain` — same closed-enum
     menu, `RunSubagentArgs` shape, and mandatory read_only-only resolution
@@ -43,6 +44,7 @@ def make_domain_subagent_tool(
         return None
 
     tools_by_name = {t.name: t for t in all_tools}
+    display = dict(tool_display or {})  # so a call made inside a subagent is named for the person like any other
 
     # A per-domain Enum TYPE, not just distinct member values — reusing
     # SubagentName would mix this domain's menu with Ecorp's, and two
@@ -103,6 +105,7 @@ def make_domain_subagent_tool(
             domain=domain,
             registry=registry,
             tools_by_name=tools_by_name,
+            display=display,
             use_cache=True,
         )
         return Command(
@@ -110,6 +113,7 @@ def make_domain_subagent_tool(
                 # A specialist reads documents and records, so what it reports back is framed like what it read.
                 "messages": [ToolMessage(content=frame_untrusted(result.answer), tool_call_id=tool_call_id)],
                 "subagent_spend": [(result.total_tokens, result.total_cost_usd)],
+                "turn_usage": list(result.usage),
             }
         )
 

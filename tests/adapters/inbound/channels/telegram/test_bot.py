@@ -473,6 +473,20 @@ class TestTappingAButton:
 
         assert len(door.resumes) == 2 and api.sent_texts()[-1] == "Saved."
 
+    async def test_the_buttons_answer_the_pause_they_were_shown_for_and_say_what_it_would_do(self):
+        item = {"call_id": "c1", "tier": "mutating", "title": "Save a note", "effect": 'Saves "buy tea"', "target": "Notebook", "visible_to": "Only you", "reversible": False}
+        asked = {"type": "approval_required", "tool_calls": [{"name": "add_note", "args": {"title": "buy tea"}}], "approval_id": "apr_1", "items": [item]}
+        bot, api, door, store = make_bot()
+        token = await pending_token(bot, door, store, first_events=[asked])
+        shown = api.sent_texts()[-1]
+
+        await bot.handle_update(tap(token))
+
+        assert door.approval_ids == ["apr_1"]
+        for said in ("Save a note", 'Saves "buy tea"', "Notebook", "seen by: Only you", "cannot be undone", "details: title=buy tea"):
+            assert said in shown
+        assert "add_note" not in shown, "the person is told what it does, not the tool's name"
+
     async def test_a_connection_lost_after_the_decision_was_queued_does_not_offer_it_again(self):
         """"queued" means the resume job is published: the decision will be applied, so putting the buttons back would invite a second one."""
         dropped = [{"type": "status", "state": "queued"}, {"type": "error", "content": "The connection was lost before the reply finished."}]

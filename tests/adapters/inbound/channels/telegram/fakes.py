@@ -103,6 +103,7 @@ class FakeDoor:
         self.resume_scripts = list(resumes)
         self.turns: list[dict] = []
         self.resumes: list[tuple[str, bool]] = []
+        self.approval_ids: list[str | None] = []
         self.cancels: list[tuple[str, bool]] = []
         self.cancel_fails = cancel_fails
 
@@ -111,8 +112,9 @@ class FakeDoor:
         for event in (self.scripts.pop(0) if self.scripts else [{"type": "done"}]):
             yield event
 
-    async def stream_resume(self, thread_id, *, approved):
+    async def stream_resume(self, thread_id, *, approved, approval_id=None):
         self.resumes.append((thread_id, approved))
+        self.approval_ids.append(approval_id)
         for event in (self.resume_scripts.pop(0) if self.resume_scripts else [{"type": "done"}]):
             yield event
 

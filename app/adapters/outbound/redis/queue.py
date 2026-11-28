@@ -124,6 +124,7 @@ async def publish_resume_request(
     approved: bool,
     ctx: SecurityCtx,
     domain: str = "ecorp",
+    approval_id: str | None = None,
 ) -> None:
     """Producer side: enqueue a resume decision for a turn paused at
     human_approval — the queued-path counterpart to
@@ -139,6 +140,7 @@ async def publish_resume_request(
             "approved": approved,
             "ctx": ctx,
             "enqueued_at": time.time(),
+            **({"approval_id": approval_id} if approval_id is not None else {}),
         }
     )
     await _enqueue(client, request_id=request_id, thread_id=thread_id, domain=domain, payload=payload, announce=True)
@@ -160,11 +162,10 @@ async def publish_cancel_request(
 
 
 async def set_cancel_flag(client: redis.Redis, thread_id: str) -> None:
-    """Signal an ACTIVELY STREAMING `"turn"`/`"resume"` job's worker to stop at its
-    next cancel-check (`runtime/stream.py::_iterate_with_timeout`'s
-    `cancel_check`) — a short-lived flag, not a queued job, since that
-    worker is polling this key directly, not waiting on the queue."""
-    await client.set(cancel_flag_key(thread_id), "1", ex=CANCEL_FLAG_TTL_SECONDS)
+    """A stop: a flag, not a queued job. The worker running this conversation's turn polls it between events (`runtime/stream.py::_iterate_with_timeout`'s
+    `cancel_check`), and a worker taking a job queued BEFORE it does not run the job. Its value is the time of the stop, on the same clock as a job's
+    `enqueued_at` (both are the API's)."""
+    await client.set(cancel_flag_key(thread_id), str(time.time()), ex=CANCEL_FLAG_TTL_SECONDS)
 
 
 async def is_thread_busy(client: redis.Redis, thread_id: str) -> bool:
@@ -404,8 +405,12 @@ class RedisTurnQueue:
             require_approval=require_approval, images=images, unattended=unattended,
         )
 
-    async def publish_resume_request(self, *, request_id: str, thread_id: str, approved: bool, ctx: SecurityCtx, domain: str = "ecorp") -> None:
-        await publish_resume_request(get_client(), request_id=request_id, thread_id=thread_id, approved=approved, ctx=ctx, domain=domain)
+    async def publish_resume_request(
+        self, *, request_id: str, thread_id: str, approved: bool, ctx: SecurityCtx, domain: str = "ecorp", approval_id: str | None = None
+    ) -> None:
+        await publish_resume_request(
+            get_client(), request_id=request_id, thread_id=thread_id, approved=approved, ctx=ctx, domain=domain, approval_id=approval_id
+        )
 
     async def publish_cancel_request(self, *, request_id: str, thread_id: str, ctx: SecurityCtx, domain: str = "ecorp") -> None:
         await publish_cancel_request(get_client(), request_id=request_id, thread_id=thread_id, ctx=ctx, domain=domain)

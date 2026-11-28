@@ -15,5 +15,5 @@ assert {
 }
 
 docs {
-  `null` when nothing waits, otherwise `{tool_calls, resumable}`; `resumable: false` means the build changed since the pause.
+  `null` when nothing waits, otherwise `{tool_calls, resumable, approval_id, items}`; `resumable: false` means the build changed since the pause.
 }

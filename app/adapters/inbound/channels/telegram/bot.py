@@ -167,6 +167,8 @@ class Outcome:
     text: str = ""
     citations: list[dict[str, Any]] = field(default_factory=list)
     paused: list[dict[str, Any]] | None = None  # tool calls awaiting a decision
+    approval_id: str | None = None  # which pause that is, and what each of its calls would do
+    items: list[dict[str, Any]] = field(default_factory=list)
     error: bool = False
     code: str | None = None  # the API's error code; None for a refusal the door itself made (no sign-in, rate limit, unreachable)
     events: int = 0
@@ -279,6 +281,7 @@ class Bot:
                 elif kind == "approval_required":
                     if self._attended:
                         out.paused = event.get("tool_calls") or []
+                        out.approval_id, out.items = event.get("approval_id"), event.get("items") or []
                     else:
                         out.text = await self._decline_pause(door, thread_id, event)
                         out.citations = []
@@ -289,7 +292,7 @@ class Bot:
         if outcome.paused is not None:
             if outcome.text.strip():
                 await sink.finish(_format_reply(outcome.text, outcome.citations))
-            await self._ask(door, chat_id, user_id, thread_id, outcome.paused)
+            await self._ask(door, chat_id, user_id, thread_id, outcome)
             return
         text = outcome.text if outcome.error else _format_reply(outcome.text, outcome.citations)
         await sink.finish(text if text.strip() else _NO_REPLY_FALLBACK)
@@ -309,11 +312,13 @@ class Bot:
 
     # --- approvals ---
 
-    async def _ask(self, door: Door, chat_id: int, user_id: int, thread_id: str, tool_calls: list[dict[str, Any]]) -> None:
+    async def _ask(self, door: Door, chat_id: int, user_id: int, thread_id: str, paused: Outcome) -> None:
         assert self.approvals is not None  # `_attended` is the only way here
         if await self.approvals.for_thread(thread_id):
             return  # a redelivered update replayed a pause that already has its buttons
-        pending = await self.approvals.create(user_id=user_id, chat_id=chat_id, thread_id=thread_id, text=render(tool_calls))
+        pending = await self.approvals.create(
+            user_id=user_id, chat_id=chat_id, thread_id=thread_id, text=render(paused.paused or [], paused.items), approval_id=paused.approval_id
+        )
         message_id = await self.api.send_message(chat_id, pending.text, reply_markup=keyboard(pending.token))
         if message_id is None:
             # Nobody can be asked, so nobody can answer: leave no paused conversation behind that every later message would be refused by.
@@ -375,7 +380,9 @@ class Bot:
             await self._undo(pending, "This approval was asked of an earlier sign-in of yours, so nothing was decided. Ask again to get a new one.")
             return
         sink = self._sink(pending.chat_id)
-        outcome = await self._collect(door.stream_resume(pending.thread_id, approved=approve), sink, door, pending.thread_id)
+        outcome = await self._collect(
+            door.stream_resume(pending.thread_id, approved=approve, approval_id=pending.approval_id), sink, door, pending.thread_id
+        )
         if outcome.error and outcome.code is None and outcome.events == 1:
             # The door refused the decision itself (rate limit, unreachable, sign-in): it never reached the agent, so it can be made again.
             metrics.channel_telegram_approval_total.labels(outcome="resume_failed").inc()

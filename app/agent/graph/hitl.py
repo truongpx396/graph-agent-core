@@ -7,6 +7,7 @@ The node is built from the function that pauses the graph, `langgraph.types.inte
 (`GraphDeps.interrupt` overrides it). A test that wants an approval decision without driving a real
 pause passes a stand-in there; nothing patches a module attribute.
 """
+import functools
 from collections.abc import Callable
 from typing import Any, Literal, cast
 
@@ -16,6 +17,7 @@ from langgraph.types import StateSnapshot
 
 from app.agent.graph.messages import reject_tool_calls
 from app.agent.graph.state import STATE_SCHEMA_VERSION, AgentGraph, State
+from app.agent.graph.tool_display import approval_request
 from app.core import metrics
 
 
@@ -78,7 +80,8 @@ async def resumability_error_async(graph: AgentGraph, config: RunnableConfig) ->
 
 async def paused_approval_async(graph: AgentGraph, config: RunnableConfig) -> dict[str, Any] | None:
     """Is `config`'s thread parked at a real human_approval interrupt? Returns `None` if not (the common case),
-    else `{"tool_calls": [...], "resumable": bool}`.
+    else `{"tool_calls": [...], "resumable": bool, "approval_id": str | None, "items": [...]}`. A pause checkpointed by an older build has no
+    identity and no items.
 
     Two callers need the same shape for opposite reasons:
     - `astream_events_turn` (runtime/stream.py), before a BRAND-NEW turn, so a fresh message can't silently
@@ -99,21 +102,28 @@ async def paused_approval_async(graph: AgentGraph, config: RunnableConfig) -> di
     state = await graph.aget_state(config)
     if not state.next or not any(task.interrupts for task in state.tasks):
         return None
-    tool_calls: list[ToolCall] = []
-    for task in state.tasks:
-        for intr in task.interrupts:
-            tool_calls = intr.value.get("tool_calls", [])
-            break
-        if tool_calls:
-            break
-    return {"tool_calls": tool_calls, "resumable": _resumability_error_from_state(state) is None}
+    asked: dict[str, Any] = next((intr.value for task in state.tasks for intr in task.interrupts), {})
+    tool_calls: list[ToolCall] = asked.get("tool_calls", [])
+    return {
+        "tool_calls": tool_calls,
+        "resumable": _resumability_error_from_state(state) is None,
+        "approval_id": asked.get("approval_id"),
+        "items": asked.get("items", []),
+    }
 
 
 CANCEL_SENTINEL = "cancelled"  # app/agent/runtime/stream.py::cancel_run resumes a paused run with this value
 
 
-def make_graph_node_human_approval(interrupt_fn: Callable[[Any], Any]) -> Callable[[State], dict[str, Any]]:
-    """Factory over the function that pauses the graph (see the module docstring)."""
+# What a pause carries when no domain was bound (a test building the node alone): every call unknown, so every call is treated as outward.
+_UNBOUND_FACTS: Callable[[list[ToolCall]], dict[str, Any]] = functools.partial(approval_request, capabilities={}, display={})
+
+
+def make_graph_node_human_approval(
+    interrupt_fn: Callable[[Any], Any], facts: Callable[[list[ToolCall]], dict[str, Any]] = _UNBOUND_FACTS
+) -> Callable[[State], dict[str, Any]]:
+    """Factory over the function that pauses the graph (see the module docstring) and the one that says what the pause asks about
+    (`tool_display.approval_request`, bound to the domain by `build_graph`)."""
 
     def graph_node_human_approval(state: State) -> dict[str, Any]:
         """Pause the graph and ask a human to approve pending tool calls.
@@ -133,6 +143,7 @@ def make_graph_node_human_approval(interrupt_fn: Callable[[Any], Any]) -> Callab
             {
                 "action": "approve_tool_calls",
                 "tool_calls": [{"name": tc["name"], "args": tc["args"]} for tc in tool_calls],
+                **facts(tool_calls),
             }
         )
         if decision == CANCEL_SENTINEL:

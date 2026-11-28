@@ -43,10 +43,10 @@ from app.domains.registry import DOMAINS
 
 # Event rendering:
 #   token             → printed inline, no newline (typing effect)
-#   tool_start        → "[▶ search_docs({args})]" in dim colour
-#   tool_end          → "[ search_docs done]"
-#   approval_required → pending tool calls listed, returns control to the
-#                        caller so it can prompt and resume (--hitl only)
+#   tool_start        → "[▶ Search the knowledge base: search_docs({args})]" in dim colour
+#   tool_end          → "[✓ search_docs: 6 results]", "✗" when it failed or was refused
+#   approval_required → each pending call's effect and call, returns the pause to the
+#                        caller so it can prompt and answer THAT pause (--hitl only)
 #   done              → final newline
 #   error             → printed in red
 
@@ -60,12 +60,12 @@ def _format_call(name: str, args: dict[str, Any]) -> str:
     return f"{name}({args_str})"
 
 
-async def _render_stream(events: AsyncGenerator[dict[str, Any], None]) -> bool:
+async def _render_stream(events: AsyncGenerator[dict[str, Any], None]) -> dict[str, Any] | None:
     """Render one turn's or resume's events (`stream_turn`/`stream_resume`).
 
-    Returns True if the run paused awaiting tool-call approval (the caller
-    should prompt and call `stream_resume`), False once the turn has
-    actually finished (or errored)."""
+    Returns the `approval_required` event if the run paused awaiting tool-call
+    approval (the caller should prompt and call `stream_resume`), None once the
+    turn has actually finished (or errored)."""
     # `aclosing`: `approval_required` returns before the stream is exhausted (it is the stream's
     # last event, but its generators are still open), and a bare `async for` would leave the
     # closing of what that return abandoned to the event loop's finalizer.
@@ -78,19 +78,26 @@ async def _render_stream(events: AsyncGenerator[dict[str, Any], None]) -> bool:
                 print(f"\n{_DIM}  [revising the answer]{_RESET}", flush=True)  # a terminal cannot take back what it printed
             elif t == "tool_start":
                 call = _format_call(event["tool"], event.get("args", {}))
-                print(f"\n{_DIM}  [▶ {call}]{_RESET}", flush=True)
+                label = f"{event['label']}: " if event.get("label") else ""
+                print(f"\n{_DIM}  [▶ {label}{call}]{_RESET}", flush=True)
             elif t == "tool_end":
-                print(f"{_DIM}  [✓ {event['tool']} done]{_RESET}", flush=True)
+                outcome = event.get("outcome") or "ok"
+                said = event.get("summary") or ("done" if outcome == "ok" else outcome)
+                print(f"{_DIM}  [{'✓' if outcome == 'ok' else '✗'} {event['tool']}: {said}]{_RESET}", flush=True)
             elif t == "approval_required":
                 print(f"\n{_DIM}  [pending approval:]{_RESET}")
-                for tc in event["tool_calls"]:
+                items = event.get("items") or []
+                for index, tc in enumerate(event["tool_calls"]):
+                    if index < len(items):
+                        undo = "" if items[index]["reversible"] else " (cannot be undone)"
+                        print(f"{_DIM}    {items[index]['effect']}{undo}{_RESET}")
                     print(f"{_DIM}    {_format_call(tc['name'], tc['args'])}{_RESET}")
-                return True
+                return event
             elif t == "error":
                 print(f"\n{_RED}  [error: {event['content']}]{_RESET}", flush=True)
             elif t == "done":
                 print()
-    return False
+    return None
 
 
 async def _stop_turn(door: Door, thread_id: str) -> None:
@@ -105,10 +112,10 @@ async def _stop_turn(door: Door, thread_id: str) -> None:
 async def _async_turn(door: Door, text: str, thread_id: str, *, hitl: bool = False) -> None:
     print("bot> ", end="", flush=True)
     try:
-        needs_approval = await _render_stream(door.stream_turn(text, thread_id, require_approval=hitl))
-        while needs_approval:
+        pause = await _render_stream(door.stream_turn(text, thread_id, require_approval=hitl))
+        while pause is not None:
             decision = input("Approve? [y/N] ").strip().lower() == "y"  # noqa: ASYNC250 - nothing else runs while the CLI waits for the person
-            needs_approval = await _render_stream(door.stream_resume(thread_id, approved=decision))
+            pause = await _render_stream(door.stream_resume(thread_id, approved=decision, approval_id=pause.get("approval_id")))
     except (asyncio.CancelledError, KeyboardInterrupt, EOFError):
         await _stop_turn(door, thread_id)
         raise

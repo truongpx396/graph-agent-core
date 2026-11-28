@@ -33,6 +33,7 @@ from langgraph.types import RetryPolicy
 from app.agent.graph.build import GraphDeps
 from app.agent.graph.compaction import _estimate_tokens
 from app.agent.graph.core import AGENT_RETRY_POLICY
+from app.agent.graph.stream_events import STREAM_EVENT
 from app.agent.runtime import core as agent_module
 from app.agent.runtime import stream as stream_module
 from app.core import metrics, moderation
@@ -831,9 +832,10 @@ def _chat_stream_event(content, *, subagent_name=None):
 
 
 def _tool_event(kind, tool_name, *, subagent_name=None):
+    """The tools node's announcement (graph/tool_node.py), as astream_events delivers it."""
     metadata = {"subagent_name": subagent_name} if subagent_name else {}
-    data = {"input": {}} if kind == "on_tool_start" else {"output": "irrelevant"}
-    return {"event": kind, "run_id": "fake-run", "name": tool_name, "metadata": metadata, "data": data}
+    data = {"type": kind, "tool": tool_name, **({"args": {}} if kind == "tool_start" else {})}
+    return {"event": "on_custom_event", "run_id": "fake-run", "name": STREAM_EVENT, "metadata": metadata, "data": data}
 
 
 async def _stream_events(fake_events, final_messages):
@@ -897,7 +899,7 @@ class TestAGraphFailureNeverLeaksItsMessageToTheCaller:
         assert error["content"] == error["message"] and error["message"], "a blank error helps nobody"
         # Metadata only: the exception CLASS is safe and is what an operator
         # triaging a client report needs; its message is not.
-        assert error["details"] == {"error_class": "RuntimeError"}
+        assert error["details"] == {"error_class": "RuntimeError", "kind": "failed"}
 
     async def test_a_timeout_still_reports_a_timeout_not_an_internal_error(self):
         events = await _stream_raising(TimeoutError())
@@ -939,11 +941,11 @@ class TestSubagentEventsDontLeakIntoTheMainStream:
         from the top-level run_subagent call itself, which carries no tag."""
         events = await _stream_events(
             [
-                _tool_event("on_tool_start", "run_subagent"),
-                _tool_event("on_tool_start", "calculator", subagent_name="researcher"),
-                _tool_event("on_tool_end", "calculator", subagent_name="researcher"),
+                _tool_event("tool_start", "run_subagent"),
+                _tool_event("tool_start", "calculator", subagent_name="researcher"),
+                _tool_event("tool_end", "calculator", subagent_name="researcher"),
                 _chat_stream_event("Delegation complete, here is the final answer."),
-                _tool_event("on_tool_end", "run_subagent"),
+                _tool_event("tool_end", "run_subagent"),
             ],
             final_messages=[AIMessage(content="Delegation complete, here is the final answer.")],
         )

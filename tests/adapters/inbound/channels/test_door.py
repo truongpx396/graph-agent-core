@@ -169,6 +169,23 @@ class TestResumeAndCancel:
         await http.aclose()
 
 
+class TestAnsweringOnePause:
+    @pytest.mark.parametrize(("given", "sent"), [("apr_1", {"approval_id": "apr_1"}), (None, {})])
+    async def test_a_resume_names_the_pause_the_person_was_shown_when_there_is_one(self, given, sent):
+        bodies = []
+
+        def handler(request):
+            bodies.append(json.loads(request.content))
+            return httpx.Response(200, content=sse({"type": "done"}))
+
+        door, http = make_door(handler)
+
+        await collect(door.stream_resume("t1", approved=True, approval_id=given))
+        await http.aclose()
+
+        assert bodies == [{"thread_id": "t1", "approved": True, **sent}]
+
+
 class TestAnExpiredSignIn:
     async def test_a_401_gets_one_fresh_sign_in_and_one_repeat(self):
         auths = []

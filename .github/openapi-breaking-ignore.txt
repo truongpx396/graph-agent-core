@@ -1,5 +1,0 @@
-POST /chat/cancel added `#/components/schemas/StatusEvent, #/components/schemas/SystemNoteEvent, #/components/schemas/UsageEvent` to the `data/contentSchema/` response property `oneOf` list for the response status `200` (item schema)
-POST /chat/resume added `#/components/schemas/StatusEvent, #/components/schemas/SystemNoteEvent, #/components/schemas/UsageEvent` to the `data/contentSchema/` response property `oneOf` list for the response status `200` (item schema)
-POST /chat/stream/queued added `#/components/schemas/StatusEvent, #/components/schemas/SystemNoteEvent, #/components/schemas/UsageEvent` to the `data/contentSchema/` response property `oneOf` list for the response status `200` (item schema)
-GET /chat/stream/{request_id} added `#/components/schemas/StatusEvent, #/components/schemas/SystemNoteEvent, #/components/schemas/UsageEvent` to the `data/contentSchema/` response property `oneOf` list for the response status `200` (item schema)
-DELETE /chat/sessions/{thread_id} added the new `approval_superseded` enum value to the `code` response property for the response status `409`

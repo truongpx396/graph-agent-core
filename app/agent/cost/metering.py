@@ -16,14 +16,42 @@ thousands of tokens, and adding that to the turn's token budget could stop a per
 
 Returns the response plus `usage` and `cost_usd` (an unpriced call adds 0.0 to the running total), so the
 agent node's per-turn ceiling and the event come from the same `PricedCall`.
+
+The node that made a call also puts its `usage_entry` into `State.turn_usage`, which is what the turn's `usage` event is summed from (specs/025). There,
+unlike in the running total, a number nobody knows stays None.
 """
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
 from app.agent.cost import pricing, usage_events
 from app.core import gateway
 from app.ports.outbound.llm import ChatModel
+
+# A `State.turn_usage` entry for model use that happened and cannot be counted: it makes the turn's totals unknown, not smaller.
+UNKNOWN_USAGE: dict[str, Any] = {"alias": None, "kind": "unknown", "input_tokens": None, "output_tokens": None, "cost_usd": None}
+
+# Set around one tool call by the tool node; a delegated run that fails appends to it. A list and not a flag: the tool runs in a COPY of the context, so
+# only a change to the same object reaches the node.
+_lost: ContextVar[list[bool] | None] = ContextVar("lost_usage", default=None)
+
+
+@contextmanager
+def lost_usage() -> Iterator[list[bool]]:
+    """Collects `note_lost_usage` calls made inside the block; non-empty means some model use will reach no `turn_usage` entry of its own."""
+    lost: list[bool] = []
+    token = _lost.set(lost)
+    try:
+        yield lost
+    finally:
+        _lost.reset(token)
+
+
+def note_lost_usage() -> None:
+    if (lost := _lost.get()) is not None:
+        lost.append(True)
 
 
 @dataclass(frozen=True)
@@ -32,6 +60,20 @@ class MeteredCall:
     usage: Mapping[str, Any]
     cost_usd: float
     priced: pricing.PricedCall
+    model_alias: str
+    kind: str
+
+    @property
+    def usage_entry(self) -> dict[str, Any]:
+        """What `State.turn_usage` keeps of this call. A provider that reported no usage leaves the tokens and the cost unknown."""
+        reported = self.usage.get("input_tokens") is not None
+        return {
+            "alias": self.model_alias,
+            "kind": self.kind,
+            "input_tokens": self.priced.input_tokens if reported else None,
+            "output_tokens": self.priced.output_tokens if reported else None,
+            "cost_usd": self.priced.cost_usd if reported else None,
+        }
 
 
 async def metered_invoke(llm: ChatModel, messages: Sequence[Any], *, config: Mapping[str, Any] | None, kind: str, model_alias: str, invoke_model: str | None = None) -> MeteredCall:
@@ -57,4 +99,4 @@ async def metered_invoke(llm: ChatModel, messages: Sequence[Any], *, config: Map
         model_alias=model_alias,
         priced=priced,
     )
-    return MeteredCall(response=response, usage=usage, cost_usd=priced.cost_usd or 0.0, priced=priced)
+    return MeteredCall(response=response, usage=usage, cost_usd=priced.cost_usd or 0.0, priced=priced, model_alias=model_alias, kind=kind)

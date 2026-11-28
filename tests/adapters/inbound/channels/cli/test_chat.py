@@ -22,9 +22,9 @@ async def test_stopping_at_a_pending_approval_closes_the_stream_it_leaves_open()
         finally:
             closed.append(True)
 
-    needs_approval = await chat_channel._render_stream(events())
+    pause = await chat_channel._render_stream(events())
 
-    assert needs_approval is True
+    assert pause is not None and pause["type"] == "approval_required"
     assert closed == [True]
 
 
@@ -46,8 +46,8 @@ class _Door:
                 raise event
             yield event
 
-    async def stream_resume(self, thread_id, *, approved):
-        self.resumes.append({"thread_id": thread_id, "approved": approved})
+    async def stream_resume(self, thread_id, *, approved, approval_id=None):
+        self.resumes.append({"thread_id": thread_id, "approved": approved, **({"approval_id": approval_id} if approval_id else {})})
         for event in self._rounds.pop(0):
             yield event
 

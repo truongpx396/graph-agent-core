@@ -563,6 +563,16 @@ class TestChatResume:
 
         payload = await _run()
         assert payload["approved"] is False
+        assert "approval_id" not in payload, "a client that names no pause publishes the job it always did"
+
+    async def test_the_pause_a_client_names_travels_on_the_job(self, monkeypatch, ownership):
+        client = FakeRedis()
+        monkeypatch.setattr(queue, "get_client", lambda: client)
+        await ownership.claim(TEST_CTX, "t3")
+
+        await chat_router.chat_resume(ResumeRequest(thread_id="t3", approved=True, approval_id="apr_1"), ctx=TEST_CTX, domain="ecorp")
+
+        assert json.loads(client.streams[jobs.requests_stream_key("ecorp")][0][1]["payload"])["approval_id"] == "apr_1"
 
 
 class TestChatCancel:
