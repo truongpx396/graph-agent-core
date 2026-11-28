@@ -59,6 +59,7 @@ x-app-env: &app-env
   ROUTER_MAX_TIER: ${ROUTER_MAX_TIER:-strong}
   ROUTER_LABELS: ${ROUTER_LABELS:-true}
   ROUTER_LONG_PROMPT_CHARS: ${ROUTER_LONG_PROMPT_CHARS:-1500}
+  ROUTED_LLM_READ_TIMEOUT_SECONDS: ${ROUTED_LLM_READ_TIMEOUT_SECONDS:-30}
   ROUTER_TIMEOUT_SECONDS: ${ROUTER_TIMEOUT_SECONDS:-1.5}
   MAX_COST_USD_PER_TENANT_PER_DAY: ${MAX_COST_USD_PER_TENANT_PER_DAY:-20.0}
   # The three optional ceilings (0 = off, Settings' own default, so a line left unset changes nothing) and what to do with a model LiteLLM cannot price.

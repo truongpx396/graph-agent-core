@@ -1,5 +1,5 @@
 import { AuthBox, useAuth } from "@/features/auth";
-import { Composer, Transcript, useChat } from "@/features/chat";
+import { ApprovalCard, Composer, pendingApproval, Transcript, UsageTotal, useChat } from "@/features/chat";
 import { SessionList, useHistory } from "@/features/sessions";
 import { ThemeToggle } from "@/features/theme";
 import { UploadPanel } from "@/features/uploads";
@@ -8,7 +8,10 @@ import { DomainBrief, DomainSelect, IdentityPickers } from "@/features/workspace
 export function App() {
   const ready = useAuth((state) => state.ready);
   const identity = useAuth((state) => state.config.mode === "identity");
+  const signedOut = useAuth((state) => state.config.mode === "identity" && state.ready && state.who === null);
   const send = useChat((state) => state.send);
+  const decide = useChat((state) => state.decide);
+  const approval = useChat(pendingApproval);
   const history = useHistory();
   return (
     <div className="flex h-screen flex-row max-[700px]:h-auto max-[700px]:min-h-screen max-[700px]:flex-col">
@@ -23,7 +26,7 @@ export function App() {
             <DomainBrief onAsk={(question) => void send(question)} />
           </div>
         </div>
-        <SessionList ready={ready} className="min-h-0 flex-1 basis-0 border-t border-line max-[700px]:max-h-[20vh] max-[700px]:flex-none" />
+        <SessionList ready={ready} signedOut={signedOut} className="min-h-0 flex-1 basis-0 border-t border-line max-[700px]:max-h-[20vh] max-[700px]:flex-none" />
       </aside>
       <main className="mx-auto flex h-screen w-full max-w-[760px] min-w-0 flex-1 flex-col px-5 py-4 max-[700px]:h-auto max-[700px]:min-h-[60vh]">
         {/* Who am I, top right: a different kind of scope from the two in the sidebar. */}
@@ -32,11 +35,14 @@ export function App() {
             <span className="size-2.5 shrink-0 rounded-full bg-accent ring-3 ring-accent-soft" />
             Graph Agent Core
           </h1>
+          <UsageTotal />
           {identity ? <AuthBox /> : <IdentityPickers />}
           <ThemeToggle />
         </header>
         <UploadPanel />
         <Transcript history={history} />
+        {/* Above the composer, where the person is looking; not before the conversation it belongs to is on screen. */}
+        {approval && !history.loading && <ApprovalCard approval={approval} onDecide={(approved) => void decide(approved)} />}
         <Composer />
       </main>
     </div>

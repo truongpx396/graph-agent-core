@@ -72,16 +72,17 @@ body {
   @apply m-0 bg-page text-ink antialiased;
 }
 
-/* The live status line's moving dots. */
-.status::after {
-  content: "";
-  animation: ellipsis 1.2s steps(4, end) infinite;
+/* Something is in progress: a light passes over the words. Only on what is running (web/DESIGN.md, "Motion"). */
+.shimmer {
+  background: linear-gradient(90deg, currentColor 40%, var(--accent) 50%, currentColor 60%) 0 0 / 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer 2.2s linear infinite;
 }
-@keyframes ellipsis {
-  0%, 100% { content: ""; }
-  25% { content: "."; }
-  50% { content: ".."; }
-  75% { content: "..."; }
+@keyframes shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -50% 0; }
 }
 
 /* Rendered markdown: elements this app did not write class names onto. Tailwind's reset leaves headings, quotes and rules looking like
@@ -145,4 +146,5 @@ body {
 }
 @media (prefers-reduced-motion: reduce) {
   .streamed :is(.fade-in, li, tr, hr, blockquote, .code-block), .draft-text > *::after, .draft-text li::after, .draft-text blockquote p::after { animation: none !important; }
+  .shimmer { animation: none; -webkit-text-fill-color: currentColor; background: none; }
 }

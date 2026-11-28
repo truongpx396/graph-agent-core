@@ -250,12 +250,12 @@ Found in one Ecorp session on `qwen2.5:7b` (2026-11-27), each answered with no t
 - **Bug:** a tool that raised emitted no end event at all (LangChain calls `on_tool_error`, which the event stream has no handler for), so a client showed it running until the answer.
 - **Private API:** it overrides `ToolNode._arun_one`; `tests/agent/graph/test_tool_events.py` fails if an upgrade stops calling it.
 - **Changed:** the raw MCP call a sandbox tool makes inside itself is no longer shown as a call of its own.
-- **Gaps:** a call rejected before it runs (a declined approval, a bad batch) has no events. `refused` is recognised only for the shared `NO_CTX_REFUSAL`. The web page ignores the new fields until specs/025's UI steps.
+- **Gaps:** a call rejected before it runs (a declined approval, a bad batch) has no events. `refused` is recognised only for the shared `NO_CTX_REFUSAL`. What the web page makes of these is RUNTIME_PATTERNS.md 121.
 
 ### 119. An approval answers one pause
 A pause carries `approval_id` and one item per call (title, effect, target, who sees it, reversible), stored with the interrupt. A resume may name the id; if another pause is waiting, nothing runs and the stream says `approval_superseded`. The id is a digest of the pending calls' ids and arguments: LangGraph runs the pausing node again on resume, so a random one would not hold.
 - **Bug:** a reclaimed `resume` job is run again. If the first run had reached a LATER pause before the worker died, the re-run approved it: a write nobody had been shown. A worker now remembers, under the job's id, which pause the job first found, and answers only that one (`streams.remember_answered_pause`).
-- **Telegram and the CLI send the id.** A client that does not (the web page until specs/025 PR7) still answers whatever is pending when a worker takes its job, so an old tab can approve a newer pause.
+- **Telegram, the CLI and the web page send the id.** A client that does not still answers whatever is pending when a worker takes its job, so its old request can approve a newer pause.
 - **A call nothing describes is shown cautiously:** its name as words, "Runs with the details below", not reversible. A `describe` that raises costs the words, never the pause.
 - **All or nothing:** one decision for every call of a pause, and no editing of arguments. A pause checkpointed by an older build has no id.
 
@@ -264,7 +264,7 @@ These are not patterns of the graph. Their numbers are kept so references ("patt
 
 | Patterns | Now in |
 |---|---|
-| 11, 29, 30, 31, 37, 43, 49, 96, 99, 112, 113, 116: metrics, logs, tracing, web UI, error envelope, pools, the queue and the workers | [RUNTIME_PATTERNS.md](RUNTIME_PATTERNS.md) |
+| 11, 29, 30, 31, 37, 43, 49, 96, 99, 112, 113, 116, 117, 121: metrics, logs, tracing, web UI, error envelope, pools, the queue and the workers | [RUNTIME_PATTERNS.md](RUNTIME_PATTERNS.md) |
 | 82, 84, 85, 86, 97, 98: the front door, identity, the MCP gateway, production routing | [ACCESS_PATTERNS.md](ACCESS_PATTERNS.md) |
 | 42, 89, 91, 92, 93, 94: the CLI and Telegram | [CHANNEL_PATTERNS.md](CHANNEL_PATTERNS.md) |
 | 21, 28, 32, 50, 78, 87, 108, 110: data tools, MCP, scrubbing, crawl and sandbox, web search, metrics, ticket escalation | [TOOL_PATTERNS.md](TOOL_PATTERNS.md) |

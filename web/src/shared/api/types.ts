@@ -6,6 +6,9 @@ export type ToolCall = Schemas["ToolCall"];
 export type SessionSummary = Schemas["SessionSummary"];
 export type SessionMessage = Schemas["SessionMessage"];
 export type PendingApproval = Schemas["PendingApproval"];
+export type ApprovalItem = Schemas["ApprovalItem"];
+export type Tier = ApprovalItem["tier"];
+export type UsageEvent = Schemas["UsageEvent"];
 export type UploadResult = Schemas["IngestUploadResult"];
 
 export type ChatEvent =

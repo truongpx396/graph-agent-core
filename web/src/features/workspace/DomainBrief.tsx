@@ -27,10 +27,9 @@ export function DomainBrief({ onAsk }: { onAsk: (question: string) => void }) {
       {info && <DomainCard key={domain} title={info.title} description={info.description} />}
       {questions.length > 0 && (
         <div id="suggestedQuestionsSection">
-          <h2 className={cx(label, "mb-2")}>Try asking</h2>
-          <p className="mb-2 text-[0.7rem] leading-snug text-muted">
-            Tags say what a question is meant to exercise. A model tag applies when the router is on; a small model does not always follow the rest.
-          </p>
+          <h2 className={cx(label, "mb-2")} title="Tags say what a question is meant to exercise. A model tag applies when the router is on; a small model does not always follow the rest.">
+            Try asking
+          </h2>
           <div id="suggestedQuestions" className="flex flex-col gap-1.5">
             {questions.map((question) => (
               <button key={question.text} type="button" className={cx(button, "text-left")} onClick={() => onAsk(question.text)}>

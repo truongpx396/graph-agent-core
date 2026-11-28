@@ -39,7 +39,11 @@ from app.agent.graph.skill_guards import pending_skill_required_tool
 from app.agent.graph.state import State
 from app.agent.graph.stream_events import STREAM_EVENT
 from app.core import gateway, metrics
-from app.core.config import CHAT_MODEL, STALE_TOOL_RESULT_MAX_CHARS
+from app.core.config import (
+    CHAT_MODEL,
+    ROUTED_LLM_READ_TIMEOUT_SECONDS,
+    STALE_TOOL_RESULT_MAX_CHARS,
+)
 from app.core.untrusted import frame_untrusted
 from app.ports.outbound.llm import ChatModel, ContentBlock
 
@@ -320,7 +324,9 @@ def make_graph_node_agent(
             else:
                 try:
                     call = await metering.metered_invoke(
-                        llm, messages, config=config, kind=kind, model_alias=routed, invoke_model=routed
+                        llm, messages, config=config, kind=kind, model_alias=routed, invoke_model=routed,
+                        # Short enough that the repeat below still has time to answer inside the turn.
+                        read_timeout_seconds=ROUTED_LLM_READ_TIMEOUT_SECONDS,
                     )
                 except Exception as exc:  # classified by routed_unanswered; anything another model could not answer either is re-raised unchanged
                     if not routed_unanswered(exc):

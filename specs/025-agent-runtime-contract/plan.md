@@ -35,9 +35,24 @@
 
 Reversibility is reported as `false` for every write: this app has no tool that undoes one.
 
+## Phase 2, the web UI
+
+One pull request at the owner's request. What the page does is RUNTIME_PATTERNS.md 121; the rules are `web/DESIGN.md`.
+
+| Where it differs from the source plan | Why |
+|---|---|
+| "Waiting to start" after 10 s | The server's own wait for a worker is 30 s, so a 30 s threshold would never show |
+| Enter approves and Esc declines only while the card has the focus, and the card never takes it | A global shortcut would approve a write for someone typing |
+| No queue position | The server sends none |
+| The session total covers the turns answered in this tab | History replays text only |
+| The "Try asking" tags still name tools | They exist to show which tool a question should reach |
+| The guard is `web/src/test/design.test.ts`: no raw colours, no tool identifier outside the card's Technical details | The other rules are for review |
+
+The browser tests' failure report no longer has the arguments of a call that needed no approval: the page no longer holds them.
+
 ## Later steps
 
-As the source plan's section 8, with these differences: every PR after step 1 is a minor version (phase 1 ends at 4.1.0); the web phases target `web/` (a `web/DESIGN.md` and a vitest guard replace the `static/` ones, and the ES-module split no longer applies).
+As the source plan's section 8, with these differences: every PR after step 1 is a minor version (phase 1 ends at 4.1.0, and phase 2 changes no contract); the web phases target `web/` (a `web/DESIGN.md` and a vitest guard replace the `static/` ones, and the ES-module split no longer applies).
 
 ## Constitution Check
 

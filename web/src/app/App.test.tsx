@@ -30,22 +30,32 @@ function start(routes: Parameters<typeof fakeApi>[0] = {}) {
   return { api, user: userEvent.setup(), element, container: view.container };
 }
 
+const identityMode = () => {
+  document.head.innerHTML = `<meta name="agent-auth" content='{"mode":"identity","issuer":"https://a.test","audience":"x","scope":"s","client_id_prefix":"api-"}'>`;
+};
+
 describe("the page", () => {
   it("answers a typed message and refreshes the conversation list", async () => {
     const { api, user, element } = start({
       "POST /chat/stream/queued": () =>
         sse(
-          { type: "tool_start", tool: "calculator", args: { expression: "21*2" } },
-          { type: "tool_end", tool: "calculator" },
+          { type: "tool_start", tool: "calculator", args: { expression: "21*2" }, call_id: "c1", label: "Calculate", tier: "read_only" },
+          { type: "tool_end", tool: "calculator", call_id: "c1", outcome: "ok", duration_ms: 400, summary: "42" },
           { type: "token", content: "It is **42**." },
           { type: "citations", items: [{ marker: "[1]", doc_id: "d", title: "Support Hours", text: "", score: 1 }], ungrounded_claims_count: 0 },
           { type: "followups", items: ["And doubled?"] },
+          { type: "usage", model: "ollama_chat/qwen2.5:7b", route: "local", input_tokens: 1900, output_tokens: 100, cost_usd: 0.0021, model_calls: 2 },
           { type: "done" },
         ),
     });
     await user.type(element("#input"), "what is 21 * 2?{Enter}");
     expect((await screen.findByText("42")).closest("strong")).not.toBeNull();
-    expect(element(".tool-activity-line").textContent).toBe('✓ calculator({"expression":"21*2"})');
+    // The finished turn folds its steps away; a click shows them, named by the server.
+    expect(element(".tool-activity-line")).toBeNull();
+    await user.click(screen.getByRole("button", { name: /^Worked for .* · 1 step/ }));
+    expect(element(".tool-activity-line").textContent).toBe("Reads: Calculate420.4 s");
+    expect(element(".usage").textContent).toBe("qwen2.5:7b · default tier · 2.0k tokens · $0.0021");
+    expect(element("#usageTotal").textContent).toBe("2.0k tokens · $0.0021");
     expect(element(".citations .citation-item").textContent).toBe("[1]Support Hours");
     expect(screen.getByRole("button", { name: "And doubled?" })).toBeTruthy();
     expect(element("#send").disabled).toBe(false);
@@ -53,20 +63,34 @@ describe("the page", () => {
     expect(api.sent("POST /chat/stream/queued")[0]?.headers).toMatchObject({ "X-Tenant-Id": "ecorp", "X-Principal-Id": "web-user", "X-Domain": "ecorp" });
   });
 
-  it("asks for approval and sends the decision", async () => {
+  it("asks for approval above the composer and answers the pause it showed", async () => {
+    const item = { call_id: "c1", tier: "mutating", title: "Remember a fact about you", effect: 'Saves to your memory: "coffee"', target: "Your memory", visible_to: "Only you", reversible: false };
     const { api, user, element } = start({
-      "POST /chat/stream/queued": () => sse({ type: "approval_required", tool_calls: [{ name: "remember", args: { content: "coffee" } }] }),
+      "POST /chat/stream/queued": () =>
+        sse({ type: "approval_required", tool_calls: [{ name: "remember", args: { content: "coffee" } }], approval_id: "apr_1", items: [item] }),
       "POST /chat/resume": () => sse({ type: "token", content: "Noted." }, { type: "done" }),
     });
     await user.type(element("#input"), "remember coffee{Enter}");
     await screen.findByRole("button", { name: "Approve" });
-    expect(element(".approval-question").textContent).toBe('⏸ Approve this action? remember({"content":"coffee"})');
+    expect(element(".approval-question").textContent).toBe("Approve this action?");
+    expect(element(".approval-item").textContent).toContain('Saves to your memory: "coffee"Your memory · Seen by: Only you · Can\'t be undone');
+    // Outside the transcript, so it does not scroll away; the person can still type, but not send.
+    expect(element("#messages .approval")).toBeNull();
+    expect(element("#input").disabled).toBe(false);
     expect(element("#send").disabled).toBe(true);
     expect(element("#newChat").disabled).toBe(false);
-    await user.click(screen.getByRole("button", { name: "Reject" }));
+    await user.click(screen.getByRole("button", { name: "Decline" }));
     expect(await screen.findByText("Noted.")).toBeTruthy();
-    expect(api.sent("POST /chat/resume")[0]?.body).toMatchObject({ approved: false });
+    expect(api.sent("POST /chat/resume")[0]?.body).toEqual({ thread_id: useChat.getState().threadId, approved: false, approval_id: "apr_1" });
+    expect(element(".declined").textContent).toBe("Declined: Remember a fact about you. Nothing was changed by it.");
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+  });
+
+  it("says a conversation list that did not load can be tried again", async () => {
+    let attempts = 0;
+    const { user } = start({ "GET /chat/sessions": () => (attempts++ === 0 ? json({ detail: "down" }, 503) : json([session])) });
+    await user.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("button", { name: "An older chat" })).toBeTruthy();
   });
 
   it("opens an older conversation, pages back through it and restores its pause", async () => {
@@ -191,10 +215,24 @@ describe("the page", () => {
   });
 
   it("shows who to sign in as, not the pickers, in identity mode", async () => {
-    document.head.innerHTML = `<meta name="agent-auth" content='{"mode":"identity","issuer":"https://a.test","audience":"x","scope":"s","client_id_prefix":"api-"}'>`;
-    const { element, container } = start();
+    identityMode();
+    const { api, element, container } = start();
     expect(await screen.findByText("Sign in to chat.")).toBeTruthy();
     expect(element("#authOrg")).toBeTruthy();
     expect(container.querySelector("#tenant, #principal")).toBeNull();
+    // Signed out, the list could only be refused: it is not asked for, and offers no retry that cannot work.
+    expect(screen.getByText("Sign in to see your conversations.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(api.sent("GET /chat/sessions")).toHaveLength(0);
+  });
+
+  it("asks for a new sign-in, not a retry, when the sign-in has stopped working", async () => {
+    identityMode();
+    sessionStorage.setItem("graph-agent-core:access-token", ["e30", btoa(JSON.stringify({ name: "alice" })), "sig"].join("."));
+    const { api } = start({ "GET /chat/sessions": () => json({ code: "unauthenticated", message: "Sign in." }, 401) });
+    expect(await screen.findByText("Sign in to see your conversations.")).toBeTruthy();
+    expect(screen.getByText("Your sign-in is no longer valid. Sign in again.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(api.sent("GET /chat/sessions")).toHaveLength(1);
   });
 });

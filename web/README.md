@@ -1,7 +1,8 @@
 # Web client
 
 The browser UI of Graph Agent Core: React, TypeScript, Vite, Tailwind, TanStack Query (server state), Zustand (client state), oxlint and
-Vitest. It talks only to the HTTP API in [`openapi.json`](../openapi.json), and renders only the documented stream events.
+Vitest. It talks only to the HTTP API in [`openapi.json`](../openapi.json), and renders only the documented stream events. **Changing the UI:
+read [DESIGN.md](DESIGN.md) first** (what it shows and why: RUNTIME_PATTERNS.md 121).
 
 It has **its own image and container** ([Dockerfile](Dockerfile), the `web` service; RUNTIME_PATTERNS.md 116). `make up-app` serves it at
 http://localhost:8085; behind the front door (`make up-all`, production) it is https://api.localhost:8443/ or the API's domain.
@@ -34,13 +35,14 @@ src/
   app/                composition: layout, the query client, and wiring.ts, the one place that joins features
   features/
     auth/             sign-in (authorization code with PKCE) and the Authorization header
-    chat/             the live conversation: model/ (messages, event reducer, turn store), ui/
+    chat/             the live conversation: model/ (messages, event reducer, turn store, reconnect, usage), ui/ (message,
+                      activity rail, approval card, composer)
     sessions/         the sidebar's conversation list (grouped by last activity), history pages, restoring a pause
     theme/            light and dark
     uploads/          documents for the knowledge base, with per-file progress
     workspace/        tenant, principal, domain, and each domain's text
   shared/             api/ (the client, the stream parser, the contract's types), lib/
-  test/               test setup, a fake API, the architecture test
+  test/               test setup, a fake API, the architecture and design tests
 ```
 
 ### Rules (tests, not conventions: `src/test/architecture.test.ts`)
@@ -62,7 +64,9 @@ src/
   the 2 KB answers checked, not measured on very long ones); a ```` ```markdown ```` block that itself holds a fenced block ends at the inner
   fence, as Markdown defines it; the highlighter's 37 languages are in the one bundle (about 200 KB gzipped in all, past Vite's size warning).
 - The transcript follows new text only while the reader is at the end (`Transcript.tsx`).
-- Colours are the tokens in `app/styles.css` (`bg-elevated`, `text-muted`, ...), never raw values, so both themes have one source.
+- A stream that drops is read again with `Last-Event-ID` (`features/chat/model/stream.ts`).
+- Colours are the tokens in `app/styles.css` (`bg-elevated`, `text-muted`, ...), never raw values, so both themes have one source
+  (`src/test/design.test.ts`).
 
 ### The API's types
 
@@ -72,9 +76,11 @@ changed route description included, since the file carries them).
 
 ### Names the browser tests use
 
-`tests/live/` and `scripts/checks/authlimit_web_check.py` find things by id (`#input`, `#send`, `#messages`, `#authBox`, ...) and by class
-(`msg`, `user`, `assistant`, `status`, `tool-activity-line`, `answer-text`, `draft-text`, `approval`, `approval-question`, `citations`,
-`citation-item`). Keep them when restyling.
+`tests/live/` and `scripts/checks/authlimit_web_check.py` find things by id (`#input`, `#send`, `#messages`, `#authBox`, ...), by class
+(`msg`, `user`, `assistant`, `status`, `answer-text`, `draft-text`, `activity-summary`, `tool-activity-line`, `declined`, `notice` with its
+`data-tone`, `approval`, `approval-question`, `approval-item`, `approval-details`, `citations`, `citation-item`) and by the button name
+"Approve". Keep them when restyling. The approval card is outside `#messages`, and a finished turn's tool rows are in the page only once its
+`activity-summary` is clicked.
 
 ## Adding a feature
 
