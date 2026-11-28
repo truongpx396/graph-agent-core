@@ -6,15 +6,15 @@ The sign-in settings have two writers, the container's template (web/server/agen
 web/server/testdata/agent-auth.json is the one answer both are held to (the Python writer by tests/core/test_web_container.py).
 """
 import html
+import http.client
 import json
 import re
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 CASES = Path(__file__).resolve().parents[2] / "web" / "server" / "testdata" / "agent-auth.json"
 # What `x-hardened` gives the service in deploy/dev/app.yml and deploy/prod/app.yml.
@@ -26,12 +26,17 @@ def _docker(*args: str) -> str:
 
 
 def _get(url: str) -> tuple[int, str, str]:
-    """Status, Cache-Control and body."""
+    """Status, Cache-Control and body. `http.client`, not `urlopen`: it speaks HTTP only, so no address can name a local file (semgrep's
+    `dynamic-urllib-use` rule, which failed `main`'s security gate)."""
+    parts = urlsplit(url)
+    connection = http.client.HTTPConnection(parts.hostname or "", parts.port, timeout=10)
     try:
-        with urllib.request.urlopen(url, timeout=10) as response:
-            return response.status, response.headers.get("Cache-Control", ""), response.read().decode()
-    except urllib.error.HTTPError as error:
-        return error.code, error.headers.get("Cache-Control", ""), ""
+        connection.request("GET", parts.path or "/")
+        response = connection.getresponse()
+        body = response.read()
+        return response.status, response.headers.get("Cache-Control", ""), body.decode() if response.status < 300 else ""
+    finally:
+        connection.close()
 
 
 def _wait(base: str) -> bool:

@@ -761,8 +761,9 @@ groups:
           summary: "Queued jobs are being picked up by nobody"
           description: >-
             agent_worker_unreachable_total{queue} increased — a queued chat
-            or ingest job published no event at all within its first-event
-            deadline, i.e. no worker took it. One is a stuck request; a
+            or ingest job published no event within its first-event
+            deadline and, for chat, no worker held its conversation, i.e. no
+            worker took it. One is a stuck request; a
             sustained stream of them is a worker pool that answers nothing
             (no agent-worker running for that domain, or no ingest-worker),
             where every caller gets an error and nothing else notices. Check
@@ -847,10 +848,10 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Routed turns are falling back to the local model"
+          summary: "Routed turns are falling back to the default model"
           description: >-
             agent_model_route_total{outcome="routed_unreachable_fell_back"} has been increasing for 10m: the medium or strong alias (chat-medium,
-            chat-strong) is unreachable or the gateway is returning a 5xx for it (a real LiteLLM answers 500 for an unreachable upstream), so turns the router sent there ran on the local model instead.
+            chat-strong) is unreachable, out of quota (429), or the gateway is returning a 5xx for it (a real LiteLLM answers 500 for an unreachable upstream), so turns the router sent there ran on the default model instead.
 
       # The router asks the ML service for a label and decides from the rules alone when it cannot get one (specs/015). That is a safe
       # degradation and a quiet one: turns still route, only by rules, so a classifier that has been silent for a quarter of an hour would

@@ -256,6 +256,20 @@ async def read_events(client: redis.Redis, key: str, last_id: str, block_ms: int
     raise AssertionError("unreachable")  # pragma: no cover - the loop returns or raises on its last attempt
 
 
+# The one more read made once the first-event deadline has passed. Never 0: XREAD takes BLOCK 0 as "for ever".
+LAST_LOOK_MS = 200
+
+
+async def _a_worker_has_the_conversation(client: redis.Redis, request_id: str) -> bool:
+    """A worker takes the conversation's lock before it runs a job and renews it while it runs (`agent_worker.py::process_request`), so a held
+    lock means a live worker is busy with this conversation: with this job, or with one it is queued behind."""
+    try:
+        thread_id = await thread_of_request(client, request_id)
+        return thread_id is not None and await is_thread_busy(client, thread_id)
+    except UNAVAILABLE_ERRORS:
+        return True  # not known: wait another round, and the read that follows raises if Redis stays down
+
+
 async def read_results(
     client: redis.Redis,
     request_id: str,
@@ -285,13 +299,14 @@ async def read_results_from(
     would wait forever for a done/error a paused worker never sends. A caller that stops iterating early
     leaves the stream to expire via TTL.
 
-    `first_event_deadline_seconds` bounds ONLY the wait for the FIRST event, not the job. Without it `if not
+    `first_event_deadline_seconds` bounds ONLY the wait for a worker to take the job, not the job. Without it `if not
     response: continue` loops forever when nobody will ever publish (no agent-worker for this domain, or a
     submission-dedup claim pointing at a request_id whose publish failed; see the compensating delete in
-    app/adapters/inbound/api/routers/chat.py), silently hanging an open SSE connection. Once a real event arrives the deadline
-    is cleared, so a legitimately long job (bounded by its own worker-side timeout, or not at all for ingest)
-    is never cut short. On expiry it yields one `error` event, the same terminal shape a worker-reported
-    failure has, and returns.
+    app/adapters/inbound/api/routers/chat.py), silently hanging an open SSE connection. A turn publishes nothing until
+    its first token, and a tool call has none, so silence alone does not mean no worker: when the deadline passes and
+    a worker holds the conversation, it starts again. Once a real event arrives it is cleared, so a legitimately long
+    job is never cut short. Otherwise it yields one `error` event, the same terminal shape a worker-reported failure
+    has, and returns.
     """
     key = results_stream_key(request_id)
     last_id = after
@@ -302,23 +317,14 @@ async def read_results_from(
         else None
     )
     while True:
-        if deadline is not None and time.monotonic() >= deadline:
-            # Nobody picked this job up. Counted so a total outage — which is a
-            # stream of these, one per request — can be alerted on
-            # (WorkerUnreachable, observability/prometheus/alerts.yml).
-            metrics.agent_worker_unreachable_total.labels(queue="agent").inc()
-            envelope = ErrorEnvelope(
-                code=ErrorCode.WORKER_UNREACHABLE,
-                message=(
-                    f"No response for {request_id!r} after "
-                    f"{first_event_deadline_seconds:.0f}s — is an agent-worker "
-                    "running for this domain?"
-                ),
-            )
-            yield last_id, {"type": "error", "content": envelope.message, **envelope.to_dict()}
-            return
-        response = await read_events(client, key, last_id, block_ms)
+        expired = deadline is not None and time.monotonic() >= deadline
+        if expired and first_event_deadline_seconds is not None and await _a_worker_has_the_conversation(client, request_id):
+            deadline, expired = time.monotonic() + first_event_deadline_seconds, False
+        # One short last read once the time is up: a worker releases the lock just before it publishes its terminal event.
+        response = await read_events(client, key, last_id, LAST_LOOK_MS if expired else block_ms)
         if not response:
+            if expired:
+                break
             continue  # no new entries within block_ms — poll again
         deadline = None  # a real event arrived — no longer "nobody is listening"
         _, entries = response[0]
@@ -328,6 +334,20 @@ async def read_results_from(
             yield entry_id, event
             if event.get("type") in TERMINAL_EVENT_TYPES:
                 return
+
+    # Nobody picked this job up. Counted so a total outage — which is a
+    # stream of these, one per request — can be alerted on
+    # (WorkerUnreachable, observability/prometheus/alerts.yml).
+    metrics.agent_worker_unreachable_total.labels(queue="agent").inc()
+    envelope = ErrorEnvelope(
+        code=ErrorCode.WORKER_UNREACHABLE,
+        message=(
+            f"No response for {request_id!r} after "
+            f"{first_event_deadline_seconds:.0f}s — is an agent-worker "
+            "running for this domain?"
+        ),
+    )
+    yield last_id, {"type": "error", "content": envelope.message, **envelope.to_dict()}
 
 
 async def delete_results_stream(client: redis.Redis, request_id: str) -> None:

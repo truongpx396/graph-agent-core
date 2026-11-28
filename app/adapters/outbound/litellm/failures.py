@@ -43,6 +43,10 @@ class OpenAiFailures:
             return True
         return isinstance(exc, openai.APIStatusError) and exc.status_code >= 500
 
+    def is_rate_limited(self, exc: BaseException) -> bool:
+        # The budget stop first: it has also arrived as a 429, and it is the operator's to see.
+        return not self.is_budget_exceeded(exc) and isinstance(exc, openai.APIStatusError) and exc.status_code == 429
+
     def content_block(self, exc: BaseException) -> ContentBlock | None:
         if not isinstance(exc, openai.BadRequestError):
             return None

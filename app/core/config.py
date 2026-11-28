@@ -472,18 +472,12 @@ class Settings(BillingSettings):
     # merged into their earlier one.
     chat_submit_dedup_ttl_seconds: int = 10
 
-    # Bounds ONLY the wait for the FIRST event ever published to a
-    # queued chat job's own results stream (app/adapters/outbound/redis/queue.py::
-    # read_results's `first_event_deadline_seconds`) — not the whole
-    # turn. Closes a real hang: nothing previously distinguished "a
-    # worker is genuinely still working on this" from "nobody is
-    # listening at all" (no agent-worker process running for this
-    # domain, or a submission-dedup claim left pointing at a request_id
-    # whose publish then failed — see app/adapters/inbound/api/routers/chat.py's own compensating
-    # delete for that case); `if not response: continue` loops forever
-    # in either. Once ANY real event has arrived the job is known alive,
-    # and this bound stops applying — a legitimately slow turn is still
-    # only bounded by request_timeout_seconds, enforced worker-side.
+    # How long a queued chat job may go with no event AND no worker holding its
+    # conversation's lock before the reader reports that nobody took it
+    # (app/adapters/outbound/redis/queue.py::read_results). Not a bound on the
+    # turn: that is request_timeout_seconds, enforced worker-side. Without it a
+    # job nobody will ever answer (no agent-worker for the domain, or a failed
+    # publish behind a dedup claim) hangs the SSE response for ever.
     # Generous relative to a cold model's first-token latency, the same
     # margin agent_worker_reclaim_idle_seconds reasons from.
     chat_first_response_deadline_seconds: int = 30

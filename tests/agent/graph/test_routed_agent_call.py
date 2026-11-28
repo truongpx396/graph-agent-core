@@ -22,7 +22,7 @@ from app.adapters.outbound.litellm.failures import OpenAiFailures
 from app.agent.cost import metering, pricing
 from app.agent.graph import model_route
 from app.agent.graph.build import GraphDeps
-from app.agent.graph.model_route import routed_unreachable
+from app.agent.graph.model_route import routed_unanswered
 from app.core import gateway
 from app.domains.ecorp import tools as ecorp_tools
 from app.ports.outbound.classification import Labelled
@@ -112,7 +112,9 @@ def node(llm):
     return make_graph_node_agent(llm, model_alias=LOCAL, system_prompt="THE SYSTEM PROMPT")
 
 
-def turn(route="strong", **extra):
+def turn(tier="strong", **extra):
+    """A turn the router gave `tier`: the state holds that tier's alias, or nothing when no decision was made."""
+    route = {"local": LOCAL, **ALIAS}[tier] if tier else None
     return {"messages": [HumanMessage(content="a question")], "model_route": route, "run_id": "r1", **extra}
 
 
@@ -186,6 +188,7 @@ UNREACHABLE = [
     ("a 502", lambda: status_error(502)),
     ("a 503", lambda: status_error(503)),
     ("a 504", lambda: status_error(504)),
+    ("a spent quota", lambda: status_error(429)),  # a free tier's few dozen calls a day: the turn used to fail
 ]
 
 
@@ -211,10 +214,9 @@ async def test_a_routed_call_that_never_reached_a_model_is_repeated_once_on_the_
         status_error(401),
         status_error(404),
         status_error(408),
-        status_error(429),
         ValueError("a bug, not an outage"),
     ],
-    ids=["400", "401", "404", "408", "429", "ValueError"],
+    ids=["400", "401", "404", "408", "ValueError"],
 )
 @pytest.mark.parametrize("tier", ROUTED)
 async def test_an_error_that_is_not_unreachability_is_not_swallowed(priced, routed, usage_event_sink, error, tier):
@@ -226,10 +228,11 @@ async def test_an_error_that_is_not_unreachability_is_not_swallowed(priced, rout
     assert len(llm.kwargs) == 1 and routed.labels_seen == [] and ledger_aliases(usage_event_sink) == []
 
 
+@pytest.mark.parametrize("status", [503, 429])
 @pytest.mark.parametrize("tier", ROUTED)
-async def test_the_gateways_budget_stop_is_never_papered_over_even_as_a_5xx(priced, routed, tier):
+async def test_the_gateways_budget_stop_is_never_papered_over_even_as_a_5xx_or_a_429(priced, routed, tier, status):
     # a spent budget repeats until it resets and is the operator's signal; a silent fallback would hide it
-    budget = status_error(503, {"type": "budget_exceeded", "message": "Budget has been exceeded"})
+    budget = status_error(status, {"type": "budget_exceeded", "message": "Budget has been exceeded"})
     assert FAILURES.is_budget_exceeded(budget), "test setup: this error must be recognised as the budget stop"
     llm = ScriptedLLM(budget, answer())
 
@@ -273,13 +276,14 @@ async def test_the_next_call_in_the_same_turn_tries_the_routed_alias_again(price
         (status_error(400), False),
         (status_error(404), False),
         (status_error(408), False),
-        (status_error(429), False),
+        (status_error(429), True),  # a spent quota
         (status_error(503, {"type": "budget_exceeded"}), False),
+        (status_error(429, {"type": "budget_exceeded"}), False),
         (RuntimeError("x"), False),
     ],
 )
-def test_routed_unreachable_is_connection_failures_timeouts_and_any_5xx_but_never_a_4xx_or_the_budget_stop(error, expected):
-    assert routed_unreachable(error) is expected
+def test_a_routed_call_is_repeated_after_a_connection_failure_timeout_5xx_or_429_never_another_4xx_or_the_budget_stop(error, expected):
+    assert routed_unanswered(error) is expected
 
 
 def test_only_the_agent_node_asks_for_a_different_model():
@@ -394,7 +398,7 @@ async def test_a_mutating_tool_call_gets_the_same_approval_scoping_and_idempoten
     medium = await _mutating_turn(monkeypatch, "analysis")
     strong = await _mutating_turn(monkeypatch, "reasoning")
 
-    assert (local["route"], medium["route"], strong["route"]) == ("local", "medium", "strong")
+    assert (local["route"], medium["route"], strong["route"]) == (LOCAL, MEDIUM, STRONG)
     assert local["models"] == [None, None] and medium["models"] == [MEDIUM, MEDIUM] and strong["models"] == [STRONG, STRONG]  # the routes really differed ...
     assert local["paused_at"] and local["paused_at"] == medium["paused_at"] == strong["paused_at"]  # ... and all paused for the same human approval
     expected_key = [("call_1", TEST_CTX["tenant"], TEST_CTX["principal"], "add_note")]
@@ -403,9 +407,9 @@ async def test_a_mutating_tool_call_gets_the_same_approval_scoping_and_idempoten
 
 
 @pytest.mark.parametrize(("unpriced", "label", "expected_model", "expected_route"), [
-    ({STRONG}, "reasoning", MEDIUM, "medium"),  # the strong alias has no price: the turn steps down to the medium one
-    ({STRONG, MEDIUM}, "reasoning", None, "local"),  # neither does: the turn stays on the default model
-    ({MEDIUM}, "analysis", None, "local"),
+    ({STRONG}, "reasoning", MEDIUM, MEDIUM),  # the strong alias has no price: the turn steps down to the medium one
+    ({STRONG, MEDIUM}, "reasoning", None, LOCAL),  # neither does: the turn stays on the default model
+    ({MEDIUM}, "analysis", None, LOCAL),
 ])
 async def test_an_unpriced_alias_under_the_block_policy_steps_the_turn_down_and_never_refuses_it(monkeypatch, usage_event_sink, unpriced, label, expected_model, expected_route):
     async def get_price(alias):
@@ -468,5 +472,5 @@ async def test_a_shadow_router_changes_no_gateway_call_and_no_ledger_row_compare
     shadow = await one_turn("shadow")
 
     assert shadow[0] == off[0] and shadow[1] == off[1] and shadow[3] == off[3]  # the same gateway keywords, ledger rows and answer
-    assert [k.get("model") for k in shadow[0]] == [None] and shadow[2] == off[2] == "local"
+    assert [k.get("model") for k in shadow[0]] == [None] and shadow[2] == off[2] == LOCAL
     assert tiers == [("strong", "shadow", "label")]  # ... while the decision it WOULD have made was counted, and the off router counted none

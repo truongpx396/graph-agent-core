@@ -5,35 +5,58 @@
 # Three chat tiers, each a gateway ALIAS (the app names aliases, never a provider's model id):
 #
 #   tier    alias         dev (this file)                       to use another model
-#   easy    chat          qwen2.5:7b, local                     edit that ONE entry
-#   medium  chat-medium   gemini-3.5-flash-lite, free tier      edit that ONE entry; prod: LLM_MEDIUM_*
-#   strong  chat-strong   gemini-3-flash-preview, free tier     edit that ONE entry; prod: LLM_STRONG_*
+#   easy    chat          gemini-3.5-flash-lite, free tier      edit that ONE entry; prod: LLM_*
+#   medium  chat-medium   gemini-3-flash-preview, free tier     edit that ONE entry; prod: LLM_MEDIUM_*
+#   strong  chat-strong   gemini-3.6-flash, free tier           edit that ONE entry; prod: LLM_STRONG_*
 #
-# `chat-medium` and `chat-strong` are the router's two escalation targets (MEDIUM_CHAT_MODEL, STRONG_CHAT_MODEL; off by default, and a delegated
-# specialist can name either in its AGENT.md `model:`). They need GOOGLE_API_KEY in `.env`; everything else here is local and needs no key.
-# FREE TIER, DEV DATA ONLY: Google's pricing page says free-tier content is used to improve its products, and a routed turn sends the whole
-# conversation, retrieved documents and tool results. Its quotas are small and set per project (AI Studio shows them).
+# `chat` is every turn's model; `chat-medium` and `chat-strong` are the router's two escalation targets (MEDIUM_CHAT_MODEL, STRONG_CHAT_MODEL; off
+# by default, and a delegated specialist can name either in its AGENT.md `model:`). All three need GOOGLE_API_KEY in `.env`. Without it, or when
+# Google refuses a call (its free quota is per minute and per day), `chat` is answered by the local `chat-backup` (see `fallbacks` below): slow,
+# and visible only in the spend log (Admin UI, Logs: model group `chat-backup`). The app and its traces still say `chat`.
+# FREE TIER, DEV DATA ONLY: Google's pricing page says free-tier content is used to improve its products, and EVERY turn now sends the whole
+# conversation, retrieved documents and tool results. Use sample data. Quotas are small, set per project and per model (AI Studio shows them).
 #
-# PRICES. Every local alias below states a price in `model_info`. A local model costs no money, but without a price LiteLLM reports it as
+# WHY THESE MODELS (measured on this project's key, 2026-11-28, a handful of calls each; a snapshot, not a promise):
+#   gemini-3.5-flash-lite 10/10 answered in about 0.8 s    <- `chat`
+#   gemini-3.1-flash-lite  5/10 (503 "high demand", timeouts)
+#   gemini-3-flash-preview 6/6 in 1.4-2.5 s                <- `chat-medium` (a preview model: Google may withdraw it)
+#   gemini-3.6-flash       5/6                             <- `chat-strong`
+#   gemini-3.8-flash       0/6
+#   gemini-4-hydrogen      4/6, and on this LiteLLM image it answers 400 to a replayed tool call another model made, which fails the turn
+#
+# PRICES. Every alias below states a price in `model_info`. A local model costs no money, but without a price LiteLLM reports it as
 # either unknown (`null`: the app counts every call as unpriced and `UNPRICED_MODEL_POLICY=block` would refuse it) or a known $0 (and a
 # model whose two prices are both 0 skips budget checks, per LiteLLM's budget docs, so neither the app key's `max_budget` nor the per-person
 # budget below could ever trip on it; measured on the 1.94.1 image before this change: chat, chat-backup and embed reported 0, vision null).
-# These are SHADOW prices, not a bill: the order of magnitude hosted providers charge for open-weights models of the same
-# size (USD per token: 0.0000001 is $0.10 per million). They make the meter, the caps and LiteLLM's own spend log see local usage as
-# non-zero; swap in your amortised hardware cost if you want real numbers, but keep them above 0. YAML note: write decimals, because
-# PyYAML reads `1e-7` as a string. Two aliases on one underlying model should state the same price (a deployment with none inherits it).
+# These are SHADOW prices, not a bill (USD per token: 0.0000001 is $0.10 per million): the paid-tier list price for a hosted model, and for a
+# local one the order of magnitude hosted providers charge for open weights of that size. They make the meter, the caps and LiteLLM's own spend
+# log see usage as non-zero. YAML note: write decimals, because PyYAML reads `1e-7` as a string. Two aliases on one underlying model should
+# state the same price (a deployment with none inherits it).
 
 model_list:
-  # Primary chat model. NOTE: use the `ollama_chat/` provider (not `ollama/`) —
-  # it hits Ollama's /api/chat endpoint with *native* tool calling. The plain
-  # `ollama/` provider fakes tools via prompt injection and loops on tool use.
+  # Tier "easy": the model every turn uses unless the router picks another. `gemini/` is LiteLLM's own Google AI Studio provider: it carries
+  # Gemini's thought signatures from one tool call to the next, which Google's OpenAI-compatible endpoint would make the app carry itself.
+  - model_name: chat
+    litellm_params:
+      model: gemini/gemini-3.5-flash-lite
+      api_key: os.environ/GOOGLE_API_KEY
+      # Go to `chat-backup` at once: gateway retries on a free tier multiply the app's own (3 attempts) and spend Google's quota.
+      num_retries: 0
+      # A hung call must leave the fallback time to answer inside the app's 60 s turn (REQUEST_TIMEOUT_SECONDS). A normal one takes 1-2 s.
+      timeout: 20
+    model_info:
+      input_cost_per_token: 0.0000003
+      output_cost_per_token: 0.0000025
+  # `chat`'s fallback target, and the local model (`make probe-tools ARGS="--alias chat-backup"`). NOTE: use the `ollama_chat/` provider (not
+  # `ollama/`) — it hits Ollama's /api/chat endpoint with *native* tool calling. The plain `ollama/` provider fakes tools via prompt injection
+  # and loops on tool use.
   #
   # The model is qwen2.5:7b, not the 3b this file used to name, because of what each does with this app's tool calls
   # (`python -m scripts.checks.toolcall_probe`, 25 labelled prompts against the app's real tools and system prompt, temperature 0):
   # the 3b answered 8/19 correctly at the old repeat_penalty 1.3, 13/19 at 1.1 and 15/19 even at 1.0, the misses mostly silently dropped by Ollama
   # (the model wrote malformed JSON, Ollama's parser discards a call it cannot read, and the graph sees an empty reply);
   # the 7b answers 19/19 at 1.1 or 1.0. See GRAPH_PATTERNS.md pattern 73 and the repeat_penalty note below.
-  - model_name: chat
+  - model_name: chat-backup
     litellm_params:
       model: ollama_chat/qwen2.5:7b
       # host.docker.internal: this targets a native macOS Ollama on the
@@ -92,36 +115,22 @@ model_list:
       # Do not change it without running `make probe-tools` (it checks both halves: tool calls and loops).
       num_predict: 2048
       repeat_penalty: 1.1
-    # Tier "easy". Shadow price, see the PRICES note at the top: $0.10 per million input tokens, $0.20 per million output.
-    model_info:
-      input_cost_per_token: 0.0000001
-      output_cost_per_token: 0.0000002
-  # A second chat entry used purely as a fallback target for "chat".
-  - model_name: chat-backup
-    litellm_params:
-      model: ollama_chat/qwen2.5:7b
-      api_base: http://host.docker.internal:11434
-      num_ctx: 32000
-      num_predict: 2048
-      repeat_penalty: 1.1
-    # The same underlying model as `chat`, so the same price: a fallback must not change what a call is priced at.
-    model_info:
-      input_cost_per_token: 0.0000001
-      output_cost_per_token: 0.0000002
-  # Tier "medium": between `chat` and `chat-strong`. The router sends analysis and code work here. `gemini/` is LiteLLM's own Google AI Studio
-  # provider: it carries Gemini's thought signatures from one tool call to the next, which Google's OpenAI-compatible endpoint would make the app
-  # carry itself. Ollama's options (`num_ctx`, `repeat_penalty`) do not apply. NO `fallbacks` entry names it, on purpose: a gateway fallback would
-  # price a call at the model that did not answer it (the same reason `chat-strong` has none).
-  - model_name: chat-medium
-    litellm_params:
-      model: gemini/gemini-3.5-flash-lite
-      api_key: os.environ/GOOGLE_API_KEY
-      # No gateway retries on a free tier: they multiply the app's own (3 attempts), up to 9 calls against Google's quota for one model call.
-      num_retries: 0
-    # The paid-tier list price, as a SHADOW price (see PRICES above): $0.30 per million input tokens, $2.50 per million output.
+    # The same price as `chat`: a fallback must not change what a call is priced at (the app prices by the alias it asked for).
     model_info:
       input_cost_per_token: 0.0000003
       output_cost_per_token: 0.0000025
+  # Tier "medium": between `chat` and `chat-strong`. The router sends analysis and code work here. Ollama's options (`num_ctx`,
+  # `repeat_penalty`) do not apply. NO `fallbacks` entry names it, on purpose: a gateway fallback would price a call at the model that did not
+  # answer it (the same reason `chat-strong` has none).
+  - model_name: chat-medium
+    litellm_params:
+      model: gemini/gemini-3-flash-preview
+      api_key: os.environ/GOOGLE_API_KEY
+      num_retries: 0
+    # Shadow price at the paid-tier list price: $0.50 per million input tokens, $3.00 per million output.
+    model_info:
+      input_cost_per_token: 0.0000005
+      output_cost_per_token: 0.000003
   # The escalation alias (specs/014, contracts/gateway-aliases.md section 1): where the model router sends a turn it judges to need a stronger
   # model (reasoning and high-stakes questions). ALWAYS present so the proxy starts and the alias resolves; INERT until the app is told to use it
   # (STRONG_CHAT_MODEL, ROUTER_MODE, both off by default). Pro-class Gemini models have no free tier. To point it elsewhere, edit this one entry:
@@ -132,13 +141,14 @@ model_list:
       model: gemini/gemini-3.6-flash
       api_key: os.environ/GOOGLE_API_KEY
       num_retries: 0
-    # Shadow price at the paid-tier list price: $0.50 per million input tokens, $3.00 per million output.
+    # Shadow price at the paid-tier list price through 2026-12-31 ($1.50 / $7.50 from 2027-01-01): $0.75 per million input tokens, $3.75 output.
     model_info:
-      input_cost_per_token: 0.0000005
-      output_cost_per_token: 0.000003
-  # Vision-capable alias slot (GRAPH_PATTERNS.md pattern 44) — "chat" above
-  # (qwen2.5:7b) has no vision capability, so an attached image is carried
-  # through the pipeline correctly but the model can't actually see it.
+      input_cost_per_token: 0.00000075
+      output_cost_per_token: 0.00000375
+  # Vision-capable alias slot (GRAPH_PATTERNS.md pattern 44). The local chat model
+  # (`chat-backup`) has no vision capability, so an attached image reaching it is carried
+  # through the pipeline correctly but it can't see it. The hosted model behind `chat`
+  # accepts images; that has not been tried through this app.
   #
   # IMPORTANT, verified empirically: neither small local Ollama vision
   # model this session tried (moondream, qwen2.5vl:3b — both pulled and
@@ -186,7 +196,7 @@ litellm_settings:
   # turn 420 s. Three layers retry (the app's SDK, off by default; the graph's policy, 3 attempts; this proxy, 2) and multiply: see
   # deploy/prod/litellm-config.yaml, which is where the timeout was lowered.
   request_timeout: 600
-  # If "chat" fails, transparently retry on "chat-backup".
+  # If "chat" fails (no key, quota, "high demand", a hang), transparently answer on "chat-backup".
   fallbacks: [{"chat": ["chat-backup"]}]
   # A default per-PERSON spend cap at the gateway (COST_GOVERNANCE.md pattern 74). The app sends every call with `user` =
   # `tenant:<tenant>/user:<principal>` (app/core/gateway.py), which LiteLLM keeps as the call's END USER (its Customer Usage view filters

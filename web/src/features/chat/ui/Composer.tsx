@@ -110,8 +110,8 @@ export function Composer() {
         />
       </div>
       <div className="basis-full text-[0.72rem] text-muted">
-        Note: the default local model can't actually see attached images yet (no small local model this project verified supports vision
-        + tool-calling together). See GRAPH_PATTERNS.md pattern 44 for enabling real vision support.
+        Note: whether an attached image is seen depends on the model behind this deployment, and it has not been verified with this app
+        (GRAPH_PATTERNS.md pattern 44).
       </div>
     </form>
   );

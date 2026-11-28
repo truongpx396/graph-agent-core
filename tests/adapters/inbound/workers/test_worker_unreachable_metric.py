@@ -13,13 +13,15 @@ observability/prometheus/alerts.yml is the rule on it
 (tests/core/test_alert_rules.py checks the rule exists and watches a real metric).
 Only the expiry counts: a job that was picked up, however slow, is not "unreachable".
 """
+import asyncio
+
 import pytest
 
 from app.adapters.inbound.workers import ingest_streams, streams
 from app.adapters.outbound.redis import ingest_queue, queue
 from app.core import metrics
 from tests.adapters.outbound.redis.test_queue import FakeRedis
-from tests.conftest import metric_value
+from tests.conftest import TEST_CTX, metric_value
 
 
 def _unreachable(queue_name: str) -> float:
@@ -37,6 +39,68 @@ async def test_an_agent_job_nobody_picks_up_counts_as_an_unreachable_worker():
 
     assert [e["type"] for e in events] == ["error"]
     assert _unreachable("agent") - before == 1
+
+
+class _BlockingRedis(FakeRedis):
+    """An empty XREAD waits out its block, as a server's does, so a worker's task gets to run while the reader waits."""
+
+    async def xread(self, streams, block=None, count=None):
+        result = await super().xread(streams, block=block, count=count)
+        if not result:
+            await asyncio.sleep((block or 0) / 1000)
+        return result
+
+
+async def _published_job(client):
+    await queue.publish_request(client, request_id="r1", text="remember this", thread_id="t1", ctx=TEST_CTX)
+
+
+async def _read(client):
+    return await _drain(queue.read_results(client, "r1", block_ms=10, first_event_deadline_seconds=0.05))
+
+
+async def test_a_job_a_worker_is_still_running_is_not_given_up_on():
+    """Trace 7e6cad06: the model took 28.6 s to write a tool call, which streams no tokens, so the turn's first event came 0.3 s after the
+    30 s deadline. The person saw "is an agent-worker running?" and never the approval box, though the worker had paused for it."""
+    client = _BlockingRedis()
+    await _published_job(client)
+    await streams.acquire_thread_lock(client, "t1", "worker")  # what a worker does before it runs a job
+    before = _unreachable("agent")
+
+    reader = asyncio.create_task(_read(client))
+    await asyncio.sleep(0.2)  # several deadlines pass with nothing published
+    assert not reader.done()
+    await streams.publish_result(client, "r1", {"type": "approval_required", "tool_calls": []})
+
+    assert [e["type"] for e in await asyncio.wait_for(reader, 5)] == ["approval_required"]
+    assert _unreachable("agent") == before
+
+
+async def test_a_worker_that_dies_before_publishing_is_still_reported():
+    client = _BlockingRedis()
+    await _published_job(client)
+    await streams.acquire_thread_lock(client, "t1", "worker")
+
+    reader = asyncio.create_task(_read(client))
+    await asyncio.sleep(0.1)
+    await streams.release_thread_lock(client, "t1", "worker")  # a crashed worker's lock expires the same way
+
+    assert [e["type"] for e in await asyncio.wait_for(reader, 5)] == ["error"]
+
+
+async def test_an_event_published_just_after_the_lock_was_released_is_not_lost():
+    """The worker releases the lock and then publishes its terminal event, so the reader looks once more before it gives up."""
+
+    class _PublishesAtTheLastLook(_BlockingRedis):
+        async def xread(self, streams_, block=None, count=None):
+            if block == queue.LAST_LOOK_MS:
+                await streams.publish_result(self, "r1", {"type": "done"})
+            return await super().xread(streams_, block=block, count=count)
+
+    client = _PublishesAtTheLastLook()
+    await _published_job(client)
+
+    assert [e["type"] for e in await asyncio.wait_for(_read(client), 5)] == ["done"]
 
 
 async def test_an_ingest_job_nobody_picks_up_counts_as_an_unreachable_worker():

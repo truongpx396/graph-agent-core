@@ -34,7 +34,7 @@ from app.agent.graph.messages import (
     with_turn_notes,
     with_unanswered_calls_closed,
 )
-from app.agent.graph.model_route import routed_unreachable, tier_alias
+from app.agent.graph.model_route import routed_alias, routed_unanswered
 from app.agent.graph.skill_guards import pending_skill_required_tool
 from app.agent.graph.state import State
 from app.agent.graph.stream_events import STREAM_EVENT
@@ -296,10 +296,10 @@ def make_graph_node_agent(
         #
         # A turn the router sent to the medium or strong tier (`route_model`, specs/014, 015) calls that
         # tier's alias instead, and is priced and recorded as the alias that served; every other turn makes
-        # exactly the call it always did. If the routed call never reaches a model, THAT ONE CALL is repeated
-        # on the local alias (the next call tries the routed alias again). This lives here and not in the
+        # exactly the call it always did. If the routed call gets no answer (unreachable, or out of quota), THAT ONE CALL is repeated
+        # on the default alias (the next call tries the routed alias again). This lives here and not in the
         # gateway's `fallbacks`, which would price and record the routed alias that did not answer.
-        routed = tier_alias(state.get("model_route"))
+        routed = routed_alias(state.get("model_route"))
         if config is not None:
             # Before the call, so the stream knows what to do with the first token (runtime/held_answer.py). Every call of a second look is held until
             # check_output has judged it: its answer may be swapped for the first one or lose its markers, and either would redraw the page. A first
@@ -322,12 +322,12 @@ def make_graph_node_agent(
                     call = await metering.metered_invoke(
                         llm, messages, config=config, kind=kind, model_alias=routed, invoke_model=routed
                     )
-                except Exception as exc:  # classified by routed_unreachable; anything that is not "never reached a model" is re-raised unchanged
-                    if not routed_unreachable(exc):
+                except Exception as exc:  # classified by routed_unanswered; anything another model could not answer either is re-raised unchanged
+                    if not routed_unanswered(exc):
                         raise
                     metrics.agent_model_route_total.labels(outcome="routed_unreachable_fell_back").inc()
                     logger.warning(
-                        "routed model unreachable; repeating the call on the local model",
+                        "routed model gave no answer; repeating the call on the default model",
                         extra={"alias": routed, "error_class": type(exc).__name__, "run_id": state.get("run_id", "-")},
                     )
                     call = await metering.metered_invoke(

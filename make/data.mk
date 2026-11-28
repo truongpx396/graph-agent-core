@@ -2,7 +2,7 @@
 
 ##@ Models and the vector store
 
-pull-models:  ## Pull the chat (qwen2.5:7b), test (qwen2.5:3b) and embedding models into the native Ollama (~7 GB)
+pull-models:  ## Pull the local chat fallback (qwen2.5:7b), test (qwen2.5:3b) and embedding models into the native Ollama (~7 GB)
 	ollama pull qwen2.5:7b
 	ollama pull qwen2.5:3b
 	ollama pull nomic-embed-text

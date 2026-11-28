@@ -4,8 +4,9 @@ description or a shared rule (`make prompt-check`).
 `make promptfoo` sends a raw prompt with no tools, and `make eval` covers Ecorp only, so most of what the prompts say (which tool to
 call, what to refuse, what to ignore) was not measured by anything. This sends one model request per case in `prompt_behaviour.yaml`
 with what the graph itself would send: the composed system prompt, the domain's bound tool schemas, retrieved text framed and attached
-by the same functions the agent node uses, and, for a replayed tool call, the real tool's output over fake data. It goes to a native
-Ollama with the options the `chat` alias sets, at temperature 0. No tool with an effect runs and no other service is needed.
+by the same functions the agent node uses, and, for a replayed tool call, the real tool's output over fake data, at temperature 0. No
+tool with an effect runs. It goes to whatever serves the `chat` alias: a hosted model through the running gateway (`make up`; each case is
+one request of the provider's quota), an Ollama model directly, with the alias's options (`--alias chat-backup`).
 
     python -m scripts.checks.prompt_behaviour                        # every domain, the `chat` alias's model
     python -m scripts.checks.prompt_behaviour --domain ops --repeat 3
@@ -37,7 +38,7 @@ from app.core.tool_schema import strict_tool_schema
 from app.core.untrusted import frame_untrusted
 from app.domains.registry import DOMAINS
 from app.ports.outbound.retrieval import SearchHit
-from scripts.checks.toolcall_probe import alias_settings, chat
+from scripts.checks.toolcall_probe import chat, target
 
 CASES = Path(__file__).with_name("prompt_behaviour.yaml")
 CTX = {"tenant": "ecorp", "principal": "prompt-check", "claims": {}}
@@ -125,7 +126,7 @@ def domain_request(domain: str) -> tuple[str, list[dict[str, Any]]]:
     return compose_system_prompt(manifest.system_prompt), schemas
 
 
-def run(client: httpx.Client, base: str, model: str, options: dict[str, Any], domains: list[str], repeat: int) -> dict[str, dict[str, Any]]:
+def run(client: httpx.Client, base: str | None, model: str, options: dict[str, Any], domains: list[str], repeat: int) -> dict[str, dict[str, Any]]:
     cases = yaml.safe_load(CASES.read_text(encoding="utf-8"))
     results: dict[str, dict[str, Any]] = {}
     for domain in domains:
@@ -167,18 +168,18 @@ def main(argv: list[str] | None = None, client: httpx.Client | None = None) -> i
     wire()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--domain", action="append", choices=sorted(DOMAINS), help="only these domains (repeatable; default all)")
-    parser.add_argument("--alias", default="chat", help="gateway alias to read the model and options from (default: chat)")
+    parser.add_argument("--alias", default="chat", help="gateway alias to check (default: chat)")
     parser.add_argument("--model", help="an Ollama model tag to use instead of the alias's")
     parser.add_argument("--repeat", type=int, default=1, help="runs per case (default 1)")
     parser.add_argument("--out", type=Path, help="write the results as JSON")
     parser.add_argument("--compare", type=Path, help="an earlier --out file; list what changed and exit 1 if a case got worse")
     args = parser.parse_args(argv)
 
-    model, base, options = alias_settings(args.alias)
+    model, base, options = target(args.alias, args.model)
     with client or httpx.Client() as session:
-        results = run(session, base, args.model or model, options, args.domain or sorted(DOMAINS), args.repeat)
+        results = run(session, base, model, options, args.domain or sorted(DOMAINS), args.repeat)
     passed = sum(r["passed"] == r["runs"] for r in results.values())
-    print(f"\n{passed}/{len(results)} cases passed every run ({args.model or model})")
+    print(f"\n{passed}/{len(results)} cases passed every run ({model})")
     if args.out:
         args.out.write_text(json.dumps(results, indent=2), encoding="utf-8")
     if args.compare:

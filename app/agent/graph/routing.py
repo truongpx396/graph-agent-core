@@ -37,6 +37,7 @@ from app.agent.graph.messages import (
     last_human_message,
     tool_ran_this_turn,
 )
+from app.agent.graph.model_route import tier_of
 from app.agent.graph.output_checks import ROUTED_TIERS, CheckContext, run_checks
 from app.agent.graph.output_guardrails import (
     strip_closing_offer,
@@ -180,7 +181,7 @@ def graph_node_check_output(
     answer it replaced is put back: the re-ask exists to give a tool a chance, and must never end worse than not asking. And either way it has no source
     list, so no `[n]` marker is shown.
     """
-    tier = state.get("model_route") or "local"
+    tier = tier_of(state.get("model_route"))
     last = state["messages"][-1]
     content = getattr(last, "content", "") or ""
     citations = state.get("citations") or []

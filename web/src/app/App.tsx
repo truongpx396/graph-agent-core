@@ -14,9 +14,14 @@ export function App() {
     <div className="flex h-screen flex-row max-[700px]:h-auto max-[700px]:min-h-screen max-[700px]:flex-col">
       {/* Where am I. Two halves that scroll on their own, so neither a long brief nor a long history pushes the other off screen. */}
       <aside id="domainSidebar" className="flex h-screen w-68 shrink-0 flex-col border-r border-line bg-sidebar max-[700px]:h-auto max-[700px]:w-auto max-[700px]:border-r-0 max-[700px]:border-b">
-        <div className="flex min-h-0 flex-1 basis-0 flex-col gap-3.5 overflow-y-auto px-4 py-5 max-[700px]:max-h-[20vh] max-[700px]:flex-none">
-          <DomainSelect />
-          <DomainBrief onAsk={(question) => void send(question)} />
+        <div className="flex min-h-0 flex-1 basis-0 flex-col max-[700px]:flex-none">
+          {/* Outside the part that scrolls: which domain you are in does not leave the screen. */}
+          <div className="shrink-0 px-4 pt-5 pb-3.5">
+            <DomainSelect />
+          </div>
+          <div id="domainScroll" className="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-4 pb-5 max-[700px]:max-h-[20vh] max-[700px]:flex-none">
+            <DomainBrief onAsk={(question) => void send(question)} />
+          </div>
         </div>
         <SessionList ready={ready} className="min-h-0 flex-1 basis-0 border-t border-line max-[700px]:max-h-[20vh] max-[700px]:flex-none" />
       </aside>

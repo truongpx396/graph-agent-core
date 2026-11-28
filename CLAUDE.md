@@ -55,9 +55,10 @@ make chat              # CLI agent; chat-hitl adds approval prompts (turns go th
 
 `make eval`, `promptfoo`, `garak`, `deepeval`, `test-sandbox`, `test-provider-sandbox` need live models or services and
 are manual by design. Run `make eval` + `make promptfoo` after a prompt, model-alias or
-retrieval change. Run `make prompt-check` (native Ollama, ~5 min) before and after any change to a prompt, a tool description or
+retrieval change. Run `make prompt-check` (~5 min) before and after any change to a prompt, a tool description or
 `app/core/prompt_rules.py` (`ARGS="--out before.json"`, then `ARGS="--compare before.json"`): it is the only check that sends each
-domain's real prompt and tools. `make model-eval KIND=embedding|reranker|screen|classifier CANDIDATE=<name>` is the same kind of tier for a
+domain's real prompt and tools. Dev's `chat` is hosted, so it and `make probe-tools` need `make up` and spend that quota
+(`ARGS="--alias chat-backup"` runs them on the local model). `make model-eval KIND=embedding|reranker|screen|classifier CANDIDATE=<name>` is the same kind of tier for a
 *model swap*: it judges a candidate against the recorded baseline (`evals/README.md`), and `make model-eval-verify`
 needs no model or network. Run it before changing an embedding, reranker or screening model, and read the report's
 `controls` first. The routing classifier has one more manual target, `make router-label JUDGE=<alias>` (score the local and strong

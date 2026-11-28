@@ -1,9 +1,21 @@
 // A fenced block with its language and a copy button. Copying is a click and writes to the clipboard only: nothing is fetched or run.
-import { type ReactNode, useEffect, useRef, useState } from "react";
+// A block of Markdown source also has a preview, shown first.
+import { type ReactNode, useEffect, useState } from "react";
 
-export function CodeBlock({ language, children }: { language: string; children: ReactNode }) {
-  const pre = useRef<HTMLPreElement>(null);
+interface Props {
+  language: string;
+  /** The block's own text: what Copy puts on the clipboard, in either view. */
+  code: string;
+  /** The source as highlighted elements. */
+  children: ReactNode;
+  preview?: ReactNode;
+}
+
+const action = "cursor-pointer font-semibold hover:text-ink";
+
+export function CodeBlock({ language, code, children, preview }: Props) {
   const [copied, setCopied] = useState(false);
+  const [source, setSource] = useState(false);
 
   useEffect(() => {
     const timer = copied ? setTimeout(() => setCopied(false), 2000) : undefined;
@@ -17,18 +29,25 @@ export function CodeBlock({ language, children }: { language: string; children: 
     <div className="code-block">
       <div className="code-block-header">
         <span>{language || "text"}</span>
-        {clipboard && (
-          <button
-            type="button"
-            className="cursor-pointer font-semibold hover:text-ink"
-            // Refused (no permission, an unfocused page): the button keeps saying "Copy".
-            onClick={() => void clipboard.writeText(pre.current?.textContent ?? "").then(() => setCopied(true), () => setCopied(false))}
-          >
-            {copied ? "Copied" : "Copy"}
-          </button>
-        )}
+        <span className="flex gap-3">
+          {preview !== undefined && (
+            <button type="button" className={action} onClick={() => setSource(!source)}>
+              {source ? "Preview" : "Source"}
+            </button>
+          )}
+          {clipboard && (
+            <button
+              type="button"
+              className={action}
+              // Refused (no permission, an unfocused page): the button keeps saying "Copy".
+              onClick={() => void clipboard.writeText(code).then(() => setCopied(true), () => setCopied(false))}
+            >
+              {copied ? "Copied" : "Copy"}
+            </button>
+          )}
+        </span>
       </div>
-      <pre ref={pre}>{children}</pre>
+      {preview !== undefined && !source ? <div className="markdown code-block-preview">{preview}</div> : <pre>{children}</pre>}
     </div>
   );
 }
