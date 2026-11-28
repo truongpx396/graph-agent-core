@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { cx } from "@/shared/lib/classes";
 import type { Step } from "../model/entry";
-import { Icon, TIER_NAMES } from "./icons";
+import { Icon, type IconName, TIER_NAMES } from "./icons";
 
 function seconds(ms: number): string {
   if (ms < 50) return "<0.1 s";
@@ -17,11 +17,18 @@ function resultOf(step: Step): string | null {
   return step.summary;
 }
 
+function iconOf(step: Step): { name: IconName; label: string } {
+  if (step.outcome === "refused") return { name: "lock", label: "Blocked" };
+  // Handing the work to another agent is not just another read. A specialist can only read, so the shape hides no risk.
+  if (step.tool === "run_subagent") return { name: "robot", label: "Specialist" };
+  return { name: step.tier ?? "unknown", label: step.tier ? TIER_NAMES[step.tier] : "Step" };
+}
+
 function Row({ step }: { step: Step }) {
   const result = resultOf(step);
   return (
     <li className={cx("tool-activity-line flex items-center gap-1.5 py-0.5", step.outcome !== "running" && "done")}>
-      {step.outcome === "refused" ? <Icon name="lock" label="Blocked" /> : <Icon name={step.tier ?? "unknown"} label={step.tier ? TIER_NAMES[step.tier] : "Step"} />}
+      <Icon {...iconOf(step)} />
       <span className={cx("min-w-0 flex-1 truncate", step.outcome === "running" && "shimmer")}>{step.label}</span>
       {result && <span className="max-w-[50%] truncate text-ink-2">{result}</span>}
       {step.durationMs !== null && <span className="shrink-0 font-mono text-[0.7rem]">{seconds(step.durationMs)}</span>}

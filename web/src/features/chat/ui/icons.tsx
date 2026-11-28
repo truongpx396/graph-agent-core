@@ -7,12 +7,16 @@ const PATHS = {
   outward: "M14 4h6v6M20 4l-8 8M18 14v6H4V6h6",
   unknown: "M12 10a2 2 0 1 0 0 4a2 2 0 0 0 0-4Z",
   lock: "M6 11h12v9H6v-9ZM8 11V8a4 4 0 0 1 8 0v3",
+  // A robot's head: an antenna, two eyes and two ears.
+  robot: "M12 8V4M6 8h12a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1ZM9.5 13v.5M14.5 13v.5M2 12v3M22 12v3",
 } as const;
+
+export type IconName = keyof typeof PATHS;
 
 export const TIER_NAMES: Record<Tier, string> = { read_only: "Reads", mutating: "Changes data", outward: "Reaches outside" };
 
 /** `label` names the shape for a screen reader; leave it empty where the words beside the icon already say it. */
-export function Icon({ name, label, className = "size-3.5" }: { name: keyof typeof PATHS; label: string; className?: string }) {
+export function Icon({ name, label, className = "size-3.5" }: { name: IconName; label: string; className?: string }) {
   return (
     <>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" data-icon={name} className={`${className} shrink-0`}>

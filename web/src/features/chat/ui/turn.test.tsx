@@ -46,6 +46,13 @@ describe("the activity rail", () => {
     expect(screen.getByRole("listitem").textContent).toContain("<0.1 s");
   });
 
+  it("gives handing work to a specialist a shape of its own, named for a screen reader", () => {
+    const steps = [step({ tool: "run_subagent", label: "Ask a specialist" }), step({ callId: "c2" }), step({ callId: "c3", tool: "run_subagent", outcome: "refused" })];
+    const { container } = render(<ActivityRail steps={steps} done={false} workedMs={0} />);
+    expect([...container.querySelectorAll(".tool-activity-line svg")].map((icon) => icon.getAttribute("data-icon"))).toEqual(["robot", "read_only", "lock"]);
+    expect(container.querySelector(".tool-activity-line")?.textContent).toContain("Specialist: Ask a specialist");
+  });
+
   it("folds to one line when the turn is over, and opens again", async () => {
     const { container } = render(<ActivityRail steps={[step(), step({ callId: "c2" })]} done workedMs={8300} />);
     expect(container.querySelector(".tool-activity-line")).toBeNull();

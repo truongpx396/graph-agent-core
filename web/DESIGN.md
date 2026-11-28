@@ -32,6 +32,7 @@ does not know is ignored, and `shared/api/contract.test.ts` fails when the contr
 - A step the agent recovers from stays neutral.
 - An approval is only ever the person's action. The card does not take the focus, and its keys (⏎ approve, esc decline) work only while it has it:
   a global Enter would approve a write for someone typing. Every answer names the pause it was shown (`approval_id`).
+- A step's icon is its tier, by shape. Handing work to a specialist has its own (a robot): drawn like the others, never an emoji.
 - Say an answer took effect only once the stream goes on. A refused or failed answer reads the pause again and shows the card.
 - Show no control the server cannot honour: no "edit", no "always allow".
 
