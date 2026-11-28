@@ -13,11 +13,14 @@ export function costText(cost: number | null): string {
   return `$${cost < 0.01 ? cost.toPrecision(2) : cost.toFixed(2)}`;
 }
 
-/** `model · route · tokens · cost`. A turn no model answered (a cached answer, a refused message) says so. */
+/** The server's tier names, in words. `local` is the router's name for the default model, which need not be local. A name not listed is not shown. */
+const TIERS = new Map([["local", "default tier"], ["medium", "medium tier"], ["strong", "strong tier"]]);
+
+/** `model · tier · tokens · cost`. A turn no model answered (a cached answer, a refused message) says so. */
 export function usageText(usage: Usage): string {
   if (usage.calls === 0) return "no model call";
   const model = usage.model?.split("/").at(-1) ?? "model unknown";
-  return [model, usage.route, tokensText(usage.tokens), costText(usage.costUsd)].filter(Boolean).join(" · ");
+  return [model, TIERS.get(usage.route ?? ""), tokensText(usage.tokens), costText(usage.costUsd)].filter(Boolean).join(" · ");
 }
 
 const sum = (values: (number | null)[]) => values.reduce<number | null>((total, value) => (total === null || value === null ? null : total + value), 0);

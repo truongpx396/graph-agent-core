@@ -6,8 +6,17 @@ const usage = (over: Partial<Usage> = {}): Usage => ({ model: "gemini/gemini-3.5
 const turn = (over: Partial<Usage>) => assistantEntry("a", { usage: usage(over) });
 
 describe("what a turn used", () => {
-  it("is one line: model, route, tokens, cost", () => {
-    expect(usageText(usage())).toBe("gemini-3.5-flash-lite · local · 2.0k tokens · $0.0021");
+  it("is one line: model, tier, tokens, cost", () => {
+    expect(usageText(usage())).toBe("gemini-3.5-flash-lite · default tier · 2.0k tokens · $0.0021");
+  });
+
+  // "local" beside a hosted model's name read as "this ran on my machine".
+  it.each([["local", "default tier"], ["medium", "medium tier"], ["strong", "strong tier"]])("says the %s route as %s", (route, words) => {
+    expect(usageText(usage({ route }))).toContain(` · ${words} · `);
+  });
+
+  it.each(["huge", "constructor"])("leaves out a tier name it does not know (%s)", (route) => {
+    expect(usageText(usage({ route }))).toBe("gemini-3.5-flash-lite · 2.0k tokens · $0.0021");
   });
 
   it("says unknown for what is unknown, never zero", () => {

@@ -54,7 +54,7 @@ describe("the page", () => {
     expect(element(".tool-activity-line")).toBeNull();
     await user.click(screen.getByRole("button", { name: /^Worked for .* · 1 step/ }));
     expect(element(".tool-activity-line").textContent).toBe("Reads: Calculate420.4 s");
-    expect(element(".usage").textContent).toBe("qwen2.5:7b · local · 2.0k tokens · $0.0021");
+    expect(element(".usage").textContent).toBe("qwen2.5:7b · default tier · 2.0k tokens · $0.0021");
     expect(element("#usageTotal").textContent).toBe("2.0k tokens · $0.0021");
     expect(element(".citations .citation-item").textContent).toBe("[1]Support Hours");
     expect(screen.getByRole("button", { name: "And doubled?" })).toBeTruthy();
