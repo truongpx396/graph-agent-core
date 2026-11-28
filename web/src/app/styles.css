@@ -23,6 +23,7 @@
   --text-secondary: #565a63;
   --text-muted: #8a8e97;
   --card-shadow: 0 1px 2px rgba(20, 22, 26, 0.05), 0 1px 1px rgba(20, 22, 26, 0.04);
+  --code-keyword: #b4232d; --code-string: #0a5c36; --code-number: #0550ae; --code-name: #6f42c1;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -32,6 +33,7 @@
     --bg: #121317; --bg-elevated: #1a1c21; --sidebar-bg: #17181c; --surface: #23252b; --surface-hover: #2b2e35;
     --border: #2b2d34; --border-strong: #3c3f48; --text: #f1f2f4; --text-secondary: #aeb2bb; --text-muted: #767a84;
     --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --code-keyword: #ff7b72; --code-string: #7ee2a8; --code-number: #79c0ff; --code-name: #d2a8ff;
   }
 }
 
@@ -41,6 +43,7 @@
   --bg: #121317; --bg-elevated: #1a1c21; --sidebar-bg: #17181c; --surface: #23252b; --surface-hover: #2b2e35;
   --border: #2b2d34; --border-strong: #3c3f48; --text: #f1f2f4; --text-secondary: #aeb2bb; --text-muted: #767a84;
   --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --code-keyword: #ff7b72; --code-string: #7ee2a8; --code-number: #79c0ff; --code-name: #d2a8ff;
 }
 
 @theme inline {
@@ -105,6 +108,15 @@ body {
 .markdown .code-block-header { display: flex; justify-content: space-between; gap: 1em; padding: 0.3em 0.9em; background: var(--surface-hover); color: var(--text-secondary); font-size: 0.75rem; }
 .markdown pre { background: var(--surface); padding: 0.8em 0.9em; overflow-x: auto; line-height: 1.5; }
 .markdown pre code { background: none; padding: 0; font-size: 0.86em; }
+.markdown .code-block-preview { padding: 0.8em 0.9em; }
+/* highlight.js's classes, in this page's own colours so both themes follow. */
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-type, .hljs-name, .hljs-section, .hljs-deletion { color: var(--code-keyword); }
+.hljs-string, .hljs-regexp, .hljs-attribute, .hljs-addition { color: var(--code-string); }
+.hljs-number, .hljs-symbol, .hljs-bullet, .hljs-link, .hljs-variable, .hljs-template-variable { color: var(--code-number); }
+.hljs-title, .hljs-built_in, .hljs-attr, .hljs-selector-id, .hljs-selector-class { color: var(--code-name); }
+.hljs-comment, .hljs-quote, .hljs-meta { color: var(--text-secondary); font-style: italic; }
+.hljs-strong { font-weight: 650; }
+.hljs-emphasis { font-style: italic; }
 /* A wide table scrolls; it does not break its words apart, which the bubble's `wrap-anywhere` would otherwise have its cells do. */
 .markdown table { border-collapse: collapse; display: block; width: max-content; max-width: 100%; overflow-x: auto; overflow-wrap: normal; font-size: 0.95em; }
 .markdown th, .markdown td { border: 1px solid var(--border); padding: 0.4em 0.7em; vertical-align: top; }
