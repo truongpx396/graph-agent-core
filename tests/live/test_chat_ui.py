@@ -80,9 +80,11 @@ def _send(page: Page, text: str) -> None:
 def _answer_of_the_finished_turn(page: Page, timeout_ms: int = RESPONSE_TIMEOUT_MS):
     """The assistant's answer locator, returned the moment the turn has ENDED, not after a fixed wait."""
     page.wait_for_function(_TURN_IS_OVER, timeout=timeout_ms, polling=500)
-    paused = page.locator(".approval .approval-question")
+    paused = page.locator(".approval")
     if paused.count():
-        pytest.fail(f"the turn paused for approval instead of answering: {paused.first.inner_text()}")
+        # The card's Technical details are closed, so `inner_text` would leave out which tool it was.
+        asked = "; ".join(paused.first.locator(".approval-details pre").all_text_contents())
+        pytest.fail(f"the turn paused for approval instead of answering: {asked}")
     return page.locator(".msg.assistant .answer-text").last
 
 
@@ -255,13 +257,14 @@ def test_the_helper_reports_a_pause_for_approval_by_tool_name_instead_of_waiting
         f"""setTimeout(() => {{
             const box = document.createElement('div');
             box.className = 'approval';
-            box.innerHTML = '<div class="approval-question">⏸ Approve this action? remember({{"text": "dark roast"}})</div>';
+            box.innerHTML = '<h2 class="approval-question">Approve this action?</h2>'
+                + '<details class="approval-details"><pre>remember {{"text": "dark roast"}}</pre></details>';
             document.body.appendChild(box);
         }}, {_SOON_MS})"""
     )
 
     started = time.monotonic()
-    with pytest.raises(pytest.fail.Exception, match=r"paused for approval instead of answering: .*remember\("):
+    with pytest.raises(pytest.fail.Exception, match=r"paused for approval instead of answering: remember .*dark roast"):
         _answer_of_the_finished_turn(page, timeout_ms=30_000)
     assert time.monotonic() - started < 5
 
@@ -275,41 +278,60 @@ def test_the_helper_keeps_waiting_while_the_turn_is_still_running(page: Page):
 # --- the failure transcript (tests/live/transcript.py): a browser, but no stack and no model --------
 
 
-def test_the_transcript_lists_each_message_with_its_tool_calls_and_any_approval_box(page: Page):
+def test_the_transcript_lists_each_message_with_its_tool_calls_and_any_approval_card(page: Page):
     page.set_content(
         """<div id="messages">
         <div class="msg user">Who is the Support Lead?</div>
         <div class="msg assistant">
-          <div class="status"></div>
-          <div class="tool-activity">
-            <div class="tool-activity-line">✓ run_subagent({"task": "look up the lead"})</div>
-            <div class="tool-activity-line">🔧 query_employees({})</div>
-          </div>
-          <span class="answer-text draft-text"></span>
-          <span class="answer-text">No Support Lead found.</span>
-          <div class="approval"><div class="approval-question">⏸ Approve this action? remember({"content": "x"})</div></div>
+          <div class="tool-activity"><ul>
+            <li class="tool-activity-line"><span>Reads: </span><span>Look up employees</span><span>No matches</span></li>
+          </ul></div>
+          <div class="answer-text">No Support Lead found.</div>
+          <div class="declined">Declined: Remember a fact. Nothing was changed by it.</div>
+          <div class="notice" data-tone="blocked"><span>Monthly budget reached.</span></div>
         </div>
         <div class="msg system">a housekeeping note</div>
-        </div>"""
+        </div>
+        <section class="approval">
+          <h2 class="approval-question">Approve this action?</h2>
+          <ul><li class="approval-item"><div><span>Remember a fact</span><span>Changes data</span></div><p>Saves x</p></li></ul>
+          <details class="approval-details"><summary>Technical details</summary><pre>remember {
+  "content": "x"
+}</pre></details>
+        </section>"""
     )
 
     assert page_transcript(page) == (
         "user: Who is the Support Lead?\n"
         "assistant: No Support Lead found.\n"
-        '  ✓ run_subagent({"task": "look up the lead"})\n'
-        "  🔧 query_employees({})\n"
-        '  ⏸ Approve this action? remember({"content": "x"})\n'
-        "system: a housekeeping note"
+        "  Reads: Look up employees No matches\n"
+        "  Declined: Remember a fact. Nothing was changed by it.\n"
+        "  notice (blocked): Monthly budget reached.\n"
+        "system: a housekeeping note\n"
+        "approval card: Approve this action?\n"
+        "  Remember a fact Changes data Saves x\n"
+        '  remember { "content": "x" }'
     )
+
+
+def test_the_transcript_opens_the_tool_calls_a_finished_turn_has_folded_away(page: Page):
+    # The rows of a finished turn are not in the page until its summary is clicked.
+    page.set_content(
+        """<div id="messages"><div class="msg assistant">
+          <div class="tool-activity"><button class="activity-summary" aria-expanded="false"
+            onclick="this.setAttribute('aria-expanded', 'true');
+                     this.insertAdjacentHTML('afterend', '<ul><li class=tool-activity-line><span>Calculate</span></li></ul>')"
+          >Worked for 8 s · 1 step</button></div>
+          <div class="answer-text">42</div>
+        </div></div>"""
+    )
+
+    assert page_transcript(page) == "assistant: 42\n  Worked for 8 s · 1 step\n  Calculate"
 
 
 def test_the_transcript_says_so_when_an_assistant_message_has_no_text_yet_and_what_its_status_was(page: Page):
-    page.set_content(
-        """<div id="messages"><div class="msg assistant">
-        <div class="status">Using calculator</div><div class="tool-activity"></div>
-        <span class="answer-text draft-text"></span><span class="answer-text"></span></div></div>"""
-    )
-    assert page_transcript(page) == "assistant: (no answer text) [status: Using calculator]"
+    page.set_content('<div id="messages"><div class="msg assistant"><output class="status">Waiting to start</output></div></div>')
+    assert page_transcript(page) == "assistant: (no answer text) [status: Waiting to start]"
 
 
 def test_the_transcript_of_an_empty_page_is_a_sentence_not_an_empty_string(page: Page):

@@ -44,8 +44,8 @@ export function UploadPanel() {
 
   return (
     <details id="uploadPanel" className="mb-3 rounded-xl border border-line bg-elevated px-3 py-2.5 text-sm">
-      <summary className="cursor-pointer text-ink-2 hover:text-ink">
-        📄 Upload documents (PDF/DOCX) to the knowledge base, up to {MAX_FILES} at a time
+      <summary className="cursor-pointer text-ink-2 hover:text-ink" title={`PDF or Word, up to ${MAX_FILES} at a time, into the knowledge base`}>
+        📄 Upload documents
       </summary>
       <form id="uploadForm" className="mt-2.5 flex flex-wrap gap-2" onSubmit={submit}>
         <input id="uploadFiles" ref={input} type="file" accept=".pdf,.docx" multiple aria-label="Documents" title={`Up to ${MAX_FILES} files per upload`} onChange={pick} />

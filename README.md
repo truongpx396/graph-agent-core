@@ -78,7 +78,7 @@ change, not a code change.
 - 🛡️ **Guardrails**: input moderation (patterns + ML classifier), secret scrubbing, nine independent safety budgets, a golden-set eval gate.
 - 🧭 **Model routing** (off by default): per-turn choice of `chat` / `chat-medium` / `chat-strong`, plus a reusable label-set decision API.
 - 🔐 **Edge authentication**: a Go front door turns a Casdoor login into a signed identity the API trusts; MCP is served over OAuth 2.1.
-- 📱 **Interfaces**: CLI, HTTP API, web UI and Telegram, all reaching one API through the same front door, one queue, one worker pool, one streaming core.
+- 📱 **Interfaces**: CLI, HTTP API, web UI and Telegram, all reaching one API through the same front door, one queue, one worker pool, one streaming core. The web UI shows each tool call, puts an approval in a card that says what would happen, and reports each turn's tokens and cost ([pattern 121](docs/RUNTIME_PATTERNS.md)).
 - 🚦 **Scalable, stateless workers**: a turn keeps no in-process state (it lives in Postgres checkpoints), so any replica can take any job, and a dead worker's turn is reclaimed. Also dependency health checks, cost caps, optional prepaid credit billing, Terraform + automated deploys.
 
 * * *

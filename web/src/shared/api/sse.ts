@@ -2,14 +2,16 @@ import { errorFrom } from "./http";
 
 // `EventSource` can neither POST nor send headers, so the streams are read from `fetch`'s body (docs/RUNTIME_PATTERNS.md pattern 29).
 
-/** The payload of one frame: its `data:` lines joined. Comments (`: keepalive`) and `id:` lines carry none. */
-function dataOf(frame: string): string | null {
-  const lines = frame.split(/\r?\n/).filter((line) => line.startsWith("data:"));
-  if (lines.length === 0) return null;
-  return lines.map((line) => line.slice(line.startsWith("data: ") ? 6 : 5)).join("\n");
+/** One frame: its `data:` lines joined, and its `id:`. A comment (`: keepalive`) has neither. */
+function partsOf(frame: string): { data: string | null; id: string | null } {
+  const lines = frame.split(/\r?\n/);
+  const field = (name: string) => lines.filter((line) => line.startsWith(`${name}:`)).map((line) => line.slice(line.startsWith(`${name}: `) ? name.length + 2 : name.length + 1));
+  const data = field("data");
+  return { data: data.length === 0 ? null : data.join("\n"), id: field("id").at(-1) ?? null };
 }
 
-export async function* readEventStream<T>(response: Response): AsyncGenerator<T, void, void> {
+/** `onId` is told each delivered event's position: what `Last-Event-ID` carries when a dropped stream is read again. */
+export async function* readEventStream<T>(response: Response, onId?: (id: string) => void): AsyncGenerator<T, void, void> {
   if (!response.ok) throw await errorFrom(response);
   if (!response.body) throw new Error("the response has no body");
   const reader = response.body.getReader();
@@ -23,8 +25,11 @@ export async function* readEventStream<T>(response: Response): AsyncGenerator<T,
       // The last piece is a frame still being received; at the end of the stream it is whatever never got its blank line.
       buffer = frames.pop() ?? "";
       for (const frame of frames) {
-        const data = dataOf(frame);
-        if (data !== null) yield JSON.parse(data) as T;
+        const { data, id } = partsOf(frame);
+        if (data === null) continue;
+        const event = JSON.parse(data) as T;
+        if (id !== null) onId?.(id);
+        yield event;
       }
       if (done) return;
     }

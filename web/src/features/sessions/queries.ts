@@ -45,5 +45,6 @@ export function useHistory(): History {
     // A failed "load earlier" keeps what is already shown and leaves the button to press again.
     failed: query.isError && entries.length === 0,
     loadEarlier: () => void query.fetchNextPage(),
+    retry: () => void query.refetch(),
   };
 }

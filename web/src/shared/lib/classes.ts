@@ -8,3 +8,6 @@ export const control =
 export const button = `${control} cursor-pointer disabled:cursor-default enabled:hover:bg-surface-hover`;
 export const chip = `${button} rounded-full text-xs`;
 export const label = "text-[0.7rem] font-bold uppercase tracking-wider text-muted";
+// A data area's states (web/DESIGN.md): a shape while it loads, and a line that can retry when it could not.
+export const skeleton = "animate-pulse rounded-lg bg-surface motion-reduce:animate-none";
+export const retryLine = "load-failed px-2.5 py-1.5 text-xs text-ink-2";

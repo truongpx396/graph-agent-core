@@ -1,10 +1,10 @@
 # Feature Specification: a runtime contract an agent platform can drive
 
-**Feature Branch**: `feat/runtime-status-event` (step 1, #317), `feat/runtime-tool-approval-usage` (the rest of phase 1)
+**Feature Branch**: `feat/runtime-status-event` (step 1, #317), `feat/runtime-tool-approval-usage` (the rest of phase 1, #318), `feat/web-agent-work` (phase 2)
 
 **Created**: 2026-11-28
 
-**Status**: In progress. Phase 1, the contract, is built; [tasks.md](tasks.md) says what is left.
+**Status**: In progress. Phase 1, the contract, and phase 2, the web UI, are built; [tasks.md](tasks.md) says what is left.
 
 **Input**: "pls apply this plan": [AGENT_PLATFORM_ALIGNMENT_PLAN.md](../../docs/AGENT_PLATFORM_ALIGNMENT_PLAN.md), Parts A and C, with Part B's web UI work as later phases.
 
@@ -132,4 +132,4 @@ A platform adapter is written against recorded turns and one guide, and a change
 
 - Steering a running turn and queued follow-ups: reported as unsupported.
 - A task board, run timeline or org chart: those belong in the platform.
-- The web page sends no `approval_id` and shows none of the new facts until phase 2.
+- A queue position: the server sends none.

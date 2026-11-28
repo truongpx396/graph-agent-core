@@ -1,5 +1,4 @@
-import { useChat } from "@/features/chat";
-import { readPendingApproval } from "./api";
+import { readPendingApproval, useChat } from "@/features/chat";
 
 export async function openSession(threadId: string): Promise<void> {
   useChat.getState().open(threadId);

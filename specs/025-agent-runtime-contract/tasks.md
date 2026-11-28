@@ -17,10 +17,11 @@ Item codes (A1, B2, C5) are the sections of [AGENT_PLATFORM_ALIGNMENT_PLAN.md](.
 
 ## Phase 2: web UI, in `web/`
 
-- [ ] **PR5** B11 `web/DESIGN.md` and a vitest guard
-- [ ] **PR6** B2 activity rail and B3 honest status (after PR1, PR2, PR5)
-- [ ] **PR7** B1 approval card (after PR3, PR5)
-- [ ] **PR8** B4 turn footer, B6 blocked and failed, B9 copy, B10 states (after PR4, PR5)
+- [x] **PR5 to PR8**, one pull request at the owner's request
+  - [x] B11 `web/DESIGN.md` and a vitest guard
+  - [x] B2 activity rail and B3 honest status, with reconnect from `Last-Event-ID`
+  - [x] B1 approval card; the page sends `approval_id`
+  - [x] B4 turn footer, B6 blocked and failed, B9 copy, B10 states
 
 ## Phase 3: discovery
 

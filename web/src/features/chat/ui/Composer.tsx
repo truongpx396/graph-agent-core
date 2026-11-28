@@ -1,10 +1,12 @@
 import { type DragEvent, type FormEvent, useEffect, useRef, useState } from "react";
 import { button, control, cx } from "@/shared/lib/classes";
-import { useChat } from "../model/store";
+import { pendingApproval, useChat } from "../model/store";
 import { useAttachment } from "./useAttachment";
 
 export function Composer() {
   const busy = useChat((state) => state.turn !== null);
+  const asking = useChat((state) => pendingApproval(state) !== null);
+  const reconnecting = useChat((state) => state.reconnecting);
   const send = useChat((state) => state.send);
   const stop = useChat((state) => state.stop);
   const [text, setText] = useState("");
@@ -32,6 +34,12 @@ export function Composer() {
 
   return (
     <form id="form" className="mt-1 flex flex-wrap gap-2 border-t border-line pt-3.5" onSubmit={submit}>
+      {reconnecting && (
+        <output id="reconnecting" className="block basis-full rounded-lg bg-surface px-3 py-1.5 text-xs text-ink-2">
+          Reconnecting… picks up where it left off
+        </output>
+      )}
+      {asking && <div className="basis-full text-xs text-muted">Answer the request above to send another message.</div>}
       {/* Above the input, where the person looks before sending. */}
       {image.file && (
         <div id="imagePreview" className="flex basis-full items-center gap-2 rounded-lg bg-surface px-2 py-1.5 text-xs text-ink-2">
@@ -47,7 +55,7 @@ export function Composer() {
         ref={input}
         className={cx(control, "min-w-0 flex-1 rounded-xl py-2.5 text-[0.95rem]")}
         autoComplete="off"
-        placeholder="Ask something..."
+        placeholder="Ask a question"
         aria-label="Message"
         value={text}
         onChange={(event) => setText(event.target.value)}
@@ -74,8 +82,8 @@ export function Composer() {
           id="imageUrl"
           className={cx(control, "min-w-0 flex-1")}
           autoComplete="off"
-          placeholder="Image URL (optional)"
-          aria-label="Image URL"
+          placeholder="Image address (optional)"
+          aria-label="Image address"
           value={image.url}
           onChange={(event) => image.typeUrl(event.target.value)}
         />
@@ -95,7 +103,7 @@ export function Composer() {
           onDragLeave={() => setDragging(false)}
           onDrop={drop}
         >
-          📎 or drop/choose an image
+          📎 Attach an image
         </label>
         <input
           id="imageFile"
@@ -109,10 +117,8 @@ export function Composer() {
           }}
         />
       </div>
-      <div className="basis-full text-[0.72rem] text-muted">
-        Note: whether an attached image is seen depends on the model behind this deployment, and it has not been verified with this app
-        (GRAPH_PATTERNS.md pattern 44).
-      </div>
+      {/* Said only when it matters. Not verified with this app: GRAPH_PATTERNS.md pattern 44. */}
+      {(image.file || image.url) && <div className="basis-full text-[0.72rem] text-muted">Not every model can see images.</div>}
     </form>
   );
 }

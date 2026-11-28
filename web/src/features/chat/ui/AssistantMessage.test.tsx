@@ -9,7 +9,7 @@ const nothing = () => undefined;
 function source(citation: Partial<Citation>) {
   const full: Citation = { marker: "[1]", doc_id: "d1", title: "Qdrant: Payload", text: "passage", score: 1, ...citation };
   const entry = assistantEntry("a1", { status: null, answer: "An answer [1].", citations: [full] });
-  return render(<AssistantMessage entry={entry} onAsk={nothing} onDecide={nothing} />).container.querySelector(".citation-item")!;
+  return render(<AssistantMessage entry={entry} onAsk={nothing} />).container.querySelector(".citation-item")!;
 }
 
 describe("a source under an answer", () => {
@@ -29,7 +29,7 @@ describe("a source under an answer", () => {
 });
 
 const message = (over: Parameters<typeof assistantEntry>[1]) => (
-  <AssistantMessage entry={assistantEntry("a1", { status: null, ...over })} onAsk={nothing} onDecide={nothing} />
+  <AssistantMessage entry={assistantEntry("a1", { status: null, ...over })} onAsk={nothing} />
 );
 
 describe("an answer as it streams", () => {

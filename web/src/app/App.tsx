@@ -1,5 +1,5 @@
 import { AuthBox, useAuth } from "@/features/auth";
-import { Composer, Transcript, useChat } from "@/features/chat";
+import { ApprovalCard, Composer, pendingApproval, Transcript, UsageTotal, useChat } from "@/features/chat";
 import { SessionList, useHistory } from "@/features/sessions";
 import { ThemeToggle } from "@/features/theme";
 import { UploadPanel } from "@/features/uploads";
@@ -9,6 +9,8 @@ export function App() {
   const ready = useAuth((state) => state.ready);
   const identity = useAuth((state) => state.config.mode === "identity");
   const send = useChat((state) => state.send);
+  const decide = useChat((state) => state.decide);
+  const approval = useChat(pendingApproval);
   const history = useHistory();
   return (
     <div className="flex h-screen flex-row max-[700px]:h-auto max-[700px]:min-h-screen max-[700px]:flex-col">
@@ -32,11 +34,14 @@ export function App() {
             <span className="size-2.5 shrink-0 rounded-full bg-accent ring-3 ring-accent-soft" />
             Graph Agent Core
           </h1>
+          <UsageTotal />
           {identity ? <AuthBox /> : <IdentityPickers />}
           <ThemeToggle />
         </header>
         <UploadPanel />
         <Transcript history={history} />
+        {/* Above the composer, where the person is looking; not before the conversation it belongs to is on screen. */}
+        {approval && !history.loading && <ApprovalCard approval={approval} onDecide={(approved) => void decide(approved)} />}
         <Composer />
       </main>
     </div>
