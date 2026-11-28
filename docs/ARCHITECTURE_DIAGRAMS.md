@@ -406,7 +406,7 @@ sequenceDiagram
 
 - **The lock is released before the terminal event is published**, not after. A client that sees `done` or `approval_required` may fire the next request at once: releasing only after the handler returned rejected about a third of resumes as `THREAD_BUSY`, and releasing right after the publish still rejected about one in eight (`app/adapters/inbound/workers/agent_worker.py::process_request`).
 - **A job is always acked**, even on failure: a redelivered, already-attempted job would re-run side effects. A worker that dies before the ack is the reclaim path (diagram 12).
-- The first-event deadline turns "no worker is running" into an `error` event instead of an SSE connection that hangs.
+- The first-event deadline turns "no worker is running" into an `error` event instead of an SSE connection that hangs. A turn is silent until its first token, so while a worker holds the conversation's lock the deadline starts again.
 
 ### 9. Signing in and crossing the front door
 

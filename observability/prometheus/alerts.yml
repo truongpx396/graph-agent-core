@@ -761,8 +761,9 @@ groups:
           summary: "Queued jobs are being picked up by nobody"
           description: >-
             agent_worker_unreachable_total{queue} increased — a queued chat
-            or ingest job published no event at all within its first-event
-            deadline, i.e. no worker took it. One is a stuck request; a
+            or ingest job published no event within its first-event
+            deadline and, for chat, no worker held its conversation, i.e. no
+            worker took it. One is a stuck request; a
             sustained stream of them is a worker pool that answers nothing
             (no agent-worker running for that domain, or no ingest-worker),
             where every caller gets an error and nothing else notices. Check

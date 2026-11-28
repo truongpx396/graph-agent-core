@@ -800,9 +800,9 @@ agent_upload_failed_total = Counter(
 
 agent_worker_unreachable_total = Counter(
     "agent_worker_unreachable_total",
-    "Queued jobs whose results stream received no event at all within the "
+    "Queued jobs whose results stream received no event within the "
     "first-event deadline (app/adapters/outbound/redis/queue.py and app/adapters/outbound/redis/ingest_queue.py "
-    "read_results) — nobody picked the job up. One of these is a stuck request; a "
+    "read_results) and, for chat, whose conversation no worker held — nobody picked the job up. One of these is a stuck request; a "
     "stream of them is a worker pool that answers nothing (none running for a "
     "domain, or all of them dead), which until this metric produced one error per "
     "caller and no signal an alert could use",
