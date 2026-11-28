@@ -11,6 +11,7 @@ plain data and lives here: stream and key names, TTLs, which events end a stream
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from app.core.config import (
@@ -29,6 +30,20 @@ CANCEL_FLAG_TTL_SECONDS = 60  # outlasts the gap between a worker's cancel check
 
 INGEST_REQUESTS_STREAM = "ingest:requests"
 INGEST_CONSUMER_GROUP = "ingest-workers"
+
+
+def status_event(state: str, *, worker: str | None = None) -> dict[str, Any]:
+    """Where a turn's job is, as the client is told (`StatusEvent`, not terminal): "queued", written by the producer with the job, and "started",
+    written by the worker that takes it. `worker` is an opaque label, never a host name: a caller reads it."""
+    event: dict[str, Any] = {"type": "status", "state": state, "at": datetime.now(UTC).isoformat(timespec="milliseconds")}
+    if worker is not None:
+        event["worker"] = worker
+    return event
+
+
+def is_queued_status(event: dict[str, Any]) -> bool:
+    """The one event on a results stream that no worker wrote."""
+    return event.get("type") == "status" and event.get("state") == "queued"
 
 
 def results_stream_key(request_id: str) -> str:
@@ -85,11 +100,13 @@ class TurnQueue(Protocol):
         unattended: bool = False,
     ) -> None:
         """Enqueues a new turn on `domain`'s requests stream; only a worker serving that domain reads it. The caller makes `request_id`, so it can listen
-        before publishing. `unattended` is a property of the job and survives a reclaim: nobody is there to approve."""
+        before publishing. `unattended` is a property of the job and survives a reclaim: nobody is there to approve. The results stream starts
+        with a "queued" status, written together with the job."""
         ...
 
     async def publish_resume_request(self, *, request_id: str, thread_id: str, approved: bool, ctx: SecurityCtx, domain: str = "ecorp") -> None:
-        """Enqueues the approve-or-reject decision for a turn paused at human approval. `domain` must be the original turn's."""
+        """Enqueues the approve-or-reject decision for a turn paused at human approval. `domain` must be the original turn's. Says "queued" as a
+        turn does; a cancel does not, being answered by its outcome."""
         ...
 
     async def publish_cancel_request(self, *, request_id: str, thread_id: str, ctx: SecurityCtx, domain: str = "ecorp") -> None:
@@ -106,8 +123,9 @@ class TurnQueue(Protocol):
         ...
 
     def read_results(self, request_id: str, *, first_event_deadline_seconds: float | None = None) -> AsyncIterator[dict[str, Any]]:
-        """Yields each event of `request_id`'s turn, in order, until a terminal one. `first_event_deadline_seconds` bounds only the wait for the FIRST
-        event: if nobody ever publishes, it yields one `error` event and ends instead of hanging."""
+        """Yields each event of `request_id`'s turn, in order, until a terminal one. `first_event_deadline_seconds` bounds only the wait for a
+        WORKER's first event (the "queued" status is the producer's own): if no worker ever publishes, it yields one `error` event and ends
+        instead of hanging."""
         ...
 
     def read_results_from(
@@ -115,8 +133,8 @@ class TurnQueue(Protocol):
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         """`read_results` with each event's position: yields `(entry_id, event)` for the events published AFTER `after` (an entry id a client last saw; the
         default is the start), until a terminal one. Reading from a position is what lets a client whose connection dropped pick the turn up where it stopped.
-        `first_event_deadline_seconds` applies only when reading from the start: a client resuming from a position has already seen the job run, so a quiet
-        stretch is a long tool, not "nobody picked it up"."""
+        `first_event_deadline_seconds` applies until a worker has written to the stream, from the start or from a position: a client that saw only
+        "queued" is still waiting for a worker, and once one has written, a quiet stretch is a long tool, not "nobody picked it up"."""
         ...
 
     async def thread_of_request(self, request_id: str) -> str | None:

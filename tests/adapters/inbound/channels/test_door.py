@@ -261,6 +261,22 @@ class TestTheDoorCannotBeReached:
         assert event["type"] == "error" and "nothing was sent" in event["content"]
         assert _count(metrics.channel_door_refusal_total, channel="cli", reason="unreachable") == before + 1
 
+    async def test_a_connection_lost_after_the_request_was_accepted_does_not_claim_nothing_was_sent(self):
+        """A turn says "queued" at once, and runs on a worker whether or not anyone is reading: "nothing was sent" would invite sending it twice."""
+
+        class _Drops(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield sse({"type": "status", "state": "queued", "at": "2026-11-28T00:00:00Z"})
+                raise httpx.ReadError("connection reset")
+
+        door, http = make_door(lambda request: httpx.Response(200, stream=_Drops()))
+
+        queued, lost = await collect(door.stream_turn("hi", "t1"))
+        await http.aclose()
+
+        assert (queued["state"], lost["type"]) == ("queued", "error")
+        assert "may still be running" in lost["content"] and "nothing was sent" not in lost["content"]
+
     async def test_a_sign_in_that_is_refused_stops_the_request_before_it_is_made(self):
         calls = []
         door, http = make_door(

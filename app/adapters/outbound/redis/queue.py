@@ -30,9 +30,11 @@ from app.ports.outbound.jobs import (
     RESULTS_STREAM_TTL_SECONDS,
     TERMINAL_EVENT_TYPES,
     cancel_flag_key,
+    is_queued_status,
     request_thread_key,
     requests_stream_key,
     results_stream_key,
+    status_event,
     thread_lock_key,
 )
 
@@ -46,10 +48,19 @@ def encode_job(job: dict[str, Any]) -> str:
     return json.dumps({**job, spans.CARRIER_KEY: carrier} if carrier else job)
 
 
-async def _remember_request_thread(client: redis.Redis, request_id: str, thread_id: str) -> None:
-    """Before the job is published, so a client that reads the stream the moment it has the request id finds the owner. Its lifetime is the results stream's:
-    the worker refreshes it with every event it publishes (`streams.py::publish_result`)."""
-    await client.set(request_thread_key(request_id), thread_id, ex=RESULTS_STREAM_TTL_SECONDS)
+async def _enqueue(client: redis.Redis, *, request_id: str, thread_id: str, domain: str, payload: str, announce: bool) -> None:
+    """One MULTI: who owns the results stream, the "queued" status (`announce`, for a turn or a resume) and the job. A worker cannot read the job
+    before all of it is applied, so "queued" is the stream's first event, it exists only if the job does, and a client that reads the moment it has
+    the request id finds the owner. The owner's lifetime is the stream's: the worker refreshes both with every event it publishes
+    (`streams.py::publish_result`)."""
+    results = results_stream_key(request_id)
+    async with client.pipeline(transaction=True) as pipe:
+        pipe.set(request_thread_key(request_id), thread_id, ex=RESULTS_STREAM_TTL_SECONDS)
+        if announce:
+            pipe.xadd(results, {"payload": json.dumps(status_event("queued"))})
+            pipe.expire(results, RESULTS_STREAM_TTL_SECONDS)
+        pipe.xadd(requests_stream_key(domain), {"payload": payload})
+        await pipe.execute()
 
 
 async def thread_of_request(client: redis.Redis, request_id: str) -> str | None:
@@ -102,8 +113,7 @@ async def publish_request(
             "enqueued_at": time.time(),
         }
     )
-    await _remember_request_thread(client, request_id, thread_id)
-    await client.xadd(requests_stream_key(domain), {"payload": payload})
+    await _enqueue(client, request_id=request_id, thread_id=thread_id, domain=domain, payload=payload, announce=True)
 
 
 async def publish_resume_request(
@@ -131,8 +141,7 @@ async def publish_resume_request(
             "enqueued_at": time.time(),
         }
     )
-    await _remember_request_thread(client, request_id, thread_id)
-    await client.xadd(requests_stream_key(domain), {"payload": payload})
+    await _enqueue(client, request_id=request_id, thread_id=thread_id, domain=domain, payload=payload, announce=True)
 
 
 async def publish_cancel_request(
@@ -147,8 +156,7 @@ async def publish_cancel_request(
     payload = encode_job(
         {"kind": "cancel", "request_id": request_id, "thread_id": thread_id, "ctx": ctx, "enqueued_at": time.time()}
     )
-    await _remember_request_thread(client, request_id, thread_id)
-    await client.xadd(requests_stream_key(domain), {"payload": payload})
+    await _enqueue(client, request_id=request_id, thread_id=thread_id, domain=domain, payload=payload, announce=False)
 
 
 async def set_cancel_flag(client: redis.Redis, thread_id: str) -> None:
@@ -270,6 +278,17 @@ async def _a_worker_has_the_conversation(client: redis.Redis, request_id: str) -
         return True  # not known: wait another round, and the read that follows raises if Redis stays down
 
 
+async def _a_worker_has_written(client: redis.Redis, key: str) -> bool:
+    """Whether the results stream holds anything but the producer's "queued". That is its first entry and there is only one, so two entries
+    are enough to tell."""
+    try:
+        # str at runtime (decode_responses=True): the same redis-py stub gap as `StreamReadResponse`.
+        entries = cast(list[tuple[str, dict[str, str]]], await client.xrange(key, count=2))
+    except UNAVAILABLE_ERRORS:
+        return False  # not known: bound the wait. A job a worker is running is still not given up on (the lock check below)
+    return any(not is_queued_status(json.loads(fields["payload"])) for _, fields in entries)
+
+
 async def read_results(
     client: redis.Redis,
     request_id: str,
@@ -302,20 +321,18 @@ async def read_results_from(
     `first_event_deadline_seconds` bounds ONLY the wait for a worker to take the job, not the job. Without it `if not
     response: continue` loops forever when nobody will ever publish (no agent-worker for this domain, or a
     submission-dedup claim pointing at a request_id whose publish failed; see the compensating delete in
-    app/adapters/inbound/api/routers/chat.py), silently hanging an open SSE connection. A turn publishes nothing until
-    its first token, and a tool call has none, so silence alone does not mean no worker: when the deadline passes and
-    a worker holds the conversation, it starts again. Once a real event arrives it is cleared, so a legitimately long
-    job is never cut short. Otherwise it yields one `error` event, the same terminal shape a worker-reported failure
-    has, and returns.
+    app/adapters/inbound/api/routers/chat.py), silently hanging an open SSE connection. It ends at a WORKER's first event: the
+    "queued" status is written with the job and says nothing about a worker. Silence alone does not mean no worker (one
+    from before the "started" status publishes nothing until its first token, and a tool call has none): when the deadline
+    passes and a worker holds the conversation, it starts again. Once cleared, a legitimately long job is never cut short.
+    Otherwise it yields one `error` event, the same terminal shape a worker-reported failure has, and returns.
     """
     key = results_stream_key(request_id)
     last_id = after
-    # Only from the start: a client resuming from a position has already seen the job run, so a quiet stretch is a tool, not a job nobody picked up.
-    deadline = (
-        time.monotonic() + first_event_deadline_seconds
-        if first_event_deadline_seconds is not None and after == "0"
-        else None
-    )
+    # Until a worker has written. A client resuming from a position has not necessarily seen one: it may hold only the "queued" status.
+    deadline = None
+    if first_event_deadline_seconds is not None and (after == "0" or not await _a_worker_has_written(client, key)):
+        deadline = time.monotonic() + first_event_deadline_seconds
     while True:
         expired = deadline is not None and time.monotonic() >= deadline
         if expired and first_event_deadline_seconds is not None and await _a_worker_has_the_conversation(client, request_id):
@@ -326,11 +343,12 @@ async def read_results_from(
             if expired:
                 break
             continue  # no new entries within block_ms — poll again
-        deadline = None  # a real event arrived — no longer "nobody is listening"
         _, entries = response[0]
         for entry_id, fields in entries:
             last_id = entry_id
             event = json.loads(fields["payload"])
+            if not is_queued_status(event):
+                deadline = None  # a worker has the job — no longer "nobody is listening"
             yield entry_id, event
             if event.get("type") in TERMINAL_EVENT_TYPES:
                 return

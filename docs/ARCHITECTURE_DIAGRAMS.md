@@ -373,10 +373,12 @@ sequenceDiagram
     D->>A: the request plus a signed identity (diagram 9)
     A->>P: claim the thread for this person, or verify they own it (404 if not)
     A->>R: SET NX submit-dedup claim, an identical resubmit streams the first turn
-    A->>R: XADD agent:requests:domain {turn, ctx, text}
-    A-->>C: open the SSE stream, start reading agent:results:request_id
+    A->>R: one MULTI, the queued status on agent:results:request_id and the job on agent:requests:domain
+    A-->>C: open the SSE stream, relay status queued
     R->>W: XREADGROUP delivers the job to exactly one worker
     W->>R: SET NX thread lock, a busy thread fails fast with THREAD_BUSY
+    W->>R: publish status started, before anything runs
+    A-->>C: status started
     W->>W: model priced, tenant allowance, reserve a budget hold (diagram 14)
     W->>G: astream_events(message, ctx)
     G->>G: validate, moderate, semantic cache lookup
@@ -406,7 +408,7 @@ sequenceDiagram
 
 - **The lock is released before the terminal event is published**, not after. A client that sees `done` or `approval_required` may fire the next request at once: releasing only after the handler returned rejected about a third of resumes as `THREAD_BUSY`, and releasing right after the publish still rejected about one in eight (`app/adapters/inbound/workers/agent_worker.py::process_request`).
 - **A job is always acked**, even on failure: a redelivered, already-attempted job would re-run side effects. A worker that dies before the ack is the reclaim path (diagram 12).
-- The first-event deadline turns "no worker is running" into an `error` event instead of an SSE connection that hangs. A turn is silent until its first token, so while a worker holds the conversation's lock the deadline starts again.
+- The first-event deadline turns "no worker is running" into an `error` event instead of an SSE connection that hangs. It waits for a worker's own event: the `queued` status the API writes does not end it (pattern 117). While a worker holds the conversation's lock it starts again.
 
 ### 9. Signing in and crossing the front door
 
@@ -498,10 +500,10 @@ sequenceDiagram
     Note over C,T: Phase 2, a person decides, at any time
     C->>A: POST /chat/resume {thread_id, approved}
     A->>A: ownership check, anyone else's thread is a 404
-    A->>R: XADD a resume job on the same domain's stream
+    A->>R: XADD a resume job on the same domain's stream, with its queued status
     A-->>C: a new SSE stream for the resume job
     R->>W: delivered to a worker in that domain's pool, not necessarily the first
-    W->>R: acquire the thread lock
+    W->>R: acquire the thread lock, publish status started
     W->>W: tenant allowance re-checked, new budget hold
     W->>G: resumability check: paused for real, schema version matches
     alt approved

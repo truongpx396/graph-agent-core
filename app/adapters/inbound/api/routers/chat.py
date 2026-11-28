@@ -106,8 +106,8 @@ def _queued_sse_response(
     every write); relying on that costs a few minutes of idle Redis memory per turn and stays correct when a
     second reader arrives any time before the TTL.
 
-    `first_event_deadline_seconds` (`queue.py::read_results`'s param) bounds only the wait for the FIRST event
-    ever published to this `request_id`'s stream, and only when reading from the start (`after`). It closes a real hang when nothing will ever be published
+    `first_event_deadline_seconds` (`queue.py::read_results`'s param) bounds only the wait for the first event a
+    WORKER publishes to this `request_id`'s stream (the `queued` status is written here, with the job). It closes a real hang when no worker will ever publish
     (no agent-worker for this domain, or a dedup claim left pointing at a request_id whose publish failed, see
     `chat_stream_queued`'s compensating delete below). A slow-but-alive turn is unaffected: the bound clears
     when the worker's first event arrives.
@@ -164,7 +164,9 @@ async def chat_stream_queued(
 ) -> StreamingResponse:
     """Same SSE event vocabulary an in-process `astream_events_turn` would
     produce (token, tool_start, tool_end, retry, compacted, citations,
-    followups, approval_required, error, done), but this process never runs the graph
+    followups, system_note, approval_required, error, done), after a
+    `status` event for `queued` (written here, with the job) and one for
+    `started` (the worker that took it). But this process never runs the graph
     itself — it publishes the turn onto a shared Redis Stream and streams
     back whatever a separate `agent_worker.py` process publishes to this
     turn's results stream (pattern 43, app/adapters/outbound/redis/queue.py).

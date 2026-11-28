@@ -8,14 +8,8 @@ export type SessionMessage = Schemas["SessionMessage"];
 export type PendingApproval = Schemas["PendingApproval"];
 export type UploadResult = Schemas["IngestUploadResult"];
 
-// Sent by the stream (app/agent/runtime/stream.py, when an app update strands a pending approval) but missing from the OpenAPI document's
-// union. Adding it there is a "breaking" change under this repo's gate, so it is typed by hand until the next major version.
-export interface SystemNoteEvent {
-  type: "system_note";
-  content: string;
-}
-
 export type ChatEvent =
+  | Schemas["StatusEvent"]
   | Schemas["TokenEvent"]
   | Schemas["ToolStartEvent"]
   | Schemas["ToolEndEvent"]
@@ -23,10 +17,11 @@ export type ChatEvent =
   | Schemas["CompactedEvent"]
   | Schemas["CitationsEvent"]
   | Schemas["FollowupsEvent"]
+  | Schemas["SystemNoteEvent"]
+  | Schemas["UsageEvent"]
   | Schemas["ApprovalRequiredEvent"]
   | Schemas["DoneEvent"]
-  | Schemas["ErrorEvent"]
-  | SystemNoteEvent;
+  | Schemas["ErrorEvent"];
 
 export type IngestEvent =
   | Schemas["IngestStartedEvent"]

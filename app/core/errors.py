@@ -30,6 +30,7 @@ class ErrorCode(str, Enum):
     CHECKPOINT_LOST = "checkpoint_lost"
     CHECKPOINT_INCOMPATIBLE = "checkpoint_incompatible"
     PENDING_APPROVAL = "pending_approval"
+    APPROVAL_SUPERSEDED = "approval_superseded"  # a resume answered a pause that has since been replaced (specs/025); declared in 4.0.0, not sent yet
     UNATTENDED_PAUSE = "unattended_pause"
     CANCELLED = "cancelled"
     COST_CEILING_EXCEEDED = "cost_ceiling_exceeded"
