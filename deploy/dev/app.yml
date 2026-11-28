@@ -50,7 +50,7 @@ x-app-env: &app-env
   ROUTER_MAX_TIER: ${ROUTER_MAX_TIER:-strong}
   ROUTER_LABELS: ${ROUTER_LABELS:-true}
   ROUTER_LONG_PROMPT_CHARS: ${ROUTER_LONG_PROMPT_CHARS:-1500}
-  ROUTER_TIMEOUT_SECONDS: ${ROUTER_TIMEOUT_SECONDS:-0.5}
+  ROUTER_TIMEOUT_SECONDS: ${ROUTER_TIMEOUT_SECONDS:-1.5}
   # opensandbox-mcp is a stdio subprocess of this process (app/adapters/outbound/mcp/sandbox_tools.py), so it resolves the in-network name. Only matters
   # with the `sandbox` profile up; without it the sandbox tools are absent.
   OPENSANDBOX_MCP_DOMAIN: opensandbox-server:8090

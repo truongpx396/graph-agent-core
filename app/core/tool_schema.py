@@ -34,6 +34,8 @@ from pydantic import BaseModel, model_validator
 
 # (JSON Schema keyword, sentence appended to the property's description). The keyword is removed from the schema.
 _BOUNDS_AS_TEXT = (("minLength", "At least {} characters."), ("maxLength", "At most {} characters."))
+# What a model writes, as a string, when it means null (compared stripped and lowercased).
+_WRITTEN_NULLS = frozenset({"", "null", "none"})
 
 
 class ToolArgs(BaseModel):
@@ -53,6 +55,9 @@ class ToolArgs(BaseModel):
     (`BaseTool._parse_input` keeps `k in tool_input`), so the function's own signature still needs `= None` (or the default
     here). That default and this class say the same thing in two places, and `tests/core/test_tool_schema.py` calls every such tool
     with the arguments left out.
+
+    The model's other way of saying "nothing" is accepted too: the STRING "null" (or "None", or nothing) on a nullable argument is null. Found live: `qwen2.5:7b`
+    sent `{"department": "null"}`, the call failed, and the answer opened with an account of the error; on free text the word would be kept as data.
     """
 
     omitted_defaults: ClassVar[dict[str, Any]] = {}
@@ -64,12 +69,16 @@ class ToolArgs(BaseModel):
             return data
         filled = dict(data)
         for name, field in cls.model_fields.items():
-            if name in filled or not field.is_required():
-                continue
-            if name in cls.omitted_defaults:
-                filled[name] = cls.omitted_defaults[name]
-            elif NoneType in get_args(field.annotation):
-                filled[name] = None
+            nullable = NoneType in get_args(field.annotation)
+            if name in filled:
+                value = filled[name]
+                if nullable and isinstance(value, str) and value.strip().lower() in _WRITTEN_NULLS:
+                    filled[name] = None
+            elif field.is_required():
+                if name in cls.omitted_defaults:
+                    filled[name] = cls.omitted_defaults[name]
+                elif nullable:
+                    filled[name] = None
         return filled
 
 

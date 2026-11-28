@@ -267,3 +267,11 @@ class TestInTheGraph:
             config={"configurable": {"thread_id": str(uuid.uuid4()), "ctx": TEST_CTX}},
         )
         assert "described what I'd do" in result["messages"][-1].content
+
+
+def test_a_closing_offer_after_a_list_takes_only_itself():
+    """Real bug, found live on the expense report: price lines end in no full stop, so the whole list was one "sentence" ending in the offer's
+    question mark, and the person got the first line alone."""
+    answer = "The total cost is $267.70. Here is the breakdown:\n\n- Taxi: $23.50\n- Hotel: $180.00\n- Team lunch: $64.20\n\nTotal: $267.70"
+
+    assert strip_closing_offer(answer + "\n\nWould you like to proceed with creating the expense report?") == answer

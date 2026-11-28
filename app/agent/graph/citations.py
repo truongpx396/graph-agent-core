@@ -3,14 +3,26 @@ the registry's two citation checks (`graph/output_checks.py`): which offered cit
 actually used (`find_used_citations`), which cited markers were invented
 (`count_ungrounded_claims`), and two directional "used without attributing" checks plus their shared
 sentence-matching machinery (`_uncited_citation_matches`, `find_likely_uncited`,
-`insert_missing_citation_markers`, `find_likely_misattributed`, `drop_citation_markers`).
+`insert_missing_citation_markers`, `find_likely_misattributed`, `drop_citation_markers`), and the markers that point at nothing
+(`numbered_sources_offered`, `drop_dangling_citation_markers`).
 """
 import re
+from collections.abc import Iterable
 from typing import Any
 
 from app.agent.graph.messages import content_words, split_sentences
 
 _CITATION_MARKER_RE = re.compile(r"\[(\d+)\]")
+_FIGURE_RE = re.compile(r"\d+(?:[.,]\d+)*")
+# A marker written the way a citation is: at the start of a line (a made-up footnote), or after a space and closing a clause or a line. `items[1]`, a
+# markdown link and code are none of these.
+_DANGLING_RE = re.compile(
+    r"(?P<code>```(?s:.*?)(?:```|\Z)|`[^`\n]*`)|^(?:\[\d+\])+[ \t]*|[ \t]+\[\d+\](?:[ \t]*\[\d+\])*(?=[.,;:!?)*_]|[ \t]*$)", re.MULTILINE
+)
+
+
+def _figures(text: str) -> set[str]:
+    return set(_FIGURE_RE.findall(_CITATION_MARKER_RE.sub("", text)))
 
 
 def find_used_citations(content: str, citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -209,16 +221,21 @@ def find_likely_misattributed(
         cite_words = content_words(citation.get("text", ""))
         if not cite_words:
             continue
+        cite_figures = _figures(citation.get("text", ""))
         citing_sentences = [s for s in sentences if marker in s]
         judged = False
         supported = False
         for sentence in citing_sentences:
             sentence_words = content_words(sentence)
-            if len(sentence_words) < _MIN_JUDGED_SENTENCE_WORDS:
+            overlap = sentence_words & cite_words
+            # Too short to judge by its words, unless it states figures the source never does and shares no word with it either: "The result of 15%
+            # of 2,450 is 367.5 [1]." cited a page about checkpointers.
+            figures = _figures(sentence)
+            foreign_figures = bool(figures) and not figures & cite_figures and not overlap
+            if len(sentence_words) < _MIN_JUDGED_SENTENCE_WORDS and not foreign_figures:
                 continue
             judged = True
-            overlap = sentence_words & cite_words
-            if len(overlap) / len(sentence_words) >= _MISATTRIBUTED_OVERLAP_RATIO:
+            if overlap and len(overlap) / len(sentence_words) >= _MISATTRIBUTED_OVERLAP_RATIO:
                 supported = True
                 break
         if judged and not supported:
@@ -246,3 +263,26 @@ def drop_citation_markers(content: str, markers: list[str]) -> str:
 def drop_all_citation_markers(content: str) -> str:
     """`content` with every `[n]` removed, for an answer that has no source list to point into (the second look, pattern 105)."""
     return drop_citation_markers(content, sorted(set(re.findall(r"\[\d+\]", content))))
+
+
+def numbered_sources_offered(citations: list[dict[str, Any]], said_this_turn: Iterable[str]) -> bool:
+    """Is there anything this turn a `[n]` could mean? The pre-fetched sources, or brackets in `said_this_turn`: a tool result that numbers its own
+    (`search_docs` does, outside `citations`), or brackets the person wrote themselves."""
+    return bool(citations) or any(_CITATION_MARKER_RE.search(text) for text in said_this_turn)
+
+
+def drop_dangling_citation_markers(content: str) -> str:
+    """`content` without its citation markers, for an answer that had no numbered source: there is nothing for them to point at. Found live: after one
+    real `[1]` early in a conversation, qwen2.5:7b wrote it on a calculation, an expense total (with a made-up footnote) and a lookup that found nothing.
+    Narrower than `drop_all_citation_markers`: only a marker written the way a citation is (`_DANGLING_RE`)."""
+    return _DANGLING_RE.sub(lambda match: match.group("code") or "", content)
+
+
+
+def drop_tool_citations(content: str, tool_names: frozenset[str]) -> str:
+    """`content` without brackets that cite one of the domain's tools as a source ("[search_docs tool response]"). Never a link, never code."""
+    if not tool_names:
+        return content
+    names = "|".join(sorted(map(re.escape, tool_names), key=len, reverse=True))
+    pattern = rf"(?P<code>```(?s:.*?)(?:```|\Z)|`[^`\n]*`)|[ \t]*\[(?:{names})\b[^\]\n]{{0,40}}\](?!\()"
+    return re.sub(pattern, lambda match: match.group("code") or "", content)

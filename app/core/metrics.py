@@ -213,6 +213,12 @@ agent_misattributed_citations_total = Counter(
     "agent_output_check_fired_total{check=\"misattributed\"}.",
 )
 
+agent_dangling_citations_total = Counter(
+    "agent_dangling_citations_total",
+    "Final answers that carried a citation with nothing behind it: `[n]` markers in a turn with no numbered source at all, or a bracket naming one "
+    "of the domain's tools. check_output removes it and the answer stands (citations.py, docs/GRAPH_PATTERNS.md pattern 104).",
+)
+
 agent_reference_footer_stripped_total = Counter(
     "agent_reference_footer_stripped_total",
     "Final answers where check_output stripped a fabricated markdown-style "
@@ -283,6 +289,13 @@ agent_skipped_required_tool_total = Counter(
     "live freehand attempt at the same math landed on a wrong number. "
     "Acted on by graph_edge_route_after_check_output: triggers a retry with feedback to "
     "actually call the tool the skill named.",
+)
+
+agent_skipped_step_total = Counter(
+    "agent_skipped_step_total",
+    "Final answers given without a step they needed: the person asked for what one tool does (remember something, have a researcher look) and it was "
+    "never called, or a loaded skill asked for a document search and the answer says nothing is on record without one "
+    "(output_guardrails.skipped_step, docs/GRAPH_PATTERNS.md pattern 115). Sent back; replaced if it repeats.",
 )
 
 agent_system_prompt_leak_total = Counter(

@@ -41,6 +41,7 @@ from app.agent.graph.output_guardrails import (
     fabricates_tool_output,
     reveals_system_prompt,
     skipped_required_sandbox_after_skill,
+    skipped_step,
     writes_tool_call_as_text,
 )
 from app.agent.graph.state import CONTEXT_GAP_REASON, MIN_ANSWER_LENGTH
@@ -121,6 +122,10 @@ def _skipped_tool(ctx: CheckContext) -> Any:
     # "don't estimate this in your head," and the model did anyway: right that once, wrong on other
     # freehand attempts. The name (not a bool) lets the feedback name it specifically.
     return skipped_required_sandbox_after_skill(ctx.messages, ctx.skill_required_tools)
+
+
+def _skipped_step(ctx: CheckContext) -> Any:
+    return skipped_step(ctx.messages, ctx.content, ctx.tool_names, ctx.citations)
 
 
 def _tool_failed_this_turn(messages: list[BaseMessage]) -> bool:
@@ -226,6 +231,18 @@ def _skipped_tool_feedback(tool_name: str) -> str:
     )
 
 
+def _skipped_step_feedback(tool_name: str) -> str:
+    # The search's extra sentence is from a comparison on qwen2.5:7b: without it, a search that found nothing was followed by "Retrieved from company
+    # records". Not added for the others: any further wording made it repeat "I have remembered" without calling `remember`.
+    feedback = (
+        f"That answer needed {tool_name} and you never called it, so nothing it says was done or looked up. Call {tool_name} now through tool "
+        "calling, with no text before it."
+    )
+    if tool_name == "search_docs":
+        feedback += " Then write the answer again; if nothing is found, say that no notes were found."
+    return feedback
+
+
 def _deferred_feedback(_detail: Any) -> str:
     # The opposite instruction from the citation feedback below (which says NOT to call a tool
     # again), explicit so a model doesn't wrongly generalize "don't call tools on retry" from those.
@@ -257,8 +274,8 @@ GENERIC_NO_ANSWER_MESSAGE = (
 )
 
 # Priority order: leaked prompt (the only reason with a real security dimension, severe enough that
-# it can't also be merely too short) > too short > fabricated > tool call written as text > skipped required tool > context gap > deferred >
-# uncited. A marker on a sentence its source does not support is not a reason: `graph_node_check_output` removes it (pattern 104).
+# it can't also be merely too short) > too short > fabricated > tool call written as text > skipped required tool > skipped step > context gap >
+# deferred > uncited. A marker on a sentence its source does not support is not a reason: `graph_node_check_output` removes it (pattern 104).
 CHECKS: tuple[OutputCheck, ...] = (
     OutputCheck(
         "leaked_prompt", _leaks_prompt, _leaked_feedback, counter=metrics.agent_system_prompt_leak_total
@@ -291,6 +308,14 @@ CHECKS: tuple[OutputCheck, ...] = (
             "I wasn't able to complete a required step for that request — could you try again, "
             "or add a bit more detail?"
         ),
+    ),
+    # Not trusted: "I will remember that" is the whole harm when nothing was saved.
+    OutputCheck(
+        "skipped_step",
+        _skipped_step,
+        _skipped_step_feedback,
+        counter=metrics.agent_skipped_step_total,
+        fallback="I didn't do that: a step it needed did not run. Please ask again.",
     ),
     # Above `deferred`: when an answer both says the block lacks it and narrates a look-up, asking again without the block worked where feedback did not.
     # Trusted: the answer is honest, so a turn cut off by a budget on this round still shows it.

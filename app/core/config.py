@@ -137,7 +137,7 @@ class Settings(BillingSettings):
     router_long_prompt_chars: int = Field(default=DEFAULT_LONG_PROMPT_CHARS, ge=200)
     # The label call's deadline. A miss leaves the rules to decide, so this bounds what routing can add to a turn (the service's own deadline is
     # shorter; this is the backstop). Capped so a typo cannot make routing slower than a turn.
-    router_timeout_seconds: float = Field(default=0.5, gt=0.0, le=5.0)
+    router_timeout_seconds: float = Field(default=1.5, gt=0.0, le=5.0)
 
     @model_validator(mode="after")
     def _the_router_is_configured_to_do_something_it_can(self) -> "Settings":

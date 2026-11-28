@@ -16,7 +16,7 @@ Each pattern states the mechanism, the real bug behind it and the gap still open
 
 | Read | Patterns | About |
 |---|---|---|
-| [GRAPH_PATTERNS.md](GRAPH_PATTERNS.md) | 1-10, 12-17, 19, 22, 23, 25, 27, 34-36, 39, 41, 44-47, 70, 71, 79-81, 104, 105, 109, 111, 114 | The graph: loop, approval, cancellation, context and cache nodes, checkpointing, composition |
+| [GRAPH_PATTERNS.md](GRAPH_PATTERNS.md) | 1-10, 12-17, 19, 22, 23, 25, 27, 34-36, 39, 41, 44-47, 70, 71, 79-81, 104, 105, 109, 111, 114, 115 | The graph: loop, approval, cancellation, context and cache nodes, checkpointing, composition |
 | [RUNTIME_PATTERNS.md](RUNTIME_PATTERNS.md) | 11, 29-31, 37, 43, 49, 96, 99, 112, 113 | The queue, the workers, pools, metrics, logs, tracing, the error envelope, the web UI |
 | [ACCESS_PATTERNS.md](ACCESS_PATTERNS.md) | 82, 84-86, 97, 98, 103 | The front door, signed identity, revocation, the MCP gateway, production routing |
 | [CHANNEL_PATTERNS.md](CHANNEL_PATTERNS.md) | 42, 89, 91-94 | The CLI and Telegram as clients of the chat API |
@@ -42,7 +42,7 @@ Code and tests cite a pattern by number ("pattern 43"), so a number is **never r
 
 - A bare number means the document you are reading. Cite another document's pattern with its file: `COST_GOVERNANCE.md 74`, `ENGINEERING_PATTERNS.md 86`.
 - Three numbers were each used twice before this rule existed and cannot be changed now: **74** (strict tool schemas, and the gateway's view of spend), **86** (the API's identity, and smoke checks) and **87** (web search, and live tests).
-- The next free number is **116** (115 is taken by work not yet merged).
+- The next free number is **116**.
 
 ## Elsewhere
 
