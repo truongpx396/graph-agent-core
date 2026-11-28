@@ -19,7 +19,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/authlimit ./cmd/authlimit \
  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/echo ./cmd/echo
 
-FROM gcr.io/distroless/static@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99 AS runtime
+FROM gcr.io/distroless/static@sha256:4c2cd1dee442c9a99924a378c7c126fac8fef14771579ef567c3f2bdd7a5122a AS runtime
 COPY --from=build /out/authlimit /authlimit
 # The stub upstream the smoke check puts behind the front door. A test fixture; the compose profile that starts it is development-only.
 COPY --from=build /out/echo /echo
