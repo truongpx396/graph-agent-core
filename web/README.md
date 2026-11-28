@@ -56,7 +56,8 @@ src/
 - Model output is untrusted: no raw HTML, and nothing is fetched without a click (`features/chat/ui/Markdown.tsx` says why).
 - An answer is markdown from its first token. While it streams, `remend` closes what is half written (a link being typed is plain text)
   and each new word fades in; both sit inside `Markdown.tsx`, behind the same two rules. The committed answer is the model's text unchanged.
-  Not done: syntax highlighting, and bold around an unfinished `code` span shows its asterisks until the span closes.
+  Not done: syntax highlighting; bold around an unfinished `code` span shows its asterisks until the span closes; each token re-parses its
+  whole message (smooth on the 2 KB answer checked, not measured on very long ones).
 - The transcript follows new text only while the reader is at the end (`Transcript.tsx`).
 - Colours are the tokens in `app/styles.css` (`bg-elevated`, `text-muted`, ...), never raw values, so both themes have one source.
 

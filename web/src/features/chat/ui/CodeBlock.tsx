@@ -21,7 +21,8 @@ export function CodeBlock({ language, children }: { language: string; children: 
           <button
             type="button"
             className="cursor-pointer font-semibold hover:text-ink"
-            onClick={() => void clipboard.writeText(pre.current?.textContent ?? "").then(() => setCopied(true))}
+            // Refused (no permission, an unfocused page): the button keeps saying "Copy".
+            onClick={() => void clipboard.writeText(pre.current?.textContent ?? "").then(() => setCopied(true), () => setCopied(false))}
           >
             {copied ? "Copied" : "Copy"}
           </button>

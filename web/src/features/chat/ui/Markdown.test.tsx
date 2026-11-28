@@ -1,6 +1,6 @@
 import { render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Markdown } from "./Markdown";
 
 const rendered = (text: string) => render(<Markdown text={text} />).container;
@@ -86,5 +86,14 @@ describe("a code block", () => {
     await user.click(box.querySelector("button")!);
     expect(await navigator.clipboard.readText()).toBe("[1, 2]\n");
     expect(box.querySelector("button")?.textContent).toBe("Copied");
+  });
+
+  it("stays usable when the browser refuses the clipboard", async () => {
+    const user = userEvent.setup();
+    const write = vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("denied"));
+    const box = rendered("```\nx\n```");
+    await user.click(box.querySelector("button")!);
+    expect(write).toHaveBeenCalledOnce();
+    expect(box.querySelector("button")?.textContent).toBe("Copy");
   });
 });
