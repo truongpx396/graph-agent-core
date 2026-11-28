@@ -114,8 +114,8 @@ services:
       - "4000:4000"
     volumes:
       - ./deploy/dev/litellm-config.yaml:/app/config.yaml:ro
-      # sitecustomize.py, auto-imported via PYTHONPATH below, patches a LiteLLM bug that glues two tool calls from an ollama_chat model into one
-      # (deploy/dev/litellm-patches/sitecustomize.py). The stock image is untouched.
+      # sitecustomize.py, auto-imported via PYTHONPATH below, patches two LiteLLM bugs: two tool calls from an ollama_chat model glued into one, and
+      # a replayed tool call sent unsigned to a Gemini 4 model (deploy/dev/litellm-patches/sitecustomize.py). The stock image is untouched.
       - ./deploy/dev/litellm-patches:/app/patches:ro
     environment:
       PYTHONPATH: /app/patches

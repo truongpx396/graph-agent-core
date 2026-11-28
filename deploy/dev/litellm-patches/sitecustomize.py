@@ -65,3 +65,31 @@ except Exception as exc:  # noqa: BLE001 - fail loud to stderr, never crash prox
         "deploy/dev/litellm-patches/sitecustomize.py and app/agent/graph/utils.py's _make_llm comment)",
         file=sys.stderr,
     )
+
+
+# Second patch: Gemini 4 models need the same placeholder thought signature as Gemini 3 ones.
+#
+# Root cause (verified live 2026-11-29 on litellm 1.94.1): Google refuses a replayed function call that carries no `thoughtSignature`, and a
+# call made by another model has none. LiteLLM adds the placeholder Google documents for that only when `_is_gemini_3_or_newer(model)` says so,
+# and it says so by looking for "gemini-3" in the name. `gemini-4-hydrogen` (dev's `chat-strong`) therefore answered 400 as soon as a turn
+# escalated to it after `chat` had called a tool, which the app does not fall back from: the turn failed.
+#
+# The function also stops penalty parameters being sent and sets thinking levels for these models, which is as right for Gemini 4.
+try:
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    _original_is_gemini_3_or_newer = VertexGeminiConfig._is_gemini_3_or_newer
+
+    def _patched_is_gemini_3_or_newer(model):
+        return _original_is_gemini_3_or_newer(model) or "gemini-4" in model
+
+    VertexGeminiConfig._is_gemini_3_or_newer = staticmethod(_patched_is_gemini_3_or_newer)
+    print("[litellm-patches] applied Gemini 4 thought-signature fix (see deploy/dev/litellm-patches/sitecustomize.py for why)", file=sys.stderr)
+except Exception as exc:  # noqa: BLE001 - fail loud to stderr, never crash proxy startup
+    print(
+        f"[litellm-patches] FAILED to apply the Gemini 4 thought-signature fix: {exc!r} -- a turn escalated to a Gemini 4 model after "
+        "another model called a tool will fail with HTTP 400 (see deploy/dev/litellm-patches/sitecustomize.py)",
+        file=sys.stderr,
+    )

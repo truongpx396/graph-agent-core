@@ -7,7 +7,7 @@
 #   tier    alias         dev (this file)                       to use another model
 #   easy    chat          gemini-3.5-flash-lite, free tier      edit that ONE entry; prod: LLM_*
 #   medium  chat-medium   gemini-3-flash-preview, free tier     edit that ONE entry; prod: LLM_MEDIUM_*
-#   strong  chat-strong   gemini-3.6-flash, free tier           edit that ONE entry; prod: LLM_STRONG_*
+#   strong  chat-strong   gemini-4-hydrogen, free tier          edit that ONE entry; prod: LLM_STRONG_*
 #
 # `chat` is every turn's model; `chat-medium` and `chat-strong` are the router's two escalation targets (MEDIUM_CHAT_MODEL, STRONG_CHAT_MODEL; off
 # by default, and a delegated specialist can name either in its AGENT.md `model:`). All three need GOOGLE_API_KEY in `.env`. Without it, or when
@@ -20,9 +20,11 @@
 #   gemini-3.5-flash-lite 10/10 answered in about 0.8 s    <- `chat`
 #   gemini-3.1-flash-lite  5/10 (503 "high demand", timeouts)
 #   gemini-3-flash-preview 6/6 in 1.4-2.5 s                <- `chat-medium` (a preview model: Google may withdraw it)
-#   gemini-3.6-flash       5/6                             <- `chat-strong`
-#   gemini-3.8-flash       0/6
-#   gemini-4-hydrogen      4/6, and on this LiteLLM image it answers 400 to a replayed tool call another model made, which fails the turn
+#   gemini-3.6-flash       5/6 (`chat-strong` until 2026-11-29: then silent, 503 and out of its daily quota)
+#   gemini-3.8-flash       0/6, and the next day one 503 and one answer after 149 s
+#   gemini-4-hydrogen      4/6, then 3/4 with correct tool calls in 3-5 s on 2026-11-29   <- `chat-strong`
+# Hydrogen answers 400 to a replayed tool call another model made unless the gateway counts Gemini 4 as "Gemini 3 or newer"
+# (litellm-patches/sitecustomize.py does). All free-tier Flash quotas are small: expect 503 and 429, which the app repeats on `chat`.
 #
 # PRICES. Every alias below states a price in `model_info`. A local model costs no money, but without a price LiteLLM reports it as
 # either unknown (`null`: the app counts every call as unpriced and `UNPRICED_MODEL_POLICY=block` would refuse it) or a known $0 (and a
@@ -138,13 +140,13 @@ model_list:
   # purpose: the app repeats a failed strong call on `chat` itself, so the usage ledger prices the model that answered.
   - model_name: chat-strong
     litellm_params:
-      model: gemini/gemini-3.6-flash
+      model: gemini/gemini-4-hydrogen
       api_key: os.environ/GOOGLE_API_KEY
       num_retries: 0
-    # Shadow price at the paid-tier list price through 2026-12-31 ($1.50 / $7.50 from 2027-01-01): $0.75 per million input tokens, $3.75 output.
+    # Shadow price at the paid-tier list price: $1.50 per million input tokens, $7.50 output.
     model_info:
-      input_cost_per_token: 0.00000075
-      output_cost_per_token: 0.00000375
+      input_cost_per_token: 0.0000015
+      output_cost_per_token: 0.0000075
   # Vision-capable alias slot (GRAPH_PATTERNS.md pattern 44). The local chat model
   # (`chat-backup`) has no vision capability, so an attached image reaching it is carried
   # through the pipeline correctly but it can't see it. The hosted model behind `chat`

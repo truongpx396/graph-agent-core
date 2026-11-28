@@ -450,12 +450,12 @@ Three chat tiers, each a gateway alias (the app names aliases, never a provider'
 |---|---|---|---|---|
 | 🟢 easy | `chat` | gemini-3.5-flash-lite (needs `GOOGLE_API_KEY`); falls back to qwen2.5:7b, local (`chat-backup`) | `LLM_CHAT_MODEL` | every turn (`CHAT_MODEL=chat`) |
 | 🟡 medium | `chat-medium` | gemini-3-flash-preview (needs `GOOGLE_API_KEY`) | `LLM_MEDIUM_*`; unset = `chat` | the router's middle tier; a specialist's `AGENT.md` `model:` |
-| 🔴 strong | `chat-strong` | gemini-3.6-flash (needs `GOOGLE_API_KEY`) | `LLM_STRONG_*`; unset = `chat` | the router's top tier |
+| 🔴 strong | `chat-strong` | gemini-4-hydrogen (needs `GOOGLE_API_KEY`) | `LLM_STRONG_*`; unset = `chat` | the router's top tier |
 
 - 💲 **Every alias states a price** in `model_info` (Gemini's paid list price for the three hosted aliases; the local fallback carries `chat`'s, so a fallback does not change what a call is priced at). They're shadow prices: without one LiteLLM reports a local model as unpriced or a flat $0, and no gateway budget can ever trip on $0. Change them if you like, but keep them above 0 ([pattern 74](docs/COST_GOVERNANCE.md)).
 - 🔧 **Strict tool schemas** (`TOOL_CALLS_STRICT`, **off**): leave off on Ollama, where the smallest model calls tools measurably worse with it; turn on only for a provider that enforces strict calling, with `make probe-tools` before and after ([docs/RETRIEVAL_AND_MODEL_PATTERNS.md](docs/RETRIEVAL_AND_MODEL_PATTERNS.md) pattern 74).
 - ♊ **Dev's chat models are Gemini, on Google AI Studio's free tier** (`GOOGLE_API_KEY` in `.env`). Know three things:
-  Google says **free-tier content is used to improve its products**, and every turn sends the conversation and what it retrieved, so use only sample data; the quotas are small (measured 2026-11-27: `gemini-3.5-flash-lite` 15 requests a minute, `gemini-3.6-flash` 20 a **day**, and 503 "high demand" spells); and when `chat` is refused the **local model answers instead**, which the app and its traces still call `chat` (the gateway's spend log shows it, model group `chat-backup`). A routed `chat-medium` or `chat-strong` turn that is refused is repeated on `chat`. `make probe-tools` and `make prompt-check` ask a hosted alias through the running gateway, one request of its quota per case.
+  Google says **free-tier content is used to improve its products**, and every turn sends the conversation and what it retrieved, so use only sample data; the quotas are small (measured 2026-11-27: `gemini-3.5-flash-lite` 15 requests a minute, `gemini-3.6-flash` 20 a **day**), and models go through 503 "high demand" spells and silences; and when `chat` is refused the **local model answers instead**, which the app and its traces still call `chat` (the gateway's spend log shows it, model group `chat-backup`). A routed `chat-medium` or `chat-strong` call that is refused, or silent for `ROUTED_LLM_READ_TIMEOUT_SECONDS` (30), is repeated on `chat`. `make probe-tools` and `make prompt-check` ask a hosted alias through the running gateway, one request of its quota per case.
 
 ### Routing a turn to a medium or strong model
 
@@ -463,7 +463,7 @@ Optional and **off by default** (`ROUTER_MODE=off`): no classifier is asked and 
 choose the model; approval, tenant scoping and idempotency are unchanged under every tier.
 
 - **How it decides.** The `route_model` node ([pattern 68](docs/RETRIEVAL_AND_MODEL_PATTERNS.md)) reads **rules** over the message (long, contains code, asks several things, reasoning words) and a **label** from the ML service (`POST /v1/decide`, the `route-topics` choice set in `services/ml-service/labelsets/route-topics.json`). Each names the lowest tier it accepts; the turn goes to `min(ROUTER_MAX_TIER, max(rules, label))`, lowered to a configured, priced tier, and is answered, priced and recorded as that alias.
-- **Failure.** No label leaves the rules to decide; any other failure runs the turn on `chat`.
+- **Failure.** No label leaves the rules to decide; any other failure runs the turn on `chat`. So does a routed model that cannot be reached, errs, is out of quota or stays silent for `ROUTED_LLM_READ_TIMEOUT_SECONDS` (30; never more than half the turn).
 - **Roll out in stages.** `shadow` makes and counts every decision but runs on `chat`, so you read what routing *would* have spent (`agent_model_route_tier_total{tier,mode="shadow"}`, `agent_model_route_total{outcome}`), then `on`:
 
 ```bash
