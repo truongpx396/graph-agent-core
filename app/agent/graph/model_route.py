@@ -1,7 +1,8 @@
 """`route_model`: the one node that may ask for a different model, and what happens when asking fails (specs/014,
 015; GRAPH_PATTERNS pattern 68).
 
-What it may do: write `State.model_route` ("local", "medium" or "strong") and nothing else. It can't see or
+What it may do: write `State.model_route` (the gateway alias that answers the turn: `CHAT_MODEL`, `MEDIUM_CHAT_MODEL` or
+`STRONG_CHAT_MODEL`) and nothing else. It can't see or
 change which tools a turn may call, whether a write needs approval, whose data is read or whether a write
 repeats: `human_approval`, `SecurityCtx` and `idempotent()` decide those under every tier (a test pins
 identical tool-gating under all three). A router that could touch them would be a second authority over the
@@ -24,7 +25,7 @@ the user's current message, under a short deadline: no tenant, principal, histor
 Every failure lands on a tier the operator already pays for. No label: the rules decide. An alias with no
 price under `UNPRICED_MODEL_POLICY=block`: step down a tier (the router must never be why a turn is refused).
 Anything unexpected: `local`. A routed model failing mid-turn is `agent()`'s to handle by repeating that call
-locally (`routed_unreachable`). Nothing here raises: a raising node would turn an advisory feature into an
+on the default model (`routed_unanswered`). Nothing here raises: a raising node would turn an advisory feature into an
 outage.
 """
 import logging
@@ -40,6 +41,7 @@ from app.agent.graph.messages import human_text, last_human_message
 from app.agent.graph.state import State
 from app.core import metrics, routing_policy
 from app.core.config import (
+    CHAT_MODEL,
     MEDIUM_CHAT_MODEL,
     ROUTER_LABELS,
     ROUTER_LONG_PROMPT_CHARS,
@@ -70,29 +72,44 @@ def configured_tiers() -> tuple[Tier, ...]:
     return tuple(tiers)
 
 
-def tier_alias(route: object) -> str | None:
-    """The gateway alias a routed turn calls instead of the default, or None for `local`, for no decision and for a tier whose alias is no longer set
-    (the operator unset it between a pause and its resume: there is nothing to call, and the default model is what the turn had before routing)."""
-    return {"medium": MEDIUM_CHAT_MODEL, "strong": STRONG_CHAT_MODEL}.get(str(route)) or None
+def alias_of(tier: str) -> str:
+    """The gateway alias a tier is served by; empty for a tier nobody configured. `local` is the policy's name for the default model, which
+    need not run on this machine."""
+    return {"local": CHAT_MODEL, "medium": MEDIUM_CHAT_MODEL, "strong": STRONG_CHAT_MODEL}.get(tier, "")
 
 
-def routed_unreachable(exc: BaseException) -> bool:
-    """True if `exc` means a routed alias never produced an answer: a connection failure, a timeout, or the
-    gateway reporting a server error (5xx).
+def tier_of(route: object) -> Tier:
+    """The tier a turn's `model_route` (an alias) belongs to. No decision, the default alias, and an alias no longer configured (unset between
+    a pause and its resume) are all `local`: the default model answers, which is what the turn had before routing."""
+    escalated: tuple[Tier, ...] = ("medium", "strong")
+    return next((tier for tier in escalated if route and route == alias_of(tier)), "local")
+
+
+def routed_alias(route: object) -> str | None:
+    """The alias a routed turn calls instead of the default, or None when the default model answers."""
+    return str(route) if tier_of(route) != "local" else None
+
+
+def routed_unanswered(exc: BaseException) -> bool:
+    """True if `exc` means a routed alias gave no answer that another model could not give: a connection failure, a timeout, the gateway
+    reporting a server error (5xx), or its provider saying too many calls were made (429).
 
     Any 5xx, not just 502/503/504: a real LiteLLM in front of an unreachable upstream answers HTTP **500**
     (`APIConnectionError: ... Cannot connect to host`), as does an upstream that is up but lacks the model, so
     the first version's 502/503/504 list never fired for the failure it exists for. The gateway doesn't
     distinguish "down" from "broken" by status and this decision doesn't need it: either way the routed model
-    didn't answer, and repeating that one call locally is what the app did before routing. It is counted
-    (`routed_unreachable_fell_back`) and alerted, so a persistently broken alias is loud.
+    didn't answer, and repeating that one call on the default model is what the app did before routing. It is counted
+    (`routed_unreachable_fell_back`) and alerted, so a persistently failing alias is loud.
+
+    A 429 counts since the dev tiers moved to free-tier models with a quota of a few dozen calls a day: the turn used to be tried three
+    times against the spent quota and then failed, though the router must never be why a turn fails.
 
     NOT the gateway's budget stop (`provider_budget_exceeded`): it repeats until the budget resets and is the
-    operator's signal, which a silent fallback would hide. NOT any 4xx: the model was reached and refused (bad
-    request, bad key, rate limit), which a retry elsewhere would paper over. Checked in that order, so a
-    budget stop that arrives as a 5xx is still not caught.
+    operator's signal, which a silent fallback would hide. NOT any other 4xx: the model was reached and refused (bad
+    request, bad key), which a retry elsewhere would paper over.
     """
-    return llm_failures.get().is_unreachable(exc)
+    failures = llm_failures.get()
+    return failures.is_unreachable(exc) or failures.is_rate_limited(exc)
 
 
 @dataclass(frozen=True)
@@ -119,7 +136,7 @@ async def _decide(state: State) -> _Result:
         elif labelled.label is not None and labelled.label not in routing_policy.LABEL_TIERS:
             outcome = "label_unknown"  # a mounted set whose labels this app's table has not been told about: the rules decided
     tier = decision.tier
-    while tier != "local" and await pricing.refuse_unpriced(tier_alias(tier) or ""):
+    while tier != "local" and await pricing.refuse_unpriced(alias_of(tier)):
         tier = routing_policy.step_down(tier, configured)
     if tier != decision.tier:
         decision = replace(decision, tier=tier, limited_by="unpriced")
@@ -131,7 +148,7 @@ def make_graph_node_route_model() -> Callable[..., Awaitable[dict[str, Any]]]:
     async def graph_node_route_model(state: State, config: RunnableConfig | None = None) -> dict[str, Any]:
         if ROUTER_MODE == "off":
             metrics.agent_model_route_total.labels(outcome="disabled").inc()  # a switched-off router adds nothing to a turn, so no latency and no log either
-            return {"model_route": "local"}
+            return {"model_route": CHAT_MODEL}
         started = time.perf_counter()
         try:
             result = await _decide(state)
@@ -145,13 +162,16 @@ def make_graph_node_route_model() -> Callable[..., Awaitable[dict[str, Any]]]:
         if decision is not None:
             metrics.agent_model_route_tier_total.labels(tier=decision.tier, mode=ROUTER_MODE, decided_by=decision.decided_by).inc()
         similarity = labelled.similarity if labelled is not None else None
+        # `shadow` made the decision above and counted it; the turn it describes runs on the default model.
+        route = alias_of(decision.tier) if decision is not None and ROUTER_MODE == "on" else CHAT_MODEL
         logger.info(
             "model_route",
             extra={
                 "outcome": result.outcome,
                 "mode": ROUTER_MODE,
-                "tier": decision.tier if decision is not None else "local",
-                "asked": decision.asked if decision is not None else None,
+                "model_route": route,  # the alias that answers
+                "decided_model": alias_of(decision.tier) if decision is not None else CHAT_MODEL,  # differs from it only in `shadow`
+                "asked_model": (alias_of(decision.asked) or None) if decision is not None else None,  # None: no alias for what was asked
                 "decided_by": decision.decided_by if decision is not None else None,
                 "limited_by": decision.limited_by if decision is not None else None,
                 "rules": list(decision.rules) if decision is not None else [],
@@ -163,7 +183,6 @@ def make_graph_node_route_model() -> Callable[..., Awaitable[dict[str, Any]]]:
                 "run_id": state.get("run_id", "-"),
             },
         )
-        # `shadow` made the decision above and counted it; the turn it describes runs on the default model.
-        return {"model_route": decision.tier if decision is not None and ROUTER_MODE == "on" else "local"}
+        return {"model_route": route}
 
     return graph_node_route_model

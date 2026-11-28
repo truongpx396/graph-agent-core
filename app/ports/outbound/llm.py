@@ -45,6 +45,11 @@ class LlmFailures(Protocol):
         the request: the failures a different model could paper over."""
         ...
 
+    def is_rate_limited(self, exc: BaseException) -> bool:
+        """The model's provider refusing the call for now because too many were made (429, a quota), and not a budget stop. Another model,
+        with a quota of its own, can answer it."""
+        ...
+
     def content_block(self, exc: BaseException) -> ContentBlock | None:
         """The guardrail refusal in `exc`, or None if it is anything else."""
         ...

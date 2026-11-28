@@ -56,16 +56,19 @@ Changing what you embed changes the space, and Qdrant cannot tell: two 768-d mod
 
 ### 68. A model-routing seam that can only advise, from two signals and in three tiers
 An operator can attach up to two more models behind gateway aliases (`chat-medium`, `chat-strong`). The router picks a tier per turn from rules over the message (`app/core/routing_policy.py`) and a label from the ML service's `route-topics` set (`POST /v1/decide`): `min(ceiling, max(rules, label))`, lowered to the highest tier that is configured and priced.
-- **The risk is a second authority.** The router writes `State.model_route` and nothing else; one test pins the single key, another runs the same mutating turn under all three tiers and asserts the same approval pause, tenant-scoped payload and `idempotent()` key.
+- **The risk is a second authority.** The router writes `State.model_route` (the alias that answers: `chat`, `chat-medium`, `chat-strong`) and nothing else; one test pins the single key, another runs the same mutating turn under all three tiers and asserts the same approval pause, tenant-scoped payload and `idempotent()` key.
 - **Where it sits:** after moderation, cache and compaction, in parallel with retrieval; never for a refused input, a cache hit, a resumed turn or a subagent.
 - **It sends** the first 2,000 characters of the current message, never tenant, principal, history or retrieved text. The answer is validated, and a missing label never cancels the rules.
-- **Modes:** `off`, `shadow` (decides and counts, runs local) and `on`; `routing_policy.decide` is pure, so the evaluation harness runs the same code.
+- **Modes:** `off`, `shadow` (decides and counts, runs on `chat`) and `on`; `routing_policy.decide` is pure, so the evaluation harness runs the same code.
+- **The route is the alias, not the tier's name.** It held "local", which stopped being true once `chat` was a hosted model. The policy and the `tier` metric label keep the names (`ROUTER_MAX_TIER=local` still means `chat`).
 - **Deadlines are set by the cold call, not the warm one.** A warm label takes 30 to 60 ms; a classifier idle for 30 s took 524 ms on its first call (a laptop under memory pressure). With 250 ms per model and 0.5 s in the app, 7 of 11 turns of one chat logged `label_timeout` and stayed local, and a person types slowly enough to hit the cold path every time. Now 600 ms per model (`ML_CLASSIFY_DEADLINE_MS`) and 1.5 s in the app (`ROUTER_TIMEOUT_SECONDS`), which must stay above twice the first. The cost: with the ML service stuck, a turn can wait 1.5 s, less what retrieval beside it takes. **Not measured:** a production droplet.
-- **A failing routed model is handled in `agent()`, not the gateway:** the call repeats on the local alias (`ModelRoutedTierFailing`), because a gateway `fallbacks` entry would price a model that did not serve. An unpriced routed alias steps down a tier, so the router is never why a turn is refused.
-- **In dev both tiers are free-tier Gemini** (`GOOGLE_API_KEY`, with `num_retries: 0` so the gateway does not multiply the app's retries against a daily quota); in production both aliases default to `chat` until `LLM_MEDIUM_*` / `LLM_STRONG_*` are set. **Not built:** per-tenant control (set `ROUTER_MAX_TIER=local`).
-- **Gaps:** nothing shows routing improves an answer (the label set itself is measured, `make model-eval KIND=classifier ... DATASET=route-topics`); only the current message is read; a routed endpoint that never answers is not seen by the fallback; a routed alias that is **out of quota** (429) is tried three times on that alias (`AGENT_RETRY_POLICY`, which can succeed on a per-minute limit) and then fails the turn, since only an unreachable model or a 5xx repeats on `chat`.
+- **A failing routed model is handled in `agent()`, not the gateway:** the call repeats on `chat` (`ModelRoutedTierFailing`), because a gateway `fallbacks` entry would price a model that did not serve. An unpriced routed alias steps down a tier, so the router is never why a turn is refused.
+- **Bug:** a routed alias out of quota (429) was tried three times and then failed the turn. With the dev tiers on a free quota of a few dozen calls a day that is the ordinary case, so a 429 now repeats on `chat` too. The gateway's budget stop never does.
+- **In dev all three aliases are free-tier Gemini** (`GOOGLE_API_KEY`, with `num_retries: 0` so the gateway does not multiply the app's retries against a daily quota; `chat` alone falls back, to a local model); in production both aliases default to `chat` until `LLM_MEDIUM_*` / `LLM_STRONG_*` are set. **Not built:** per-tenant control (set `ROUTER_MAX_TIER=local`).
+- **Gaps:** nothing shows routing improves an answer (the label set itself is measured, `make model-eval KIND=classifier ... DATASET=route-topics`); only the current message is read; a routed endpoint that never answers is not seen by the fallback.
 
 ### 73. The chat model is chosen by what it does with this app's tool calls, and a sampling option can break them
+Since 2026-11-28 dev's `chat` is a hosted model (`gemini-3.5-flash-lite`: 21 of 22 tool prompts, against the 19 of 19 below) and the local 7B is its fallback, `chat-backup`. The 7B was slow, and followed planted instructions in `make prompt-check` where the hosted one did not.
 "Remember this" never ran `remember`: Ollama silently discards a tool call whose JSON it cannot parse. Two causes: the gateway's `repeat_penalty: 1.3` (it penalises the `":` and quote tokens a call repeats) and `qwen2.5:3b` being unreliable even without it. `make probe-tools` (22 labelled prompts) scored tool-needing prompts answered, out of 19:
 
 | repeat_penalty | `qwen2.5:3b` | `qwen2.5:7b` | `qwen2.5:1.5b` |
@@ -74,7 +77,7 @@ An operator can attach up to two more models behind gateway aliases (`chat-mediu
 | 1.1 (default) | 13 | **19** | 12 |
 | 1.0 | 15 | **19** | 12 |
 
-- **Decision:** `chat` and `chat-backup` are `qwen2.5:7b` at `repeat_penalty: 1.1`. Run `make probe-tools` after ANY change to a local chat alias's model or `repeat_penalty` (it exits 1 on a dropped call, a loop, or under 90%).
+- **Decision:** the local chat alias is `qwen2.5:7b` at `repeat_penalty: 1.1`. Run `make probe-tools ARGS="--alias chat-backup"` after ANY change to its model or `repeat_penalty` (it exits 1 on a dropped call, a loop, or under 90%).
 - **Gaps:** 22 prompts on one machine is a screen, not a ranking; CI's small models (3b, 1.5b) score 13/19 and 12/19, a plausible cause of flaky live tests, not yet tested; the `vision` alias keeps `repeat_penalty: 1.3`.
 
 ### 74. Strict tool schemas are a form the model is sent, not the contract the app enforces, and they are off until a provider enforces them

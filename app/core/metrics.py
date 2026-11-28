@@ -479,7 +479,7 @@ agent_model_route_total = Counter(
     "pattern 68; specs/015 contracts/tiered-router.md). `decided` is the normal case; every other outcome is a degradation or a step down, and the turn "
     "ran on the tier it says or lower.",
     ["outcome"],
-)  # outcome: decided | disabled | no_text | label_none | label_timeout | label_error | label_unknown | tier_unpriced | error | routed_unreachable_fell_back
+)  # outcome: decided | disabled | no_text | label_none | label_timeout | label_error | label_unknown | tier_unpriced | error | routed_unreachable_fell_back (unreachable, a 5xx or out of quota)
 
 agent_model_route_tier_total = Counter(
     "agent_model_route_tier_total",

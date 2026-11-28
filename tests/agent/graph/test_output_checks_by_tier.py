@@ -9,6 +9,7 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agent.graph import build as graph_build
+from app.agent.graph import model_route
 from app.agent.graph.build import GraphDeps
 from app.agent.graph.output_checks import CHECKS, parse_checks_off_on_routed_tiers
 from app.agent.graph.routing import graph_node_check_output
@@ -19,10 +20,19 @@ from tests.ecorp import ECORP_SYSTEM_PROMPT, build_graph
 TOO_SHORT = "No."  # under MIN_ANSWER_LENGTH: the `too_short` check fires
 
 
+MEDIUM, STRONG = "chat-medium", "chat-strong"
+
+
+@pytest.fixture(autouse=True)
+def _escalation_aliases(monkeypatch):
+    monkeypatch.setattr(model_route, "MEDIUM_CHAT_MODEL", MEDIUM)
+    monkeypatch.setattr(model_route, "STRONG_CHAT_MODEL", STRONG)
+
+
 def _state(tier=None, answer=TOO_SHORT):
     state = {"messages": [HumanMessage(content="what is the refund policy?"), AIMessage(content=answer)], "citations": []}
     if tier is not None:
-        state["model_route"] = tier
+        state["model_route"] = {"local": "chat", "medium": MEDIUM, "strong": STRONG}[tier]  # the state holds the alias
     return state
 
 
