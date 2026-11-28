@@ -151,6 +151,8 @@ services:
       # What sits behind the chat-API site's check (deploy/dev/caddy/Caddyfile): the echo stub or `api:8000`. Resolved by compose's `:-` because
       # Caddy's own default only fires on an UNSET variable, not an empty one.
       AUTHLIMIT_UPSTREAM: ${AUTHLIMIT_UPSTREAM:-authlimit-echo:8000}
+      # The same for the page and its bundle (`/`, `/static/*`): the stub, or `web:8080`.
+      WEB_UPSTREAM: ${WEB_UPSTREAM:-authlimit-echo:8000}
       # Where /telegram/* goes: the bot on the host (the default; `make telegram`) or its container (`make telegram-up` sets telegram-bot:8081). Resolved by `:-` for the same reason.
       TELEGRAM_UPSTREAM: ${TELEGRAM_UPSTREAM:-host.docker.internal:8081}
     ports:

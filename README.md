@@ -63,7 +63,8 @@ change, not a code change.
 | 🔎 Retrieval | **Qdrant**: dense + BM25 hybrid search, metadata pre-filtering |
 | 💾 State | **Postgres** (checkpoints, app data, usage events), **Redis** (Streams queue, semantic cache) |
 | 📈 Observability | **Langfuse** tracing (one trace per turn, grouped by `thread_id`), **OpenTelemetry** metrics, structlog JSON logs, optional Grafana/Loki/Prometheus |
-| ⚡ API | **FastAPI** + Pydantic: SSE chat, approval resume/cancel, uploads, built-in web UI |
+| ⚡ API | **FastAPI** + Pydantic: SSE chat, approval resume/cancel, uploads |
+| 🖥️ Web client | **React** + TypeScript, built by Vite and served by **Caddy** from its own container ([web/](web/README.md)) |
 | 🚪 Edge | **Caddy** + **authlimit** (Go) + **Casdoor**: OAuth 2.1 tokens verified offline, per-tenant and per-person rate limits |
 
 - 🔎 **Hybrid RAG with citations**: dense + BM25, RRF-fused, cross-encoder reranked; numbered citations checked against what retrieval returned.
@@ -98,7 +99,7 @@ crosses a ring the wrong way or an entrypoint forgets to wire. [ARCHITECTURE.md]
 flowchart TB
     subgraph clients_sg["Client surfaces"]
         CLI["CLI (make chat)"]
-        WebUI["Built-in web UI"]
+        WebUI["Web UI (browser)"]
         Telegram["Telegram channel"]
         ExtMCP["External MCP client"]
     end
@@ -109,6 +110,9 @@ flowchart TB
         Casdoor["Casdoor<br/>OAuth 2.1 authorization server"]
         LimitState[("Redis: token buckets,<br/>revocation list")]
     end
+
+    WebServer["web container (Caddy)<br/>the page and its bundle"]
+    Caddy -->|"/ and /static/*"| WebServer
 
     subgraph api_sg["FastAPI service"]
         Queued["POST /chat/stream/queued<br/>/resume, /cancel<br/>(trusts only the signed identity)"]
@@ -258,14 +262,15 @@ make web-build       # the web page (needs Node 22); skip it if you only use the
 ```
 
 Then: 🔭 traces at http://localhost:3000 · 🖥️ `make serve` for the API and web UI at http://localhost:8000 (keep the worker
-running) · 📊 `make obs-up` for Grafana and friends ([Observability](#-observability)).
+running; in containers, `make up-app` serves the web UI at http://localhost:8085) · 📊 `make obs-up` for Grafana and friends ([Observability](#-observability)).
 
 <details>
 <summary>🔌 Dev ports</summary>
 
 | Service | URL | Service | URL |
 |---|---|---|---|
-| FastAPI + web UI | :8000 | LiteLLM | :4000 |
+| FastAPI (+ web UI under `make serve`) | :8000 | LiteLLM | :4000 |
+| Web client container | :8085 | Front door | :8443 |
 | Langfuse | :3000 | Qdrant | :6333 |
 | Postgres / PgBouncer | :5432 / :6432 | Redis Stack | :6379 |
 | MinIO API / console | :9000 / :9001 | ml-service | :8083 |
@@ -327,7 +332,7 @@ suspecting the app.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /` | Built-in web UI: the client in [web/](web/README.md), built (no third-party script); 503 until `make web-build` |
+| `GET /` | The web UI under `make serve`: the client in [web/](web/README.md), built (no third-party script); 503 until `make web-build`. In containers the `web` service serves it, and the API answers 503 here |
 | `GET /health` · `GET /health/ready` | Liveness · readiness (503 names whichever of Qdrant, Postgres ×2, Redis, ml-service is down) |
 | `POST /chat/stream/queued` | Start a turn; SSE stream. Needs a running `agent-worker`. Each frame has an `id:`, the response an `X-Request-Id`, and a silent stream gets `: keepalive` comments |
 | `GET /chat/stream/{request_id}` | Read a turn again after a dropped connection: send the last frame's `id:` as `Last-Event-ID` and only later events come. The caller's own conversations only; the events are kept five minutes after the last one |
@@ -368,7 +373,7 @@ curl -s -N -X POST http://localhost:8000/chat/stream/queued \
 - 🔁 **Resubmits:** an identical `(thread_id, message, images)` within `CHAT_SUBMIT_DEDUP_TTL_SECONDS` (10) streams the first attempt's turn.
 - 🚦 **Limits:** the API doesn't limit turns or uploads; the [front door](#front-door-authlimit) does, as a token bucket per tenant and per person on `POST /chat/stream/queued`, `/chat/resume`, `/ingest/upload` and `DELETE /ingest/documents` (defaults in `services/authlimit/routes.json`: 30 a minute per tenant, 10 per person). Production is behind the same door (`deploy/prod/`, pattern 98), so the limits apply there too. The CLI and the Telegram channel are counted like the web UI: each person has their own bucket, and a refusal reaches them as a message with the wait time. The API's own limit is per source address on the payment webhook (`BILLING_WEBHOOK_RATE_LIMIT_PER_MINUTE`). CORS: `CORS_ALLOWED_ORIGINS`.
 - 📈 **Metrics** are pushed over OTLP; the API has no `/metrics` route.
-- 🖥️ **Web UI:** `make web-build` once, `make serve`, then http://localhost:8000/ (`make web-dev` for hot reload while changing it). It drives the full approve/reject flow and has a real-browser test (`tests/live/test_chat_ui.py`, pattern 48). Behind the front door (`make authlimit-up-app`) it signs in through Casdoor; `make authlimit-web-check` drives that in a browser.
+- 🖥️ **Web UI:** in containers it is the `web` service, with its own image (`make up-app`, then http://localhost:8085/; pattern 116). On the host: `make web-build` once, `make serve`, then http://localhost:8000/ (`make web-dev` for hot reload while changing it). It drives the full approve/reject flow and has a real-browser test (`tests/live/test_chat_ui.py`, pattern 48). Behind the front door (`make authlimit-up-app`) it signs in through Casdoor; `make authlimit-web-check` drives that in a browser.
 
 * * *
 
@@ -650,7 +655,7 @@ policy check, is what "sandboxed" means. Skills (`app/domains/<domain>/skills/*/
 
 `deploy/terraform/prod/` provisions two DigitalOcean droplets (`deploy/terraform/dev/` runs the dev stack on one, [deploy/README.md](deploy/README.md#the-dev-droplet)): an **app droplet** (the lean prod stack behind Caddy) and a smaller
 **observability droplet** (Prometheus, Loki, Grafana, Alertmanager) fed over the private network. Creating or destroying
-droplets is always a human-run `terraform apply`. CI builds, checks and scans the three images and publishes them to GHCR on `main`;
+droplets is always a human-run `terraform apply`. CI builds, checks and scans the four images and publishes them to GHCR on `main`;
 once `DEPLOY_ENABLED` is set, its last job runs `.github/workflows/deploy.yml`, which redeploys that commit.
 
 1. `terraform apply` (needs a DO token, your SSH key fingerprint and admin IP, and a dedicated CI deploy key).
@@ -664,7 +669,7 @@ Full runbook, scaling, backups, rollback and teardown: **[deploy/README.md](depl
 ### 🚨 Five things that bite on a first deploy
 
 - 🔓 **Production runs in identity mode behind the same front door as the dev stack** (`deploy/prod/`: Caddy on three real names, `authlimit`, Casdoor, the MCP gateway; [deploy/README.md](deploy/README.md)). A domain is required, and `AUTH_MODE=headers` is never set there. `AUTH_MODE=headers` trusts `X-Tenant-Id`/`X-Principal-Id` as sent: use it only for local runs, or behind a gateway of your own that sets both and discards client copies.
-- 📦 **The images ship no installer.** Built in stages with uv, the prod `api`, worker and `ml-service` containers run read-only with all capabilities dropped, so a change that writes to the image filesystem at runtime fails ([ENGINEERING_PATTERNS.md](docs/ENGINEERING_PATTERNS.md) pattern 76).
+- 📦 **The images ship no installer.** Built in stages with uv, the prod `api`, `web`, worker and `ml-service` containers run read-only with all capabilities dropped, so a change that writes to the image filesystem at runtime fails ([ENGINEERING_PATTERNS.md](docs/ENGINEERING_PATTERNS.md) pattern 76).
 - 🗄️ **SQL migrations aren't applied to an existing volume.** `postgres-init/*.sql` runs only on a fresh volume and the deploy only syncs the files ([Database migrations](#database-migrations)).
 - 🕵️ **The production gateway does not store prompts or answers** (`store_prompts_in_spend_logs: false`; the development file turns it on so the admin UI's log page shows bodies). Its spend log keeps the metadata the caps read. Turning bodies on in production is a deliberate choice with a retention period ([deploy/README.md](deploy/README.md#everyday-operations)).
 - 📒 **Upgrading from a release whose spend caps read `usage_ledger`:** apply `postgres-init/19`, run `make usage-events-carry-over` (`ARGS=--dry-run` first), deploy, then run it once more. Skipping the first makes every cap read fail open; skipping the second makes a monthly cap forget the month so far ([runbook](deploy/README.md#upgrading-carry-the-ledgers-history-into-the-usage-events)).
@@ -785,7 +790,7 @@ model-alias or retrieval change; `make probe-tools` for any chat alias's model o
 
 | Workflow | When | What |
 |---|---|---|
-| [`ci.yml`](.github/workflows/ci.yml) | every PR and push to `main` | lint (code, workflows, shell), config checks, types, tests, integration, live, prompts, the three images, security → **`ci-ok`**, the one required check. On `main`: publish `:<sha>` → `:latest` → deploy |
+| [`ci.yml`](.github/workflows/ci.yml) | every PR and push to `main` | lint (code, workflows, shell), config checks, types, tests, integration, live, prompts, the four images, security → **`ci-ok`**, the one required check. On `main`: publish `:<sha>` → `:latest` → deploy |
 | [`security.yml`](.github/workflows/security.yml) | called by CI; weekly | Trivy, Semgrep, Checkov, govulncheck; weekly also the published images |
 | [`llm-evals.yml`](.github/workflows/llm-evals.yml) | nightly; `llm-evals` label | deepeval and the red team: they report, they never gate on a score |
 | [`deploy.yml`](.github/workflows/deploy.yml) | called by CI; by hand | release or roll back one commit ([deploy/README.md](deploy/README.md)); off until `DEPLOY_ENABLED` |
@@ -803,7 +808,7 @@ Documentation-only PRs skip the slow jobs. Why it is shaped this way: [ENGINEERI
 | Tool | Checks | Run | CI |
 |---|---|---|---|
 | [Semgrep](https://semgrep.dev/) | Source SAST over `app/`, `scripts/`, `packages/`, `services/`, `deploy/images/` | `make semgrep` | Gate; SARIF to the Security tab |
-| [Trivy](https://github.com/aquasecurity/trivy) | Dependency CVEs, secrets, Dockerfile misconfig, the three built images | `make trivy`, `make trivy-image` | Gate on **fixable CRITICAL** only; HIGH+ goes to the Security tab |
+| [Trivy](https://github.com/aquasecurity/trivy) | Dependency CVEs, secrets, Dockerfile misconfig, the four built images | `make trivy`, `make trivy-image` | Gate on **fixable CRITICAL** only; HIGH+ goes to the Security tab |
 | [govulncheck](https://go.dev/doc/security/vuln/) | Known vulnerabilities authlimit's code can reach, with the Go its image is built with | `make authlimit-vuln` | Gate |
 | [Checkov](https://www.checkov.io/) | Terraform misconfiguration | `make checkov` | Gate |
 | [SonarQube](https://www.sonarsource.com/products/sonarqube/) | Code quality gate on new code, with history | `make sonar-up` + `make sonar-scan` | Not in CI: a server that starts fresh each run has no history to judge against |
@@ -850,10 +855,11 @@ until configured**.
 |---|---|
 | **▶️ Run** | |
 | `make up` · `make down` | Start / stop the dev stack (keeps data) |
-| `make up-app` | `make up` plus the containerized `api`, `agent-worker` (every domain) and `ingest-worker` |
+| `make up-app` | `make up` plus the containerized `api`, `web` (http://localhost:8085), `agent-worker` (every domain) and `ingest-worker` |
 | `make up-all` · `make down-all` | Everything in containers behind the front door (infra, app, MCP gateway, observability; not the sandbox or SonarQube), web UI https://api.localhost:8443/; first time also `make front-door-ca` (then trust the CA); `make front-door-bootstrap` prints the demo users' initial passwords. `down-all` stops every container, any profile (keeps data) |
 | `make serve` | API + web UI on :8000 (the page needs `make web-build` once) |
 | `make web-build` · `make web-dev` · `make web-check` | The web client in [web/](web/README.md) (needs Node 22): build the page · dev server on :5173 against `make serve` · lint, types, tests and build |
+| `make web-image-check` | Build the web client's image and check what it serves, under the hardening compose applies (needs Docker, not Node) |
 | `make chat` · `make chat-hitl` | CLI agent · with approval prompts. Both sign you in at the front door (`python -m app.adapters.inbound.channels.cli.chat --sign-out` forgets it) and need that domain's worker: `AGENT_DOMAIN` picks it |
 | `make agent-worker` · `make agent-worker-all` · `make ingest-worker` | Queue consumers: one domain (`AGENT_WORKER_DOMAINS=support,ops` picks others) · every domain · ingestion |
 | `make telegram[-support\|-sales]` · `make telegram-person ACTION=add\|disable\|enable TELEGRAM_ID=<id>` | Telegram gateway for a domain (needs `TELEGRAM_BOT_TOKEN`, `TELEGRAM_PERSON_SECRET` or the `TELEGRAM_LINKING` settings, and that domain's worker) · add, disable or re-enable a Telegram person |
@@ -906,10 +912,10 @@ app/
   ports/outbound/  the Protocols the application needs (cost, models, llm, sessions, retrieval, web, sandbox, ...; a domain's repository port is in its module) and Slot, the typed seam
 scripts/       jobs/ (scheduled one-shots), checks/ (smokes, probes, eval), tools/ (operator CLIs); model_eval/ and ai_review/ (the PR-review tool) are packages
 services/      what runs as its own process, each with its own Dockerfile: authlimit/ (the edge auth and rate-limit service: the only Go in the repo) and ml-service/ (rerank, prompt guard, embeddings, label sets)
-Dockerfile     the app image (at the root: the build context)
+Dockerfile     the app image (at the root: the build context); the web client's is web/Dockerfile
 evals/ scripts/model_eval/   the model-evaluation harness and its frozen datasets, candidates, baselines
 specs/ .specify/          Spec Kit specs 001–023 and the constitution
-web/                      the built-in web page: a React + TypeScript client built with Vite; the API serves web/dist (web/README.md)
+web/                      the web UI: a React + TypeScript client built with Vite, with its own image (Dockerfile, server/); `make serve` serves web/dist (web/README.md)
 deploy/                   dev/ and prod/ (compose parts, Caddyfile, LiteLLM config, env example), shared/caddy/ (the front door's routing), images/ (sandbox builds), terraform/{prod,dev}/ (DigitalOcean droplets); deploy/README.md is the runbook
 observability/            Prometheus (+ alerts.yml), Alertmanager, Loki, Promtail, otel-collector, Tempo, Grafana
 postgres-init/            numbered SQL schema (fresh volumes only)

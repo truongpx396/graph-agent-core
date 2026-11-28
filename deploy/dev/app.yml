@@ -1,4 +1,4 @@
-# Dev stack, part of docker-compose.yml: what this repo builds. The ML service starts with `make up`; the API and the two workers are the `app` profile
+# Dev stack, part of docker-compose.yml: what this repo builds. The ML service starts with `make up`; the API, the web client and the two workers are the `app` profile
 # (`make up-app`) and the MCP gateway the `gateway` profile (`make front-door-up`). Everyday dev runs the app as host processes instead (`make serve`,
 # `make agent-worker`). deploy/prod/app.yml is the production counterpart: the same roles from images CI built, not built on the droplet.
 
@@ -145,9 +145,6 @@ services:
       # The API's copy of those keys; passed through so the smoke can shorten the timings (the defaults are Settings').
       AUTHLIMIT_KEYS_CACHE_SECONDS: ${AUTHLIMIT_KEYS_CACHE_SECONDS:-60}
       AUTHLIMIT_KEYS_STALE_GRACE_SECONDS: ${AUTHLIMIT_KEYS_STALE_GRACE_SECONDS:-600}
-      # What the built-in page signs in against: the names and defaults authlimit reads, so one override changes both.
-      WEB_AUTH_ISSUER: ${AUTHLIMIT_ISSUER:-https://auth.localhost:8443}
-      WEB_AUTH_AUDIENCE: ${AUTHLIMIT_AUDIENCE:-https://api.localhost:8443}
     extra_hosts:
       - "host.docker.internal:host-gateway"   # so OTEL_EXPORTER_OTLP_ENDPOINT resolves on native Linux Docker too
     depends_on:
@@ -155,6 +152,29 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  # --- The web client (profile `app`): its own image (web/Dockerfile), the built page behind Caddy (RUNTIME_PATTERNS.md 116). Alone it is a whole app on one origin, http://localhost:8085,
+  # passing the API paths to `api`; behind the front door (`make authlimit-up-app`, `up-all`) only `/` and `/static/*` reach it. Everyday UI work is `make web-dev` on the host.
+  web:
+    <<: *hardened
+    tmpfs:
+      - /tmp:size=16m
+    build:
+      context: ./web
+      target: runtime
+    profiles: ["app"]
+    restart: unless-stopped
+    ports:
+      # Loopback: in header mode whoever opens the page acts as any tenant they type.
+      - "127.0.0.1:${WEB_PORT:-8085}:8080"
+    environment:
+      # The API's auth mode, so the page signs in, or asks for a tenant and principal, as the API expects. The issuer and audience are the names authlimit reads.
+      AUTH_MODE: ${AUTH_MODE:-headers}
+      WEB_AUTH_ISSUER: ${AUTHLIMIT_ISSUER:-https://auth.localhost:8443}
+      WEB_AUTH_AUDIENCE: ${AUTHLIMIT_AUDIENCE:-https://api.localhost:8443}
+    depends_on:
+      api:
+        condition: service_started
 
   # One container serves every domain: each domain's requests stream, on that domain's graph (app/adapters/inbound/workers/agent_worker.py).
   agent-worker:

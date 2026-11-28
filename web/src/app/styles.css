@@ -81,15 +81,56 @@ body {
   75% { content: "..."; }
 }
 
-/* Rendered markdown: elements this app did not write class names onto. */
-.markdown { font-size: 0.92rem; line-height: 1.55; }
-.markdown > * + * { margin-top: 0.6em; }
+/* Rendered markdown: elements this app did not write class names onto. Tailwind's reset leaves headings, quotes and rules looking like
+   plain text, so each gets its shape back here. */
+.markdown { font-size: 0.92rem; line-height: 1.6; }
+.markdown > * + * { margin-top: 0.75em; }
+.markdown :is(h1, h2, h3, h4, h5, h6) { font-weight: 650; line-height: 1.3; }
+.markdown h1 { font-size: 1.35em; }
+.markdown h2 { font-size: 1.2em; }
+.markdown h3 { font-size: 1.08em; }
+.markdown > * + :is(h1, h2, h3) { margin-top: 1.25em; }
 .markdown ul { list-style: disc; padding-left: 1.3em; }
-.markdown ol { list-style: decimal; padding-left: 1.3em; }
-.markdown h1, .markdown h2, .markdown h3 { font-weight: 650; }
+.markdown ul ul { list-style: circle; }
+.markdown ol { list-style: decimal; padding-left: 1.5em; }
+.markdown li + li, .markdown li > :is(ul, ol) { margin-top: 0.25em; }
+.markdown li > * + p { margin-top: 0.5em; }
+.markdown ul.contains-task-list { list-style: none; padding-left: 0.2em; }
+.markdown blockquote { border-left: 3px solid var(--border-strong); padding: 0.1em 0 0.1em 0.9em; color: var(--text-secondary); }
+.markdown blockquote > * + * { margin-top: 0.5em; }
+.markdown hr { border-color: var(--border-strong); margin-block: 1.25em; }
 .markdown a { color: var(--accent); text-decoration: underline; }
 .markdown code { font-family: var(--font-mono); font-size: 0.88em; background: var(--surface); padding: 0.15em 0.35em; border-radius: 4px; }
-.markdown pre { background: var(--surface); padding: 0.7em 0.8em; border-radius: 8px; overflow-x: auto; }
-.markdown pre code { background: none; padding: 0; }
-.markdown table { border-collapse: collapse; display: block; overflow-x: auto; }
-.markdown th, .markdown td { border: 1px solid var(--border); padding: 0.3em 0.6em; }
+.markdown .code-block { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.markdown .code-block-header { display: flex; justify-content: space-between; gap: 1em; padding: 0.3em 0.9em; background: var(--surface-hover); color: var(--text-secondary); font-size: 0.75rem; }
+.markdown pre { background: var(--surface); padding: 0.8em 0.9em; overflow-x: auto; line-height: 1.5; }
+.markdown pre code { background: none; padding: 0; font-size: 0.86em; }
+/* A wide table scrolls; it does not break its words apart, which the bubble's `wrap-anywhere` would otherwise have its cells do. */
+.markdown table { border-collapse: collapse; display: block; width: max-content; max-width: 100%; overflow-x: auto; overflow-wrap: normal; font-size: 0.95em; }
+.markdown th, .markdown td { border: 1px solid var(--border); padding: 0.4em 0.7em; vertical-align: top; }
+.markdown th { background: var(--surface); font-weight: 650; }
+
+/* Streaming. Each element animates once, when it is created, so only what is new moves (features/chat/ui/fadeInWords.ts). */
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+.streamed :is(.fade-in, li, tr, hr, blockquote, .code-block) { animation: fade-in 0.45s ease-out; }
+/* A pulsing dot where the next word will appear. */
+.draft-text > :is(p, h1, h2, h3, h4):last-child::after,
+.draft-text > :is(ul, ol):last-child > li:last-child::after,
+.draft-text > blockquote:last-child > p:last-child::after {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 0.5em;
+  margin-left: 0.35em;
+  border-radius: 9999px;
+  background: var(--accent);
+  animation: pulse-dot 1s ease-in-out infinite;
+}
+@keyframes pulse-dot {
+  50% { opacity: 0.25; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .streamed :is(.fade-in, li, tr, hr, blockquote, .code-block), .draft-text > *::after, .draft-text li::after, .draft-text blockquote p::after { animation: none !important; }
+}

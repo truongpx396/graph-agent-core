@@ -163,15 +163,28 @@ services:
       # authlimit's, by its in-network name; the API answers 503 until they load.
       AUTH_MODE: identity
       AUTHLIMIT_KEYS_URL: http://authlimit:8080/internal/jwks.json
-      # What the built-in page signs in against: the issuer, and this API's public address (the audience of the token it asks for). The same two
-      # values authlimit is started with, derived from the same names below, so they cannot disagree.
-      WEB_AUTH_ISSUER: https://${AUTH_DOMAIN:?set AUTH_DOMAIN in .env}
-      WEB_AUTH_AUDIENCE: https://${API_DOMAIN:?set API_DOMAIN in .env}
     depends_on:
       pgbouncer:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  # The web client (web/Dockerfile, RUNTIME_PATTERNS.md 116): the built page and its bundle on Caddy, its own image. No `ports`: the front door sends it `/` and
+  # `/static/*` and nothing else.
+  web:
+    <<: *hardened
+    tmpfs:
+      - /tmp:size=16m
+    image: ${WEB_IMAGE:?set WEB_IMAGE in .env}:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    cpus: "0.1"
+    mem_limit: 64m
+    environment:
+      # What the page signs in against: the issuer, and the API's public address (the audience of the token it asks for). The same two values authlimit
+      # is started with, derived from the same names, so they cannot disagree.
+      AUTH_MODE: identity
+      WEB_AUTH_ISSUER: https://${AUTH_DOMAIN:?set AUTH_DOMAIN in .env}
+      WEB_AUTH_AUDIENCE: https://${API_DOMAIN:?set API_DOMAIN in .env}
 
   agent-worker:
     <<: *hardened

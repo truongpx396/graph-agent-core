@@ -139,7 +139,7 @@ sudo mkdir -p /opt/graph-agent-core   # cloud-init already does this; harmless i
 cd /opt/graph-agent-core
 # paste this repo's deploy/prod/prod.env.example content into .env and fill in real
 # values (POSTGRES_PASSWORD, LITELLM_MASTER_KEY, LLM_API_KEY, MINIO_*,
-# CORS_ALLOWED_ORIGINS, APP_IMAGE/ML_IMAGE/AUTHLIMIT_IMAGE, API_DOMAIN/AUTH_DOMAIN/
+# CORS_ALLOWED_ORIGINS, APP_IMAGE/ML_IMAGE/AUTHLIMIT_IMAGE/WEB_IMAGE, API_DOMAIN/AUTH_DOMAIN/
 # MCP_DOMAIN, CASDOOR_DB_PASSWORD/CASDOOR_ADMIN_PASSWORD, OBS_COLLECTOR_ENDPOINT/
 # LOKI_PUSH_HOST from `terraform output observability_private_ipv4`, ...)
 # — see that file's own comments.
@@ -166,10 +166,13 @@ use, and a name that does not resolve yet is retried with backoff and counts aga
 [steps 8 and 9](#8-create-authlimits-signing-keys-once)**: until the signing keys exist `authlimit` restarts in a loop and every route that needs
 the front door answers 502 (it fails closed); `/health` and the web page stay up, so the deploy's own readiness check passes.
 
+**A droplet whose `.env` predates the web client's own image** needs one line added before the next release, or the release stops at its first
+step and changes no container: `WEB_IMAGE=ghcr.io/<owner>/graph-agent-core-web` (RUNTIME_PATTERNS.md 116).
+
 Merge to `main`. In that commit's `CI` run:
 
-1. `image` builds each of the three images, checks it, scans it and pushes it to GHCR as `:<sha>`.
-2. `promote`, once every job has passed and the commit is still main's newest, tags those three `:latest`.
+1. `image` builds each of the four images (app, ML service, authlimit, web client), checks it, scans it and pushes it to GHCR as `:<sha>`.
+2. `promote`, once every job has passed and the commit is still main's newest, tags those four `:latest`.
 3. `deploy` calls [`deploy.yml`](../.github/workflows/deploy.yml), only when `DEPLOY_ENABLED` is `true`. Its `app` job syncs the
    compose and config files of that commit and runs [`prod/release.sh <sha>`](prod/release.sh) on the app droplet: pull, check the
    billing schema (only when `CREDITS_PER_USD` is set in `.env`), `up -d`, record the tag in `.image-tag`, wait for `/health/ready`

@@ -1,0 +1,6 @@
+{{- /* What the page is told about sign-in: app/adapters/inbound/api/web_auth.py::page_config, for the container that serves the page. testdata/agent-auth.json holds the two to one answer. */ -}}
+{{- if eq (env "AUTH_MODE" | default "identity") "identity" -}}
+{{- dict "mode" "identity" "issuer" (env "WEB_AUTH_ISSUER" | default "https://auth.localhost:8443" | trim | trimSuffix "/") "audience" (env "WEB_AUTH_AUDIENCE" | default "https://api.localhost:8443" | trim | trimSuffix "/") "scope" (env "WEB_AUTH_SCOPE" | default "api:chat" | trim) "client_id_prefix" "api-" | toJson -}}
+{{- else -}}
+{{- dict "mode" "headers" | toJson -}}
+{{- end -}}

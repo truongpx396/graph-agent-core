@@ -27,3 +27,33 @@ describe("a source under an answer", () => {
     expect(item.textContent).toContain("Qdrant: Payload");
   });
 });
+
+const message = (over: Parameters<typeof assistantEntry>[1]) => (
+  <AssistantMessage entry={assistantEntry("a1", { status: null, ...over })} onAsk={nothing} onDecide={nothing} />
+);
+
+describe("an answer as it streams", () => {
+  it("is rendered as markdown while it is still a draft", () => {
+    const { container } = render(message({ draft: "# Title\n\n- one" }));
+    expect(container.querySelector(".answer-text.draft-text h1")?.textContent).toBe("Title");
+    expect(container.querySelector(".draft-text li")?.textContent).toBe("one");
+  });
+
+  it("stays the same elements when the draft is committed, so nothing flashes or fades again", () => {
+    const view = render(message({ draft: "It is **42**." }));
+    const strong = view.container.querySelector("strong");
+    view.rerender(message({ answer: "It is **42**." }));
+    expect(view.container.querySelector("strong")).toBe(strong);
+    expect(view.container.querySelector(".draft-text")).toBeNull();
+  });
+
+  it("keeps what was committed before a pause when more streams after it", () => {
+    const { container } = render(message({ answer: "Before.", draft: "After" }));
+    expect([...container.querySelectorAll(".answer-text p")].map((node) => node.textContent)).toEqual(["Before.", "After"]);
+  });
+
+  it("does not animate a message replayed from history", () => {
+    const { container } = render(message({ answer: "An old answer." }));
+    expect(container.querySelector(".streamed, .fade-in")).toBeNull();
+  });
+});

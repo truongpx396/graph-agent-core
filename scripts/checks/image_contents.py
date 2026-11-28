@@ -8,7 +8,6 @@ import asyncio
 import importlib
 import sys
 
-from app.adapters.inbound.api import web_auth
 from app.adapters.outbound.mcp import sandbox_tools
 from app.agent.tools import skill_catalog, subagent_catalog
 from app.bootstrap import wire
@@ -16,11 +15,6 @@ from app.bootstrap import wire
 
 def problems() -> list[str]:
     found = []
-    page = web_auth.WEB_DIST / "index.html"
-    if not page.is_file() or web_auth.PLACEHOLDER not in page.read_text(encoding="utf-8"):
-        found.append(f"the built web page is missing or has no sign-in placeholder ({page}): GET / would be a 503")
-    if not list((web_auth.WEB_DIST / "assets").glob("*.js")):
-        found.append("the web client's bundle is missing from the image")
     if not skill_catalog.load_skills():
         found.append("the skill catalog is empty (the skills/ folders under app/domains are missing from the image)")
     if not subagent_catalog.load_subagents():

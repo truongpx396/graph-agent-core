@@ -4,6 +4,7 @@
 #
 # What an entry file defines (snippets, so this file can use them wherever the entry file puts them):
 #   api_proxy       the reverse_proxy to the service behind the API's check (the echo stub or the API itself in development, the API's replicas in production)
+#   web_proxy       the reverse_proxy to the web client's server (the echo stub or `web` in development, `web` in production)
 #   telegram_proxy  the reverse_proxy to the Telegram bot's own listener
 # and the three sites, each `import`ing one of: api_site, auth_site, mcp_site (below), with its own `tls` line.
 
@@ -146,15 +147,22 @@
 		max_size 32MB
 	}
 
-	# Not checked: the page and its assets, health, the discovery documents.
+	# Not checked: the page and its assets, health, the discovery documents. The page and its bundle are the web client's own server's, the rest the API's.
 	#
 	# Only PLAIN URLs are public here. A request Caddy declares public goes straight to the upstream and authlimit never sees it, so
 	# authlimit's stricter reading of the path cannot rescue a request this matcher lets through: found by the smoke check, where
 	# `/static/a%5c..%5cchat/resume` matched `/static/*` and reached the upstream with no token. A public route never legitimately
 	# contains a percent escape, a backslash, a dot segment or a double slash, so any URL that does is NOT public: it falls through to
 	# the checked handler below, where authlimit classifies it (an unclean path is always verified) and refuses it without a token.
+	@web_path {
+		path / /static/*
+		not expression `{http.request.uri}.matches(r"%|\\|\.\.|//")`
+	}
+	handle @web_path {
+		import web_proxy
+	}
 	@public_path {
-		path / /health /health/ready /static/* /.well-known/*
+		path /health /health/ready /.well-known/*
 		not expression `{http.request.uri}.matches(r"%|\\|\.\.|//")`
 	}
 	handle @public_path {

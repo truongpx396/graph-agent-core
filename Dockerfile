@@ -1,3 +1,5 @@
+# The browser client is NOT in this image: it has its own (web/Dockerfile, the `web` service, RUNTIME_PATTERNS.md 116).
+#
 # One image, three roles — the API service and both queue workers
 # (app/adapters/inbound/workers/agent_worker.py, app/adapters/inbound/workers/ingest_worker.py) are the same codebase and the
 # same dependency set, just a different entrypoint command. The compose files (deploy/dev/app.yml, deploy/prod/app.yml)
@@ -17,8 +19,7 @@
 # `make up-app`) alongside the existing infra-only `make up` default.
 #
 # Stages (ENGINEERING_PATTERNS.md pattern 76). `base` is the one place the Python image is pinned and `uv` the one place the
-# installer is; `builder` installs the lock into a virtualenv with uv and is thrown away; `web` builds the browser client with Node
-# and is thrown away too; `runtime`, the LAST stage and so what
+# installer is; `builder` installs the lock into a virtualenv with uv and is thrown away; `runtime`, the LAST stage and so what
 # `docker build .` produces, is what ships: the base, the OS package the app needs, that virtualenv copied in, and the app.
 # Nothing that installs software is in the shipped image: not uv, not pip. Needs BuildKit (the default builder since Docker 23):
 # `RUN --mount` is BuildKit's. services/ml-service/Dockerfile, the other image production runs, is built the same way and pinned
@@ -75,17 +76,6 @@ COPY packages/billing/ /tmp/billing/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --no-deps /tmp/billing
 
-# ---- web: the browser client (web/, specs/023), built to static files. Node stays here, never in the shipped image ------------
-# The output is the same for every target, so it is built on the builder's own platform (`$BUILDPLATFORM`): no emulation.
-# The multi-architecture index of node:22.23.5-slim, a security release of 2026-11-11 (.nvmrc and CI use Node 22 too).
-FROM --platform=$BUILDPLATFORM node:22.23.5-slim@sha256:be979e5523c76fa4d5ca4ebd3099078f220aa47ec39c48ad5b5df9314debd6eb AS web
-WORKDIR /web
-# The lock first, so a source-only change does not reinstall.
-COPY web/package.json web/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
-COPY web/ ./
-RUN npm run build
-
 # ---- runtime: what ships -----------------------------------------------------------------------------------------------------
 FROM base AS runtime
 
@@ -131,9 +121,6 @@ ENV PATH=/opt/venv/bin:$PATH
 ENV HOME=/home/appuser
 
 COPY app/ ./app/
-
-# The built page and its bundle, where app/adapters/inbound/api/web_auth.py::WEB_DIST looks for them.
-COPY --from=web /web/dist ./web/dist
 
 # scripts/ is the one thing the app opens at runtime from outside app/: `python -m scripts.tools.index_skills` / `seed` and the cron jobs
 # an operator runs inside the container. The whole package ships, not a hand-picked list that would drift. A missing piece degrades

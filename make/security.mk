@@ -6,7 +6,7 @@ SEMGREP_FLAGS ?= --error
 semgrep:  ## SAST over the Python, Go and Dockerfile source (CI's gate; SEMGREP_FLAGS="--sarif --output x.sarif" reports instead)
 	docker run --rm -v $(CURDIR):/src -w /src semgrep/semgrep:1.177.0 semgrep scan --metrics=off \
 		--config p/security-audit --config p/secrets --config p/python --config p/golang --config p/dockerfile \
-		$(SEMGREP_FLAGS) app/ scripts/ packages/ services/ deploy/images/ Dockerfile
+		$(SEMGREP_FLAGS) app/ scripts/ packages/ services/ deploy/images/ Dockerfile web/Dockerfile
 
 # The gate: fixable CRITICAL vulnerabilities, secrets and misconfigurations. Scans requirements-lock.txt, not requirements.txt: version ranges
 # resolve to no installed version, so that finds nothing. deploy/terraform is Checkov's: Trivy flags the necessary public 80/443 ingress there

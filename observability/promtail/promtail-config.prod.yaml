@@ -24,7 +24,7 @@ scrape_configs:
         refresh_interval: 5s
     relabel_configs:
       - source_labels: [__meta_docker_container_label_com_docker_compose_service]
-        regex: "^(api|agent-worker|ingest-worker|ml-service|mcp-gateway|telegram-bot|caddy|authlimit|casdoor|litellm|postgres|redis|qdrant)$"
+        regex: "^(api|web|agent-worker|ingest-worker|ml-service|mcp-gateway|telegram-bot|caddy|authlimit|casdoor|litellm|postgres|redis|qdrant)$"
         action: keep
       - source_labels: [__meta_docker_container_name]
         regex: "/(.*)"

@@ -328,6 +328,7 @@ jobs:
           - { name: app, context: ., repository: graph-agent-core, category: trivy-image }
           - { name: ml-service, context: services/ml-service, repository: graph-agent-core-ml-service, category: trivy-image-ml-service }
           - { name: authlimit, context: services/authlimit, repository: graph-agent-core-authlimit, category: trivy-image-authlimit }
+          - { name: web, context: web, repository: graph-agent-core-web, category: trivy-image-web }
     env:
       IMAGE: ${{ matrix.name }}:ci
     steps:
@@ -373,6 +374,11 @@ jobs:
           # It must never echo a VALUE: a Redis URL can carry a password.
           out=$(docker run --rm -e AUTHLIMIT_REDIS_URL='http://:hunter2@redis:6379' "$IMAGE" 2>&1 || true)
           if echo "$out" | grep -q hunter2; then echo "::error::the service printed a configuration value"; exit 1; fi
+
+      # A build proves neither: the sign-in settings are written when the page is requested, and the server must start with every capability dropped.
+      - name: The web image serves the page, configured from its environment, under the hardening compose applies
+        if: matrix.name == 'web'
+        run: python3 -m scripts.checks.web_image "$IMAGE"
 
       # Gate on fixable CRITICAL only (dated exceptions in .trivyignore.yaml): the CVE database moves on its own, and a gate nothing can
       # satisfy teaches people to ignore it (pattern 72). HIGH and unfixed ones go to the Security tab, below.
@@ -502,13 +508,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Tag the three images `latest`
+      - name: Tag the four images `latest`
         if: steps.head.outputs.current == 'true'
         env:
           OWNER: ${{ github.repository_owner }}
           SHA: ${{ github.sha }}
         run: |
-          for image in graph-agent-core graph-agent-core-ml-service graph-agent-core-authlimit; do
+          for image in graph-agent-core graph-agent-core-ml-service graph-agent-core-authlimit graph-agent-core-web; do
             docker buildx imagetools create -t "ghcr.io/$OWNER/$image:latest" "ghcr.io/$OWNER/$image:$SHA"
           done
 

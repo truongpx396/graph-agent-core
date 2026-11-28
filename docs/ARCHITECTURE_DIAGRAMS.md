@@ -65,6 +65,7 @@ flowchart LR
     authlimit -.->|"signing keys"| casdoor
     caddy -->|"signed identity"| api
     caddy -->|"bearer token"| mcpgw
+    caddy -->|"/ and /static/*, the page"| web["web (Caddy, its own image)<br/>the web client's files"]
     api <-->|"jobs in, events out"| queue
     queue <--> aw
     queue --> iw
