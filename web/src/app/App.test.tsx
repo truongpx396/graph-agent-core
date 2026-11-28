@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAuth } from "@/features/auth";
 import { useChat } from "@/features/chat";
-import { deferred, fakeApi, json, sse } from "@/test/fakeApi";
+import { deferred, fakeApi, json, openStream, sse } from "@/test/fakeApi";
 import { App } from "./App";
 import { createQueryClient } from "./queryClient";
 import { wire } from "./wiring";
@@ -62,7 +62,7 @@ describe("the page", () => {
     await screen.findByRole("button", { name: "Approve" });
     expect(element(".approval-question").textContent).toBe('⏸ Approve this action? remember({"content":"coffee"})');
     expect(element("#send").disabled).toBe(true);
-    expect(element("#sessionSelect").disabled).toBe(false);
+    expect(element("#newChat").disabled).toBe(false);
     await user.click(screen.getByRole("button", { name: "Reject" }));
     expect(await screen.findByText("Noted.")).toBeTruthy();
     expect(api.sent("POST /chat/resume")[0]?.body).toMatchObject({ approved: false });
@@ -70,13 +70,12 @@ describe("the page", () => {
   });
 
   it("opens an older conversation, pages back through it and restores its pause", async () => {
-    const { api, user, element, container } = start({
+    const { api, user, container } = start({
       "GET /chat/sessions/t-old/messages": (call) =>
         json(call.url.includes("before=50") ? [message(0, "user", "the first question")] : [message(50, "assistant", "a later answer")]),
       "GET /chat/sessions/t-old/pending_approval": () => json({ tool_calls: [{ name: "create_ticket", args: {} }], resumable: true }),
     });
-    await screen.findByRole("option", { name: "An older chat" });
-    await user.selectOptions(element("#sessionSelect"), "t-old");
+    await user.click(await screen.findByRole("button", { name: "An older chat" }));
     expect(await screen.findByText("a later answer")).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Approve" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Load earlier messages" }));
@@ -87,14 +86,42 @@ describe("the page", () => {
     expect(api.sent("GET /chat/sessions/t-old/messages").map((call) => call.url.split("?")[1])).toEqual(["limit=50", "limit=50&before=50"]);
   });
 
+  it("marks the open conversation in the list, and starts a new one from it", async () => {
+    const { user, element, container } = start({
+      "GET /chat/sessions/t-old/messages": () => json([message(0, "user", "an old question")]),
+      "GET /chat/sessions/t-old/pending_approval": () => json(null),
+    });
+    const older = await screen.findByRole("button", { name: "An older chat" });
+    const fresh = () => container.querySelector('#sessionList [aria-current="page"]')?.textContent;
+    expect(fresh()).toBe("New conversation");
+    await user.click(older);
+    expect(await screen.findByText("an old question")).toBeTruthy();
+    expect(older.getAttribute("aria-current")).toBe("page");
+    expect(fresh()).toBe("An older chat");
+    await user.click(element("#newChat"));
+    expect(older.getAttribute("aria-current")).toBeNull();
+    expect(container.querySelectorAll("#messages .msg")).toHaveLength(0);
+  });
+
+  it("does not switch conversations while a turn is streaming", async () => {
+    const stream = openStream();
+    const { user, element } = start({ "POST /chat/stream/queued": () => stream.response });
+    const older = (await screen.findByRole("button", { name: "An older chat" })) as HTMLButtonElement;
+    await user.type(element("#input"), "hi{Enter}");
+    await waitFor(() => expect(older.disabled).toBe(true));
+    expect(element("#newChat").disabled).toBe(true);
+    stream.send({ type: "done" });
+    stream.close();
+    await waitFor(() => expect(older.disabled).toBe(false));
+  });
+
   it("holds a restored pause back until its history is on screen", async () => {
     const page = deferred();
-    const { user, element, container } = start({
+    const { user, container } = start({
       "GET /chat/sessions/t-old/messages": () => page.response,
       "GET /chat/sessions/t-old/pending_approval": () => json({ tool_calls: [{ name: "create_ticket", args: {} }], resumable: true }),
     });
-    await screen.findByRole("option", { name: "An older chat" });
-    await user.selectOptions(element("#sessionSelect"), "t-old");
+    await user.click(await screen.findByRole("button", { name: "An older chat" }));
     await waitFor(() => expect(useChat.getState().turn?.phase).toBe("paused"));
     expect(container.querySelectorAll("#messages .msg")).toHaveLength(0);
     page.release(json([message(0, "user", "open a ticket")]));

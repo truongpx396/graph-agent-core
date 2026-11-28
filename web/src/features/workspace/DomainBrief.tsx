@@ -1,7 +1,22 @@
+import { useState } from "react";
 import { button, cx, label } from "@/shared/lib/classes";
 import { DOMAIN_INFO, SUGGESTED_QUESTIONS } from "./domains";
 import { useWorkspace } from "./store";
 import { tagsOf } from "./tags";
+
+/** Clamped, so "Try asking" stays in sight in the half of the sidebar the brief shares with the domain picker. */
+function DomainCard({ title, description }: { title: string; description: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div id="domainInfo" className="shrink-0 rounded-xl border border-l-4 border-line border-l-accent bg-elevated p-3.5 text-[0.82rem] leading-relaxed text-ink-2 shadow-card">
+      <strong className="mb-1 block text-sm text-ink">{title}:</strong>
+      <p className={cx(!open && "line-clamp-3")}>{description}</p>
+      <button type="button" className="mt-1 cursor-pointer text-xs font-semibold text-accent" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {open ? "Show less" : "Show more"}
+      </button>
+    </div>
+  );
+}
 
 export function DomainBrief({ onAsk }: { onAsk: (question: string) => void }) {
   const domain = useWorkspace((state) => state.domain);
@@ -9,12 +24,7 @@ export function DomainBrief({ onAsk }: { onAsk: (question: string) => void }) {
   const questions = SUGGESTED_QUESTIONS[domain] ?? [];
   return (
     <>
-      {info && (
-        <div id="domainInfo" className="rounded-xl border border-l-4 border-line border-l-accent bg-elevated p-3.5 text-[0.82rem] leading-relaxed text-ink-2 shadow-card">
-          <strong className="mb-1 block text-sm text-ink">{info.title}:</strong>
-          {info.description}
-        </div>
-      )}
+      {info && <DomainCard key={domain} title={info.title} description={info.description} />}
       {questions.length > 0 && (
         <div id="suggestedQuestionsSection">
           <h2 className={cx(label, "mb-2")}>Try asking</h2>

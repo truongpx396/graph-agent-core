@@ -1,2 +1,2 @@
 export { SESSIONS_KEY, useHistory } from "./queries";
-export { SessionSelect } from "./SessionSelect";
+export { SessionList } from "./SessionList";
