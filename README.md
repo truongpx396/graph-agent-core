@@ -222,7 +222,7 @@ The same code runs in both; only configuration and the compose files differ. Bot
 
 | | 💻 Dev: `deploy/dev/` | 🌍 Prod: `deploy/prod/` |
 |---|---|---|
-| **LLM** | Native Ollama on the host (`qwen2.5:7b`, `nomic-embed-text`) via `deploy/dev/litellm-config.yaml` | Any OpenAI-compatible endpoint via `deploy/prod/litellm-config.yaml`: `LLM_API_BASE`, `LLM_API_KEY`, `LLM_CHAT_MODEL`, `LLM_EMBED_MODEL` |
+| **LLM** | Gemini's free tier behind `chat` (`GOOGLE_API_KEY`), native Ollama on the host for embeddings and the chat fallback (`qwen2.5:7b`, `nomic-embed-text`), via `deploy/dev/litellm-config.yaml` | Any OpenAI-compatible endpoint via `deploy/prod/litellm-config.yaml`: `LLM_API_BASE`, `LLM_API_KEY`, `LLM_CHAT_MODEL`, `LLM_EMBED_MODEL` |
 | **Services** | Full stack: Langfuse, MinIO, open-webui, crawl4ai, opt-in app/sandbox/quality profiles; the exporters are the collectors file | `api`, `agent-worker`, `ingest-worker`, Postgres, Redis, Qdrant, LiteLLM, `ml-service`, behind Caddy (TLS) |
 | **Postgres access** | The containers reach `appdata` and `checkpointer` through PgBouncer (`:6432`, transaction mode, at most 18 server connections per database however many replicas run); LiteLLM and Langfuse connect directly; a host process (`make serve`) uses `:5432` unless pointed at `:6432` ([`.env.example`](.env.example)) | The same service, no published port; Postgres's `max_connections` is written down and a test checks the pooler fits inside it ([WORKER_CONCURRENCY.md](docs/WORKER_CONCURRENCY.md)) |
 | **Object storage** | MinIO | DigitalOcean Spaces (any S3-compatible store) |
@@ -249,7 +249,8 @@ cp .env.example .env
 pip install -r requirements.txt
 
 make up              # litellm, qdrant, postgres, redis, minio, ml-service, langfuse, crawl4ai, ...
-make pull-models     # qwen2.5:7b (chat) + qwen2.5:3b (the test tiers' default) + nomic-embed-text, into native Ollama
+make pull-models     # qwen2.5:7b (chat's local fallback) + qwen2.5:3b (the test tiers' default) + nomic-embed-text, into native Ollama
+# GOOGLE_API_KEY in .env: `chat` is a Gemini model on Google AI Studio's free tier (sample data only). Without it the local fallback answers.
 
 # Langfuse keys: open http://localhost:3000, create a project, paste the keys into .env, then
 docker compose up -d litellm
@@ -447,14 +448,14 @@ Three chat tiers, each a gateway alias (the app names aliases, never a provider'
 
 | Tier | Alias | Dev (`deploy/dev/litellm-config.yaml`) | Production | Used by |
 |---|---|---|---|---|
-| 🟢 easy | `chat` | qwen2.5:7b, local | `LLM_CHAT_MODEL` | every turn (`CHAT_MODEL=chat`) |
-| 🟡 medium | `chat-medium` | gemini-3.5-flash-lite (needs `GOOGLE_API_KEY`) | `LLM_MEDIUM_*`; unset = `chat` | the router's middle tier; a specialist's `AGENT.md` `model:` |
+| 🟢 easy | `chat` | gemini-3.5-flash-lite (needs `GOOGLE_API_KEY`); falls back to qwen2.5:7b, local (`chat-backup`) | `LLM_CHAT_MODEL` | every turn (`CHAT_MODEL=chat`) |
+| 🟡 medium | `chat-medium` | gemini-3-flash-preview (needs `GOOGLE_API_KEY`) | `LLM_MEDIUM_*`; unset = `chat` | the router's middle tier; a specialist's `AGENT.md` `model:` |
 | 🔴 strong | `chat-strong` | gemini-3.6-flash (needs `GOOGLE_API_KEY`) | `LLM_STRONG_*`; unset = `chat` | the router's top tier |
 
-- 💲 **Every alias states a price** in `model_info` ($0.10 / $0.20 per million input / output tokens for the local 7B; Gemini's paid list price for the two hosted tiers). They're shadow prices: without one LiteLLM reports a local model as unpriced or a flat $0, and no gateway budget can ever trip on $0. Change them if you like, but keep them above 0 ([pattern 74](docs/COST_GOVERNANCE.md)).
+- 💲 **Every alias states a price** in `model_info` (Gemini's paid list price for the three hosted aliases; the local fallback carries `chat`'s, so a fallback does not change what a call is priced at). They're shadow prices: without one LiteLLM reports a local model as unpriced or a flat $0, and no gateway budget can ever trip on $0. Change them if you like, but keep them above 0 ([pattern 74](docs/COST_GOVERNANCE.md)).
 - 🔧 **Strict tool schemas** (`TOOL_CALLS_STRICT`, **off**): leave off on Ollama, where the smallest model calls tools measurably worse with it; turn on only for a provider that enforces strict calling, with `make probe-tools` before and after ([docs/RETRIEVAL_AND_MODEL_PATTERNS.md](docs/RETRIEVAL_AND_MODEL_PATTERNS.md) pattern 74).
-- ♊ **Dev's two upper tiers are Gemini, on Google AI Studio's free tier** (`GOOGLE_API_KEY` in `.env`; nothing calls them while the router is off). Know three things before turning it on:
-  Google says **free-tier content is used to improve its products**, so send it only sample data; the quotas are small (measured 2026-11-27: `gemini-3.5-flash-lite` 15 requests a minute, `gemini-3.6-flash` 20 a **day**, and 503 "high demand" spells); and a quota 429 on a routed turn is tried three times and then **fails that turn** (only an unreachable model or a 5xx repeats on `chat`). `make probe-tools` speaks Ollama only: it does not test these two.
+- ♊ **Dev's chat models are Gemini, on Google AI Studio's free tier** (`GOOGLE_API_KEY` in `.env`). Know three things:
+  Google says **free-tier content is used to improve its products**, and every turn sends the conversation and what it retrieved, so use only sample data; the quotas are small (measured 2026-11-27: `gemini-3.5-flash-lite` 15 requests a minute, `gemini-3.6-flash` 20 a **day**, and 503 "high demand" spells); and when `chat` is refused the **local model answers instead**, which the app and its traces still call `chat` (the gateway's spend log shows it, model group `chat-backup`). A routed `chat-medium` or `chat-strong` turn that is refused is repeated on `chat`. `make probe-tools` and `make prompt-check` ask a hosted alias through the running gateway, one request of its quota per case.
 
 ### Routing a turn to a medium or strong model
 
@@ -967,7 +968,7 @@ anyone who sets the right headers.
 | `make chat` or Telegram answers "No response … is an agent-worker running for this domain?" | Nothing picked the turn up. Start a worker that serves that domain (`make agent-worker-all` serves every one); the channel's `AGENT_DOMAIN` must be among the worker's `AGENT_WORKER_DOMAINS` |
 | Telegram never answers and the webhook is set | Look at `channel_telegram_webhook_total`: `forbidden` means the secret Telegram sends is not `TELEGRAM_WEBHOOK_SECRET` (rotate it and re-run the bot, which registers it again); nothing at all means the proxy is not forwarding `/telegram/*` to the bot's listener or asks for a token there |
 | Telegram says "This approval expired or was already handled", or "You have an approval waiting above" | The buttons live `TELEGRAM_APPROVAL_TTL_SECONDS` and decide once. After they expire, write your message again: the old pause is cleared first. `/cancel` drops a waiting one |
-| Turns are slow | `qwen2.5:7b` runs at about 40 tokens/s on an M4 Pro (a cold load adds about 3 s). A smaller model is faster but silently drops tool calls (`make probe-tools` shows how many), so measure before swapping; a bigger one goes in `deploy/dev/litellm-config.yaml`. A cold model can exceed `REQUEST_TIMEOUT_SECONDS` (60 s, `app/agent/runtime/core.py`) on the first call: retry |
+| Turns are slow | In dev, `chat` is probably being answered by its local fallback (no `GOOGLE_API_KEY`, or Google refused: quota, "high demand"): the Admin UI's logs show model group `chat-backup`. `qwen2.5:7b` runs at about 40 tokens/s on an M4 Pro (a cold load adds about 3 s), and a cold model can exceed `REQUEST_TIMEOUT_SECONDS` (60 s) on the first call. A smaller local model is faster but silently drops tool calls (`make probe-tools ARGS="--alias chat-backup"` shows how many), so measure before swapping |
 | No Grafana data, or a Prometheus target is down | `make obs-up` and `make up` are independent; both must run. Check http://localhost:9090/targets; a target that predates a LiteLLM config change needs `docker compose up -d litellm` |
 | Readiness returns 503 | The body names the failing dependency, e.g. `ml-service` still downloading its models on first start; `postgres` or `checkpointer` means the pooler or Postgres behind it (`docker compose logs pgbouncer`) |
 | Turns fail with `prepared statement "_pg3_N" does not exist`, or clients wait for a database connection | A connection that prepares statements is going through PgBouncer: every pool must pass `prepare_threshold=None` (`tests/core/test_pool_settings.py` finds the one that does not). Waiting clients: alert `PgBouncerClientsWaiting`, look for an `idle in transaction` session before raising `DEFAULT_POOL_SIZE` ([ENGINEERING_PATTERNS.md](docs/ENGINEERING_PATTERNS.md) 95) |

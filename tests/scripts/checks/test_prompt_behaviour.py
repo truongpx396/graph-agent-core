@@ -90,8 +90,8 @@ def test_a_run_writes_its_results_and_compares_them(tmp_path, capsys):
             return None
 
     out = tmp_path / "now.json"
-    assert check.main(["--domain", "ops", "--out", str(out)], client=_Client()) == 1  # most cases want a tool call
+    assert check.main(["--alias", "chat-backup", "--domain", "ops", "--out", str(out)], client=_Client()) == 1  # most cases want a tool call
     assert set(json.loads(out.read_text(encoding="utf-8"))) == {f"ops/{case['id']}" for case in CASES["ops"]}
 
-    assert check.main(["--domain", "ops", "--compare", str(out)], client=_Client()) == 0  # the same again: nothing got worse
+    assert check.main(["--alias", "chat-backup", "--domain", "ops", "--compare", str(out)], client=_Client()) == 0  # the same again: nothing got worse
     assert "worse than now.json: none" in capsys.readouterr().out

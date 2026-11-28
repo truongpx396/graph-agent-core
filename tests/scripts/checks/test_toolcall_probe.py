@@ -126,17 +126,22 @@ class TestTheProbeSet:
 
 
 class TestAliasSettings:
-    def test_the_chat_alias_is_read_from_the_dev_config_with_the_options_the_gateway_forwards(self):
-        model, base, options = tp.alias_settings("chat")
+    def test_the_local_alias_is_read_from_the_dev_config_with_the_options_the_gateway_forwards(self):
+        model, base, options = tp.alias_settings(tp.LOCAL_ALIAS)
         assert model and ":" in model  # an Ollama tag such as qwen2.5:7b
         assert "host.docker.internal" not in base  # the config is written for Docker; the probe runs on the host
         assert set(options) <= set(tp.FORWARDED) and "num_ctx" in options
 
-    def test_an_alias_served_by_something_other_than_ollama_is_refused(self, tmp_path):
+    def test_an_alias_served_by_something_other_than_ollama_is_asked_through_the_gateway_by_name(self, tmp_path):
         config = tmp_path / "c.yaml"
         config.write_text("model_list:\n  - model_name: chat\n    litellm_params: {model: openai/gpt-4o}\n", encoding="utf-8")
-        with pytest.raises(SystemExit, match="not Ollama"):
-            tp.alias_settings("chat", config)
+
+        assert tp.alias_settings("chat", config) == ("chat", None, {})
+
+    def test_an_ollama_tag_beside_a_hosted_alias_runs_as_the_local_alias_does(self):
+        model, base, options = tp.target("chat", "qwen2.5:3b")
+
+        assert (model, base) == ("qwen2.5:3b", tp.alias_settings(tp.LOCAL_ALIAS)[1]) and "num_ctx" in options
 
     def test_an_unknown_alias_is_refused(self):
         with pytest.raises(SystemExit, match="expected exactly one"):
@@ -177,7 +182,7 @@ def _client(reply_for, open_ended=None) -> httpx.Client:
 
 class TestMain:
     def test_a_model_that_answers_every_prompt_passes(self, capsys):
-        assert tp.main([], _client(lambda p, body: _ok_reply(p))) == 0
+        assert tp.main(["--alias", "chat-backup"], _client(lambda p, body: _ok_reply(p))) == 0
         assert f"{sum(1 for p in tp.PROBES if p.expected)}/{sum(1 for p in tp.PROBES if p.expected)}" in capsys.readouterr().out
 
     def test_one_dropped_call_fails_the_check_and_names_the_prompt(self, capsys):
@@ -186,7 +191,7 @@ class TestMain:
                 return {"message": {"role": "assistant", "content": ""}, "eval_count": 23}
             return _ok_reply(p)
 
-        assert tp.main(["--no-loops"], _client(reply)) == 1
+        assert tp.main(["--alias", "chat-backup", "--no-loops"], _client(reply)) == 1
         out = capsys.readouterr().out
         assert "DROPPED" in out and REMEMBER.text in out
 
@@ -197,7 +202,7 @@ class TestMain:
             seen.append(body["options"])
             return _ok_reply(p)
 
-        tp.main(["--repeat-penalty", "1.3", "1.1", "--no-loops"], _client(reply))
+        tp.main(["--alias", "chat-backup", "--repeat-penalty", "1.3", "1.1", "--no-loops"], _client(reply))
         assert {o["repeat_penalty"] for o in seen} == {1.3, 1.1}
         assert all(o["num_ctx"] and o["temperature"] == 0 for o in seen)
 
@@ -219,7 +224,7 @@ class TestLoops:
         def loops(text, body):
             return {"message": {"role": "assistant", "content": "the same sentence again and again " * 80}, "done_reason": "length", "eval_count": 2048}
 
-        assert tp.main([], _client(lambda p, body: _ok_reply(p), loops)) == 1
+        assert tp.main(["--alias", "chat-backup"], _client(lambda p, body: _ok_reply(p), loops)) == 1
         out = capsys.readouterr().out
         assert "LOOP" in out and tp.OPEN_ENDED[0] in out
 
@@ -230,10 +235,10 @@ class TestLoops:
             asked.append(text)
             return {"message": {"role": "assistant", "content": "fine"}, "done_reason": "stop", "eval_count": 1}
 
-        tp.main([], _client(lambda p, body: _ok_reply(p), open_ended))
+        tp.main(["--alias", "chat-backup"], _client(lambda p, body: _ok_reply(p), open_ended))
         assert asked == list(tp.OPEN_ENDED)
         asked.clear()
-        tp.main(["--no-loops"], _client(lambda p, body: _ok_reply(p), open_ended))
+        tp.main(["--alias", "chat-backup", "--no-loops"], _client(lambda p, body: _ok_reply(p), open_ended))
         assert asked == []
 
 
@@ -247,9 +252,9 @@ class TestStrictTools:
             sent["strict"] = [t["function"].get("strict") for t in body["tools"]]
             return _ok_reply(p)
 
-        tp.main(["--strict", "--no-loops"], _client(reply))
+        tp.main(["--alias", "chat-backup", "--strict", "--no-loops"], _client(reply))
         assert all(sent["strict"])
-        tp.main(["--no-strict", "--no-loops"], _client(reply))
+        tp.main(["--alias", "chat-backup", "--no-strict", "--no-loops"], _client(reply))
         assert not any(sent["strict"])
 
     def test_leaving_a_nullable_argument_out_is_fine_and_leaving_a_plain_one_out_is_not(self):

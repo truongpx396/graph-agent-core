@@ -119,8 +119,8 @@ services:
       - ./deploy/dev/litellm-patches:/app/patches:ro
     environment:
       PYTHONPATH: /app/patches
-      # A Google AI Studio key: `chat-medium` and `chat-strong` in litellm-config.yaml call Gemini with it. Empty is fine while the router is off
-      # (nothing calls those aliases). Put it in .env, never here.
+      # A Google AI Studio key: `chat`, `chat-medium` and `chat-strong` in litellm-config.yaml call Gemini with it. Without it every `chat` call is
+      # answered by the local fallback model. Put it in .env, never here.
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       # Proxy-level Langfuse logging.
       LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse-web:3000}

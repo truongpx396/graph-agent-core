@@ -6,10 +6,11 @@ decides it is easy to get wrong without noticing. Langfuse trace `1e46b2c8` (202
 call (the model wrote `{"name": "remember", "arguments": {"content: "..."}}`, a missing quote, and Ollama's parser
 discards a call it cannot read without a word). Nothing in the graph can tell that from an empty reply. This script can.
 
-It sends one labelled prompt at a time to Ollama's native chat endpoint, exactly as the gateway's `ollama_chat`
-provider does: the app's real system prompt and tool schemas (taken from the Ecorp domain, not copied), temperature 0, and
-the options the chosen alias sets in `deploy/dev/litellm-config.yaml` (`num_ctx`, `num_predict`, `repeat_penalty`).
-Temperature 0 makes one run per prompt the whole distribution. Each reply is put in one class:
+It sends one labelled prompt at a time with the app's real system prompt and tool schemas (taken from the Ecorp domain,
+not copied) at temperature 0. An alias served by Ollama is asked on Ollama's native chat endpoint, exactly as the gateway's
+`ollama_chat` provider does, with the options the alias sets in `deploy/dev/litellm-config.yaml` (`num_ctx`, `num_predict`,
+`repeat_penalty`). Any other alias is asked through the running gateway (`gateway_model.py`).
+Temperature 0 makes one run per prompt close to the whole distribution. Each reply is put in one class:
 
     ok                     the right tool with arguments that satisfy its schema (or, for a no-tool prompt, plain text)
                            (and, where a prompt names them, the arguments the QUESTION asks for: a call can satisfy the schema and still
@@ -19,7 +20,7 @@ Temperature 0 makes one run per prompt the whole distribution. Each reply is put
     wrong_tool / bad_args (a schema violation, or the wrong values for the question) / unneeded_call / empty
 
     python -m scripts.checks.toolcall_probe                          # the `chat` alias exactly as configured
-    python -m scripts.checks.toolcall_probe --alias chat-strong
+    python -m scripts.checks.toolcall_probe --alias chat-backup      # the local fallback model
     python -m scripts.checks.toolcall_probe --model qwen2.5:7b --repeat-penalty 1.3 1.1 1.0   # what a setting does
 
 It also asks four open-ended prompts with no tools, because the other half of the trade-off is a repetition loop: a high
@@ -28,7 +29,8 @@ model brings that back (at 1.1 the 3b ran to the 2048-token cap with 44% of its 
 index"). A reply that hits the cap with at least a quarter of its 6-word runs repeated is a LOOP. `--no-loops` skips this half,
 which is most of the run time (about two minutes per penalty on an M4 Pro with the 7b; the tool half takes seconds).
 
-Needs a native Ollama with the model pulled. It exits 1 when any reply was DROPPED, any open-ended reply LOOPED, or fewer than
+Needs a native Ollama with the model pulled, or for a hosted alias `make up` and its provider's key (each prompt is one request of that
+quota). It exits 1 when any reply was DROPPED, any open-ended reply LOOPED, or fewer than
 `--min-ok` of the tool-needing prompts were OK. Twenty-two prompts separate a broken setup from a working one; they cannot rank two good
 models, and a pass says nothing about answer quality (`make eval`, `make promptfoo` and the deepeval tier do).
 """
@@ -49,10 +51,12 @@ from app.core.config import settings as app_settings
 from app.core.prompt_rules import compose_system_prompt
 from app.core.tool_schema import strict_tool_schema
 from app.domains.registry import resolve_domain
+from scripts.checks import gateway_model
 
 CONFIG = Path(__file__).resolve().parents[2] / "deploy" / "dev" / "litellm-config.yaml"
 # The options the gateway forwards to Ollama; anything else in `litellm_params` is routing, not sampling.
 FORWARDED = ("num_ctx", "num_predict", "repeat_penalty")
+LOCAL_ALIAS = "chat-backup"  # the dev config's Ollama chat model: whose options `--model` runs with when the alias asked about is hosted
 
 OK = "ok"
 DROPPED = "DROPPED"
@@ -125,18 +129,27 @@ PROBES: tuple[Probe, ...] = (
 )
 
 
-def alias_settings(alias: str, config: Path = CONFIG) -> tuple[str, str, dict[str, float]]:
-    """`(ollama model tag, base url, forwarded options)` for a gateway alias in the dev config."""
+def alias_settings(alias: str, config: Path = CONFIG) -> tuple[str, str | None, dict[str, float]]:
+    """`(model, Ollama base url, forwarded options)` for a gateway alias in the dev config. An Ollama alias is asked directly; any other
+    is asked through the running gateway by its own name, which is `(alias, None, {})`."""
     entries = [m for m in yaml.safe_load(config.read_text(encoding="utf-8"))["model_list"] if m["model_name"] == alias]
     if len(entries) != 1:
         raise SystemExit(f"{config.name} defines {len(entries)} entries named {alias!r}, expected exactly one")
     params = entries[0]["litellm_params"]
     provider, _, model = params["model"].partition("/")
     if provider != "ollama_chat":
-        raise SystemExit(f"{alias!r} is served by {provider!r}, not Ollama: nothing to probe here")
+        return alias, None, {}
     # The config is written for the gateway inside Docker; this script runs on the host.
     base = params.get("api_base", "http://localhost:11434").replace("host.docker.internal", "localhost")
     return model, base, {k: params[k] for k in FORWARDED if k in params}
+
+
+def target(alias: str, model: str | None = None, config: Path = CONFIG) -> tuple[str, str | None, dict[str, float]]:
+    """What `--alias` and `--model` name together. `--model` is an Ollama tag, so beside a hosted alias it runs as the local one does."""
+    name, base, options = alias_settings(alias, config)
+    if model and base is None:
+        _, base, options = alias_settings(LOCAL_ALIAS, config)
+    return model or name, base, options
 
 
 def _nullable(spec: dict[str, Any]) -> bool:
@@ -205,7 +218,9 @@ def app_tools_and_prompt(strict: bool | None = None) -> tuple[list[dict[str, Any
     return [strict_tool_schema(t) if use_strict else convert_to_openai_tool(t) for t in tools], compose_system_prompt(manifest.system_prompt)
 
 
-def chat(client: httpx.Client, base: str, model: str, options: dict[str, Any], messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def chat(client: httpx.Client, base: str | None, model: str, options: dict[str, Any], messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    if base is None:
+        return gateway_model.chat(client, model, messages, tools)
     payload: dict[str, Any] = {"model": model, "stream": False, "messages": messages, "options": {**options, "temperature": 0}}
     if tools:
         payload["tools"] = tools
@@ -214,12 +229,12 @@ def chat(client: httpx.Client, base: str, model: str, options: dict[str, Any], m
     return cast("dict[str, Any]", reply.json())
 
 
-def ask(client: httpx.Client, base: str, model: str, options: dict[str, Any], system: str, tools: list[dict[str, Any]], text: str) -> tuple[dict[str, Any], int]:
+def ask(client: httpx.Client, base: str | None, model: str, options: dict[str, Any], system: str, tools: list[dict[str, Any]], text: str) -> tuple[dict[str, Any], int]:
     body = chat(client, base, model, options, [{"role": "system", "content": system}, {"role": "user", "content": text}], tools)
     return body["message"], body.get("eval_count", 0)
 
 
-def probe(client: httpx.Client, base: str, model: str, options: dict[str, Any], strict: bool | None = None) -> list[tuple[Probe, str]]:
+def probe(client: httpx.Client, base: str | None, model: str, options: dict[str, Any], strict: bool | None = None) -> list[tuple[Probe, str]]:
     tools, system = app_tools_and_prompt(strict)
     # A reply is judged against the schema the app ENFORCES, not the one it sent: `valid_args` lets a nullable argument be left
     # out, which is what the tools accept (`ToolArgs`) and what a model that ignores "required" does.
@@ -231,7 +246,7 @@ def probe(client: httpx.Client, base: str, model: str, options: dict[str, Any], 
     return results
 
 
-def probe_loops(client: httpx.Client, base: str, model: str, options: dict[str, Any]) -> list[tuple[str, bool, float]]:
+def probe_loops(client: httpx.Client, base: str | None, model: str, options: dict[str, Any]) -> list[tuple[str, bool, float]]:
     """`(prompt, looped, repeated share)` for each open-ended prompt, asked with no tools and no system prompt."""
     out = []
     for text in OPEN_ENDED:
@@ -250,7 +265,7 @@ def summarize(results: list[tuple[Probe, str]]) -> tuple[int, int, Counter[str]]
 def main(argv: list[str] | None = None, client: httpx.Client | None = None) -> int:
     wire()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--alias", default="chat", help="gateway alias to read the model and options from (default: chat)")
+    parser.add_argument("--alias", default="chat", help="gateway alias to check (default: chat)")
     parser.add_argument("--model", help="an Ollama model tag to use instead of the alias's")
     parser.add_argument("--repeat-penalty", type=float, nargs="+", help="override repeat_penalty; several values run one pass each")
     parser.add_argument("--no-loops", action="store_true", help="skip the open-ended repetition check (most of the run time)")
@@ -259,8 +274,9 @@ def main(argv: list[str] | None = None, client: httpx.Client | None = None) -> i
     parser.add_argument("--min-ok", type=float, default=0.9, help="fail below this share of tool-needing prompts answered OK (default 0.9)")
     args = parser.parse_args(argv)
 
-    model, base, options = alias_settings(args.alias)
-    model = args.model or model
+    model, base, options = target(args.alias, args.model)
+    if base is None and args.repeat_penalty:
+        parser.error(f"--repeat-penalty is Ollama's option and {args.alias!r} is hosted: add --alias {LOCAL_ALIAS}")
     failed = False
     with client or httpx.Client() as client:
         for penalty in args.repeat_penalty or [options.get("repeat_penalty")]:

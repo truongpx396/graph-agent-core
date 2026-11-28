@@ -41,7 +41,7 @@ router-label:  ## Score the route prompts' answers from the local and strong mod
 # ARGS=--no-loops runs the quick half. Run after ANY change to a chat alias's model or repeat_penalty (GRAPH_PATTERNS.md 73).
 # Run it before and after any change to a prompt, a tool description or app/core/prompt_rules.py: ARGS="--out before.json", then
 # ARGS="--compare before.json". Native Ollama only, nothing else started.
-prompt-check:  ## Does each domain's prompt still make the chat model do the right thing first? (~5 min)
+prompt-check:  ## Does each domain's prompt still make the chat model do the right thing first? (~5 min; a hosted chat alias needs `make up` and spends its quota)
 	python -m scripts.checks.prompt_behaviour $(ARGS)
 
 probe-tools:  ## Does the chat model emit usable tool calls? 25 prompts plus 4 that must not loop (~2 min); rerun after any chat alias change
