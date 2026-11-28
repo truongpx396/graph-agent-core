@@ -512,8 +512,11 @@ async def _run_graph_stream(graph: AgentGraph, graph_input: dict[str, Any] | Com
         await _record_unfinished_turn(graph, cfg, start, "abandoned")
         raise
     except Exception as exc:  # noqa: BLE001
-        trace.update(output=f"error: {exc}", level="ERROR")
         outcome = "timeout" if isinstance(exc, TimeoutError) else "error"
+        # asyncio.wait_for's own internal timeout raises a bare TimeoutError with an empty str(exc), so the message is spelled out
+        # rather than taken from the exception: the trace of a turn that ran out of time said only "error: ".
+        timeout_message = f"Request exceeded {REQUEST_TIMEOUT_SECONDS}s timeout"
+        trace.update(output=f"error: {timeout_message if outcome == 'timeout' else exc}", level="ERROR")
         await _record_unfinished_turn(graph, cfg, start, outcome)
         # The caller never sees `str(exc)`: an unexpected exception's text
         # can name an internal host, a SQL fragment or a DSN, and this event
@@ -524,13 +527,7 @@ async def _run_graph_stream(graph: AgentGraph, graph_input: dict[str, Any] | Com
             "graph_stream_failed", extra={"error_class": type(exc).__name__, "origin": error_origin(exc)}
         )
         if outcome == "timeout":
-            # asyncio.wait_for's own internal timeout raises a bare
-            # TimeoutError with an empty str(exc), so the message is spelled
-            # out rather than taken from the exception.
-            envelope = ErrorEnvelope(
-                code=ErrorCode.TIMEOUT,
-                message=f"Request exceeded {REQUEST_TIMEOUT_SECONDS}s timeout",
-            )
+            envelope = ErrorEnvelope(code=ErrorCode.TIMEOUT, message=timeout_message)
         elif gateway.note_budget_stop(exc):
             # The gateway's backstop fired: the app-level ceilings did not stop this spend first.
             # Counted and alerted (GatewayBudgetExceeded), and not reported as an anonymous

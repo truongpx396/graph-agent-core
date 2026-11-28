@@ -24,6 +24,7 @@ from app.agent.graph import model_route
 from app.agent.graph.build import GraphDeps
 from app.agent.graph.model_route import routed_unanswered
 from app.core import gateway
+from app.core.config import REQUEST_TIMEOUT_SECONDS, ROUTED_LLM_READ_TIMEOUT_SECONDS
 from app.domains.ecorp import tools as ecorp_tools
 from app.ports.outbound.classification import Labelled
 from tests.agent.fakes import call, cfg, make_graph_node_agent, queue_llm
@@ -180,10 +181,24 @@ async def test_metered_invoke_adds_a_model_keyword_only_when_asked(priced):
     assert overridden.kwargs[0] == {"model": STRONG, **gateway.identity_from_config(CONFIG)}
 
 
+@pytest.mark.parametrize("tier", ROUTED)
+async def test_a_routed_call_may_stay_silent_only_briefly_and_its_repeat_keeps_the_usual_bound(priced, routed, usage_event_sink, tier):
+    # Real failure: a strong model that never answered was waited for as long as the whole turn, so there was nothing left to fall back in.
+    llm = ScriptedLLM(openai.APITimeoutError(request=_request()), answer("the local model answered"))
+
+    await node(llm)(turn(tier), CONFIG)
+
+    assert llm.kwargs[0]["timeout"] == ROUTED_LLM_READ_TIMEOUT_SECONDS < REQUEST_TIMEOUT_SECONDS
+    assert "timeout" not in llm.kwargs[1]
+
+
 # ---- the routed alias is not there: one call, repeated locally -----------------------------------------------------------------
 UNREACHABLE = [
     ("a refused connection", lambda: openai.APIConnectionError(request=_request())),
     ("a timeout", lambda: openai.APITimeoutError(request=_request())),
+    # a real client against a silent server raises these once the answer has started (the SDK does not wrap them)
+    ("a stream that goes silent part-way", lambda: httpx.ReadTimeout("", request=_request())),
+    ("a stream cut part-way", lambda: httpx.RemoteProtocolError("peer closed connection", request=_request())),
     ("a 500 as a real LiteLLM reports an unreachable upstream", lambda: status_error(500, _LITELLM_DEAD_UPSTREAM)),
     ("a 502", lambda: status_error(502)),
     ("a 503", lambda: status_error(503)),
@@ -267,6 +282,8 @@ async def test_the_next_call_in_the_same_turn_tries_the_routed_alias_again(price
     [
         (openai.APIConnectionError(request=_request()), True),
         (openai.APITimeoutError(request=_request()), True),
+        (httpx.ReadTimeout("", request=_request()), True),
+        (httpx.RemoteProtocolError("peer closed connection", request=_request()), True),
         (status_error(502), True),
         (status_error(503), True),
         (status_error(504), True),
@@ -336,6 +353,23 @@ async def test_the_real_chat_client_sends_the_routed_alias_for_a_routed_turn_and
 
     assert [r["model"] for r in requests] == [STRONG, MEDIUM, LOCAL]  # the per-call keyword overrides the client's default model
     assert all(r["tools"] for r in requests) and requests[0]["messages"] == requests[1]["messages"] == requests[2]["messages"]
+
+
+async def test_the_real_chat_client_applies_the_shorter_wait_to_a_routed_request_only(priced, routed):
+    waits: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        waits.append(request.extensions["timeout"]["read"])
+        return httpx.Response(200, json=_completion(json.loads(request.content)["model"]))
+
+    llm = ChatOpenAI(model=LOCAL, base_url="http://gateway.test/v1", api_key="test-key", max_retries=0, timeout=120,
+                     http_async_client=httpx.AsyncClient(transport=httpx.MockTransport(handler))).bind_tools([lookup])
+    agent = node(llm)
+
+    await agent(turn("strong"), CONFIG)
+    await agent(turn("local"), CONFIG)
+
+    assert waits == [ROUTED_LLM_READ_TIMEOUT_SECONDS, 120]  # the per-call keyword reaches the request; the client's own bound is otherwise kept
 
 
 async def test_the_system_prompt_and_the_whole_request_are_identical_under_all_three_routes(priced, routed):

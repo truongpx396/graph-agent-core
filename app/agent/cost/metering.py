@@ -76,15 +76,21 @@ class MeteredCall:
         }
 
 
-async def metered_invoke(llm: ChatModel, messages: Sequence[Any], *, config: Mapping[str, Any] | None, kind: str, model_alias: str, invoke_model: str | None = None) -> MeteredCall:
+async def metered_invoke(
+    llm: ChatModel, messages: Sequence[Any], *, config: Mapping[str, Any] | None, kind: str, model_alias: str,
+    invoke_model: str | None = None, read_timeout_seconds: float | None = None,
+) -> MeteredCall:
     """`config` is the LangGraph node config (None when a test calls a node directly, in which
     case no identity is sent and no event is written: there is no tenant to meter to).
 
     `invoke_model` is the gateway alias to call INSTEAD of the one `llm` was built with (a per-call `model=` keyword, which the chat client
     sends in place of its default). It is for the routing seam only (specs/014) and is passed together with `model_alias` set to the same
     value, so the call is priced and recorded as the model that served it. Left `None`, nothing is added to the call: the request is
-    exactly what it was before this parameter existed."""
-    override = {} if invoke_model is None else {"model": invoke_model}
+    exactly what it was before this parameter existed. `read_timeout_seconds` bounds how long THIS call may stay silent (the client's
+    per-request `timeout=`, which also applies it to connecting)."""
+    override: dict[str, Any] = {} if invoke_model is None else {"model": invoke_model}
+    if read_timeout_seconds is not None:
+        override["timeout"] = read_timeout_seconds
     response = await llm.ainvoke(messages, **override, **gateway.identity_from_config(config))
     usage = getattr(response, "usage_metadata", None) or {}
     priced = await pricing.price_call(model_alias, usage)

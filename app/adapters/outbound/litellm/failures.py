@@ -12,6 +12,7 @@ Moved here from `app/core/gateway.py` so the kernel names no SDK class. The reco
   else the "Content blocked" prefix of its message; never recognised by status alone, since a 400 is also how the gateway reports a malformed
   request.
 """
+import httpx
 import openai
 
 from app.ports.outbound.llm import ContentBlock
@@ -40,6 +41,9 @@ class OpenAiFailures:
         if self.is_budget_exceeded(exc):
             return False
         if isinstance(exc, openai.APIConnectionError):  # includes APITimeoutError
+            return True
+        # A stream that goes silent or breaks AFTER its first piece: the SDK only wraps what fails while sending, so this arrives as httpx's own.
+        if isinstance(exc, httpx.TransportError):
             return True
         return isinstance(exc, openai.APIStatusError) and exc.status_code >= 500
 

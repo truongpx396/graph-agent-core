@@ -165,6 +165,17 @@ async def test_the_outcome_is_still_counted_for_an_unfinished_turn():
     assert metric_value(metrics.agent_requests_total, outcome="timeout") - before == 1
 
 
+async def test_the_trace_of_a_turn_that_ran_out_of_time_says_so():
+    # asyncio's own TimeoutError has no words, and the trace said only "error: ".
+    recorded: list[dict] = []
+    trace = stream_module._TurnTrace(type("Recorder", (), {"update": staticmethod(lambda **fields: recorded.append(fields))})())
+
+    async for _event in stream_module._run_graph_stream(_GraphThatSpentThenFailed(TimeoutError()), {}, _cfg(), trace=trace):
+        pass
+
+    assert [f["output"] for f in recorded] == [f"error: Request exceeded {stream_module.REQUEST_TIMEOUT_SECONDS}s timeout"]
+
+
 # --- reading the checkpoint must never make a failure worse ------------------------
 
 

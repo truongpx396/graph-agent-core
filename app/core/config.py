@@ -376,6 +376,10 @@ class Settings(BillingSettings):
     # not be repeated) and the gateway's num_retries (it sees Retry-After) were already retrying, and a third layer multiplies
     # them: 3 x 3 x 3 = 27 calls to the provider for one logical call during an outage (pattern 7).
     llm_sdk_max_retries: int = Field(default=0, ge=0, le=5)
+    # The longest a call the router sent to the medium or strong tier may stay SILENT before that call is repeated on `chat`. Its own,
+    # shorter bound: the general one is the whole turn by default, so a routed model that never answered took the turn with it and left no
+    # time to fall back (pattern 68). Never more than the general bound, nor than half the turn, whatever is set here.
+    routed_llm_read_timeout_seconds: float = Field(default=30.0, gt=0)
 
     @field_validator("llm_read_timeout_seconds", mode="before")
     @classmethod
@@ -396,6 +400,10 @@ class Settings(BillingSettings):
     @property
     def effective_llm_read_timeout_seconds(self) -> float:
         return float(self.llm_read_timeout_seconds if self.llm_read_timeout_seconds is not None else self.request_timeout_seconds)
+
+    @property
+    def effective_routed_llm_read_timeout_seconds(self) -> float:
+        return min(self.routed_llm_read_timeout_seconds, self.effective_llm_read_timeout_seconds, self.request_timeout_seconds / 2)
 
     # Wall-clock cap on ONE nested subagent run (app/agent/tools/run_subagent.py,
     # GRAPH_PATTERNS.md pattern 46) — same operational-timeout category as
@@ -896,6 +904,7 @@ USAGE_RECONCILE_GATEWAY_MAX_PAGES = settings.usage_reconcile_gateway_max_pages
 BUDGET_POLICY_REFRESH_SECONDS = settings.budget_policy_refresh_seconds
 REQUEST_TIMEOUT_SECONDS = settings.request_timeout_seconds
 LLM_READ_TIMEOUT_SECONDS = settings.effective_llm_read_timeout_seconds
+ROUTED_LLM_READ_TIMEOUT_SECONDS = settings.effective_routed_llm_read_timeout_seconds
 LLM_SDK_MAX_RETRIES = settings.llm_sdk_max_retries
 SUBAGENT_TIMEOUT_SECONDS = settings.subagent_timeout_seconds
 TELEGRAM_BOT_TOKEN = settings.telegram_bot_token

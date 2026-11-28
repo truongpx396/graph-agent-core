@@ -11,7 +11,7 @@ from app.core.config import Settings
 
 @pytest.fixture(autouse=True)
 def _scrubbed_environment(monkeypatch):
-    for name in ("LLM_READ_TIMEOUT_SECONDS", "LLM_SDK_MAX_RETRIES", "REQUEST_TIMEOUT_SECONDS"):
+    for name in ("LLM_READ_TIMEOUT_SECONDS", "LLM_SDK_MAX_RETRIES", "REQUEST_TIMEOUT_SECONDS", "ROUTED_LLM_READ_TIMEOUT_SECONDS"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -32,6 +32,20 @@ def test_a_slower_turn_limit_carries_the_default_read_timeout_with_it():
 
 def test_a_lower_read_timeout_is_used_as_given():
     assert Settings(_env_file=None, llm_read_timeout_seconds=30).effective_llm_read_timeout_seconds == 30.0
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected"),
+    [
+        ({}, 30.0),  # half a 60 s turn is left for the repeat on `chat`
+        ({"routed_llm_read_timeout_seconds": 10}, 10.0),
+        ({"routed_llm_read_timeout_seconds": 600}, 30.0),  # never more than half the turn
+        ({"llm_read_timeout_seconds": 12}, 12.0),  # nor more than any other call is given
+        ({"request_timeout_seconds": 40}, 20.0),
+    ],
+)
+def test_a_routed_call_is_waited_for_less_than_the_turn_leaving_time_to_repeat_it(settings, expected):
+    assert Settings(_env_file=None, **settings).effective_routed_llm_read_timeout_seconds == expected
 
 
 def test_a_read_timeout_longer_than_the_turn_is_refused_and_the_message_names_variables_not_values():
