@@ -29,7 +29,7 @@ jobs:
       - name: Report (HIGH and CRITICAL, unfixed ones too)
         if: ${{ !cancelled() }}
         run: make trivy TRIVY_FLAGS="--severity HIGH,CRITICAL --format sarif --output trivy-fs-results.sarif"
-      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+      - uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
         if: ${{ !cancelled() }}
         continue-on-error: true # code scanning may not be enabled, and a fork's token cannot upload
         with:
@@ -51,7 +51,7 @@ jobs:
       - name: Report
         if: ${{ !cancelled() }}
         run: make semgrep SEMGREP_FLAGS="--sarif --output semgrep-results.sarif"
-      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+      - uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
         if: ${{ !cancelled() }}
         continue-on-error: true
         with:
@@ -77,7 +77,7 @@ jobs:
       - name: Report
         if: ${{ !cancelled() }}
         run: checkov --config-file .checkov.yaml --output sarif --output-file-path . --soft-fail
-      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+      - uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
         if: ${{ !cancelled() }}
         continue-on-error: true
         with:
