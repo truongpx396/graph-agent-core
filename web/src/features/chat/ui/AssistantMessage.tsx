@@ -1,5 +1,6 @@
 // The class names `msg`, `status`, `tool-activity-line`, `draft-text`, `answer-text`, `approval`, `approval-question`, `citations` and
 // `citation-item` are what the browser tests find things by (tests/live/): style with the utilities beside them, keep the names.
+import { useState } from "react";
 import type { Citation } from "@/shared/api";
 import { button, chip, cx } from "@/shared/lib/classes";
 import type { AssistantEntry } from "../model/entry";
@@ -38,6 +39,11 @@ interface Props {
 
 export function AssistantMessage({ entry, onAsk, onDecide }: Props) {
   const { status, tools, draft, answer, notice, clarification, approval, citations, followups, muted } = entry;
+  // One element for what is committed and what is still streaming, so committing a draft changes nothing on screen.
+  const text = [answer, draft].filter(Boolean).join("\n\n");
+  // True from the first streamed text on; a message replayed from history never streams, so never fades.
+  const [streamed, setStreamed] = useState(false);
+  if (draft && !streamed) setStreamed(true);
   return (
     <div className="msg assistant my-2 max-w-[85%] rounded-xl border border-line bg-elevated px-3.5 py-2.5 shadow-card wrap-anywhere">
       {status && <div className="status mb-1 text-sm text-muted">{status}</div>}
@@ -50,7 +56,6 @@ export function AssistantMessage({ entry, onAsk, onDecide }: Props) {
           </div>
         ))}
       </div>
-      {draft && <span className="answer-text draft-text block whitespace-pre-wrap italic opacity-60">{draft}</span>}
       {clarification && (
         <div className={cx("clarification", box)}>
           <div className="mb-1.5 text-sm">{clarification.question}</div>
@@ -72,9 +77,9 @@ export function AssistantMessage({ entry, onAsk, onDecide }: Props) {
           </div>
         </div>
       )}
-      {answer && (
-        <div className={cx("answer-text markdown", muted && "mt-2 text-xs opacity-65")}>
-          <Markdown text={answer} />
+      {text && (
+        <div className={cx("answer-text markdown", draft && "draft-text", streamed && "streamed", muted && "mt-2 text-xs opacity-65")}>
+          <Markdown text={text} streaming={Boolean(draft)} animate={streamed} />
         </div>
       )}
       {notice && <span className="answer-text block">{notice}</span>}

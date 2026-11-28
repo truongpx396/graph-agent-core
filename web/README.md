@@ -48,6 +48,10 @@ src/
 
 - Server state (anything the API can be asked again) lives in TanStack Query; what only this tab knows lives in a Zustand store.
 - Model output is untrusted: no raw HTML, and nothing is fetched without a click (`features/chat/ui/Markdown.tsx` says why).
+- An answer is markdown from its first token. While it streams, `remend` closes what is half written (a link being typed is plain text)
+  and each new word fades in; both sit inside `Markdown.tsx`, behind the same two rules. The committed answer is the model's text unchanged.
+  Not done: syntax highlighting, and bold around an unfinished `code` span shows its asterisks until the span closes.
+- The transcript follows new text only while the reader is at the end (`Transcript.tsx`).
 - Colours are the tokens in `app/styles.css` (`bg-elevated`, `text-muted`, ...), never raw values, so both themes have one source.
 
 ### The API's types

@@ -44,7 +44,7 @@ describe("the page", () => {
         ),
     });
     await user.type(element("#input"), "what is 21 * 2?{Enter}");
-    expect((await screen.findByText("42")).tagName).toBe("STRONG");
+    expect((await screen.findByText("42")).closest("strong")).not.toBeNull();
     expect(element(".tool-activity-line").textContent).toBe('✓ calculator({"expression":"21*2"})');
     expect(element(".citations .citation-item").textContent).toBe("[1]Support Hours");
     expect(screen.getByRole("button", { name: "And doubled?" })).toBeTruthy();
@@ -84,6 +84,27 @@ describe("the page", () => {
     // Oldest history first, then what is live.
     expect([...container.querySelectorAll("#messages .msg")].map((node) => node.className.split(" ")[1])).toEqual(["user", "assistant", "assistant"]);
     expect(api.sent("GET /chat/sessions/t-old/messages").map((call) => call.url.split("?")[1])).toEqual(["limit=50", "limit=50&before=50"]);
+  });
+
+  it("follows a streaming answer, but not once the reader has scrolled up, until they send again", async () => {
+    const stream = openStream();
+    const { user, element } = start({ "POST /chat/stream/queued": () => stream.response });
+    const box = element("#messages") as unknown as HTMLDivElement;
+    let height = 1000;
+    Object.defineProperties(box, { scrollHeight: { get: () => height }, clientHeight: { get: () => 200 } });
+    await user.type(element("#input"), "hi{Enter}");
+    stream.send({ type: "token", content: "one " });
+    await waitFor(() => expect(box.scrollTop).toBe(1000));
+    // No scroll event yet: the next token can arrive before the browser delivers it.
+    box.scrollTop = 100;
+    height = 1400;
+    stream.send({ type: "token", content: "two" });
+    await screen.findByText("two");
+    expect(box.scrollTop).toBe(100);
+    stream.send({ type: "done" });
+    await waitFor(() => expect(element("#send").disabled).toBe(false));
+    await user.type(element("#input"), "again{Enter}");
+    await waitFor(() => expect(box.scrollTop).toBe(1400));
   });
 
   it("marks the open conversation in the list, and starts a new one from it", async () => {
