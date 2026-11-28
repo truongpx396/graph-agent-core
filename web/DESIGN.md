@@ -52,6 +52,7 @@ does not know is ignored, and `shared/api/contract.test.ts` fails when the contr
 
 Every area that reads data has four: loading (a skeleton, not "Loading…"), empty (what to do next), failed (`Couldn't load … · Retry`) and, for a
 live turn, disconnected (`Reconnecting… picks up where it left off`).
+Signed out is not a failure: say to sign in, read nothing, and offer no Retry.
 
 ## Motion
 

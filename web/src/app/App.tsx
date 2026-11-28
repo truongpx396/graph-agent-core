@@ -8,6 +8,7 @@ import { DomainBrief, DomainSelect, IdentityPickers } from "@/features/workspace
 export function App() {
   const ready = useAuth((state) => state.ready);
   const identity = useAuth((state) => state.config.mode === "identity");
+  const signedOut = useAuth((state) => state.config.mode === "identity" && state.ready && state.who === null);
   const send = useChat((state) => state.send);
   const decide = useChat((state) => state.decide);
   const approval = useChat(pendingApproval);
@@ -25,7 +26,7 @@ export function App() {
             <DomainBrief onAsk={(question) => void send(question)} />
           </div>
         </div>
-        <SessionList ready={ready} className="min-h-0 flex-1 basis-0 border-t border-line max-[700px]:max-h-[20vh] max-[700px]:flex-none" />
+        <SessionList ready={ready} signedOut={signedOut} className="min-h-0 flex-1 basis-0 border-t border-line max-[700px]:max-h-[20vh] max-[700px]:flex-none" />
       </aside>
       <main className="mx-auto flex h-screen w-full max-w-[760px] min-w-0 flex-1 flex-col px-5 py-4 max-[700px]:h-auto max-[700px]:min-h-[60vh]">
         {/* Who am I, top right: a different kind of scope from the two in the sidebar. */}

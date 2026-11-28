@@ -30,6 +30,10 @@ function start(routes: Parameters<typeof fakeApi>[0] = {}) {
   return { api, user: userEvent.setup(), element, container: view.container };
 }
 
+const identityMode = () => {
+  document.head.innerHTML = `<meta name="agent-auth" content='{"mode":"identity","issuer":"https://a.test","audience":"x","scope":"s","client_id_prefix":"api-"}'>`;
+};
+
 describe("the page", () => {
   it("answers a typed message and refreshes the conversation list", async () => {
     const { api, user, element } = start({
@@ -211,10 +215,24 @@ describe("the page", () => {
   });
 
   it("shows who to sign in as, not the pickers, in identity mode", async () => {
-    document.head.innerHTML = `<meta name="agent-auth" content='{"mode":"identity","issuer":"https://a.test","audience":"x","scope":"s","client_id_prefix":"api-"}'>`;
-    const { element, container } = start();
+    identityMode();
+    const { api, element, container } = start();
     expect(await screen.findByText("Sign in to chat.")).toBeTruthy();
     expect(element("#authOrg")).toBeTruthy();
     expect(container.querySelector("#tenant, #principal")).toBeNull();
+    // Signed out, the list could only be refused: it is not asked for, and offers no retry that cannot work.
+    expect(screen.getByText("Sign in to see your conversations.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(api.sent("GET /chat/sessions")).toHaveLength(0);
+  });
+
+  it("asks for a new sign-in, not a retry, when the sign-in has stopped working", async () => {
+    identityMode();
+    sessionStorage.setItem("graph-agent-core:access-token", ["e30", btoa(JSON.stringify({ name: "alice" })), "sig"].join("."));
+    const { api } = start({ "GET /chat/sessions": () => json({ code: "unauthenticated", message: "Sign in." }, 401) });
+    expect(await screen.findByText("Sign in to see your conversations.")).toBeTruthy();
+    expect(screen.getByText("Your sign-in is no longer valid. Sign in again.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(api.sent("GET /chat/sessions")).toHaveLength(1);
   });
 });
